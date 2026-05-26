@@ -1,0 +1,72 @@
+#+title: bone.el --- Manage BARK reports from Emacs
+
+[[https://intver.org/][https://img.shields.io/badge/versioning-intver.org-blue.svg?style=for-the-badge]]
+
+=bone.el= is an Emacs library for [[https://codeberg.org/bzg/bone][bone]] and [[https://codeberg.org/bzg/bark][BARK]] with two goals:
+
+- the shared *data layer* of the mail front-ends [[https://codeberg.org/bzg/gnus-bone][gnus-bone]],
+  [[https://codeberg.org/bzg/notmuch-bone][notmuch-bone]] and [[https://codeberg.org/bzg/mu4e-bone][mu4e-bone]];
+- a standalone utility to manage BARK reports from Emacs (in progress).
+
+It reads =config.edn= and =reports.json= directly (no [[https://codeberg.org/bzg/bone][bone]] CLI needed),
+caches remote reports, and reads/writes the =state.edn= shared with the
+CLI, so state stays consistent across front-ends.
+
+* Requirements
+
+- =~/.config/bone/config.edn=: an EDN map with =:addresses= and =:sources=.
+- =reports.json= bark-format =0.9.1=.
+
+* Configuration
+
+- =bone-config-dir= (default =~/.config/bone=): holds =config.edn=,
+  =state.edn= and =cache/=.
+- =bone-reports-source=: a single path or URL used instead of the
+  =:sources= in =config.edn= (nil by default).
+- =bone-after-update-hook=: run after =M-x bone-update=.
+
+* Commands
+
+- =M-x bone-update=: refresh the local cache from remote sources.
+
+* API for front-ends
+
+| Function                        | Purpose                                    |
+|---------------------------------+--------------------------------------------|
+| =(bone-reports)=                  | collect open reports as =(MID . INFO)= pairs |
+| =(bone-sources)=                  | resolved list of report paths/URLs         |
+| =(bone-load-config)=              | plist =(:addresses :sources)= from config    |
+| =(bone-read-state)=               | read =state.edn= into an alist               |
+| =(bone-write-state STATE)=        | serialize an alist to =state.edn=            |
+| =(bone-toggle-mark MID INFO ACT)= | toggle =:read=/=:todo=/=:sticky=, persist    |
+| =(bone-action-on-p ST MID ACT)=   | is a mark currently set?                   |
+| =(bone-normalize-mid MID)=        | ensure angle brackets around a message-id  |
+
+INFO is a plist with =:type :subject :date :from :from-name= (used to
+enrich state) plus the display keys =:flags :priority :votes :deadline
+:expiry :last-activity :topic=.
+
+* Contributing
+
+- Send a [[mailto:~bzg/barkyard@lists.sr.ht][bug report]] with =[BUG] bone.el: <SHORT EXPLICIT BUG DESCRIPTION>=
+- Send a [[mailto:~bzg/barkyard@lists.sr.ht][patch]] with =[PATCH] bone.el: <COMMIT SUMMARY>=
+- Send a [[mailto:~bzg/barkyard@lists.sr.ht][feature request]] with =[FR] bone.el: <FEATURE REQUEST>=
+- Share any [[mailto:~bzg/barkyard@lists.sr.ht <ANYTHING>][other question or idea]]
+
+You can also [[mailto:bzg@bzg.fr][send me an email]] and support my work on [[https://liberapay.com/bzg/][liberapay]].
+
+* Intentional Versioning
+
+This project uses [[https://intver.org][Intentional Versioning]], with three audiences:
+
+- =x=: end users
+- =y=: indirect users, via the front-ends
+- =z=: contributors to the codebase
+
+* License
+
+Copyright © 2026 Bastien Guerry
+
+=bone.el= is published under the terms of the GNU General Public
+License, either version 3 of the License, or (at your option) any
+later version.
