@@ -903,10 +903,10 @@ HINT is shown on failure."
       (with-current-buffer (get-buffer-create "*bone-git*")
         (let ((inhibit-read-only t)) (erase-buffer))
         (let ((status (apply #'call-process "git" nil t nil subcommand "--" files)))
-          (display-buffer (current-buffer))
           (if (zerop status)
               (message "bone: git %s applied %d patch(es) in %s"
                        subcommand (length files) repo)
+            (display-buffer (current-buffer))
             (message "bone: git %s failed in %s (%s)" subcommand repo hint)))))))
 
 (defun bone-apply-patches (info)
@@ -1014,6 +1014,53 @@ ends are dates or durations and may be empty."
      (seq-every-p (lambda (tok) (bone--query-token-match tok mid info))
                   (split-string grp "[ \t]+" t)))
    (split-string query "|" t)))
+
+(defconst bone--query-keys
+  '("from:" "subject:" "topic:" "type:" "priority:" "mid:" "acked:"
+    "owned:" "closed:" "urgent:" "important:" "date:" "deadline:" "expired:")
+  "Long-form query keys completed in `bone-list-filter'.")
+
+(defun bone--filter-completion (string pred action)
+  "Completion table completing the query key of STRING's last token.
+PRED and ACTION are the usual `completing-read' arguments; the rest of
+the query (earlier tokens) is left untouched."
+  (let ((beg (progn (string-match "[^ \t|]*\\'" string) (match-beginning 0))))
+    (if (eq (car-safe action) 'boundaries)
+        (let ((suffix (cdr action)))
+          `(boundaries ,beg . ,(or (string-match "[ \t|]" suffix) (length suffix))))
+      (complete-with-action action bone--query-keys (substring string beg) pred))))
+
+(defconst bone-report-types
+  '("bug" "patch" "request" "announcement" "change" "release")
+  "BARK report types, offered when filtering by type.")
+
+(defun bone-list-filter-by (key)
+  "Limit the list to reports whose KEY field matches a read value.
+Read the value (completing types, `*' for flag fields), then set the
+query to `KEY:value'; an empty value clears the filter."
+  (let* ((flag (member key '("acked" "owned" "closed" "urgent" "important")))
+         (val (cond (flag "*")
+                    ((equal key "type") (completing-read "Type: " bone-report-types))
+                    (t (read-string (format "%s: " key))))))
+    (setq-local bone-list--query
+                (and val (not (string-empty-p val)) (format "%s:%s" key val)))
+    (bone-list-refresh)
+    (if bone-list--query
+        (message "bone: filter %s" bone-list--query)
+      (message "bone: filter cleared"))))
+
+(defvar bone-list-filter-map
+  (let ((map (make-sparse-keymap)))
+    (dolist (pair '(("f" . "from") ("t" . "type") ("T" . "topic")
+                    ("s" . "subject") ("p" . "priority") ("m" . "mid")
+                    ("d" . "date") ("D" . "deadline") ("e" . "expired")
+                    ("a" . "acked") ("o" . "owned") ("c" . "closed")
+                    ("u" . "urgent") ("i" . "important")))
+      (let ((field (cdr pair)))
+        (define-key map (car pair)
+                    (lambda () (interactive) (bone-list-filter-by field)))))
+    map)
+  "Keymap bound to `f' in `bone-list-mode' to filter by one field.")
 
 ;;; Report browser (bone-list)
 
@@ -1129,9 +1176,11 @@ list each patch.  The query in `bone-list--query' filters the result."
     (define-key map "g" #'bone-list-refresh)
     (define-key map "G" #'bone-list-update)
     (define-key map "/" #'bone-list-filter)
+    (define-key map "f" bone-list-filter-map)
+    (define-key map "t" #'bone-list-limit-type)
     (define-key map "r" #'bone-list-toggle-read)
-    (define-key map "t" #'bone-list-toggle-todo)
-    (define-key map "s" #'bone-list-toggle-sticky)
+    (define-key map "!" #'bone-list-toggle-todo)
+    (define-key map "*" #'bone-list-toggle-sticky)
     map)
   "Keymap for `bone-list-mode'.")
 
@@ -1156,7 +1205,8 @@ list each patch.  The query in `bone-list--query' filters the result."
 (defun bone-list-filter (query)
   "Filter the report list by QUERY; an empty QUERY clears the filter.
 QUERY combines `key:value' tokens with spaces (AND) and `|' (OR)."
-  (interactive (list (read-string "Filter: " bone-list--query)))
+  (interactive
+   (list (completing-read "Filter: " #'bone--filter-completion nil nil bone-list--query)))
   (setq-local bone-list--query
               (and (not (string-empty-p (string-trim query))) query))
   (bone-list-refresh)
@@ -1169,6 +1219,11 @@ QUERY combines `key:value' tokens with spaces (AND) and `|' (OR)."
   (interactive)
   (bone-update)
   (bone-list-refresh))
+
+(defun bone-list-limit-type ()
+  "Limit the list to a chosen report type."
+  (interactive)
+  (bone-list-filter-by "type"))
 
 (defun bone-list--current ()
   "Return the (MID . INFO) pair at point, or signal an error."

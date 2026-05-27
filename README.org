@@ -40,18 +40,20 @@ later on.
 
 * The =*bone*= browser
 
-| Key   | Action                                             |
-|-------+----------------------------------------------------|
-| =RET=   | open the report's email (see /Reading/ below)      |
-| =TAB=   | fold / unfold the patch series at point            |
-| =p=     | view the report's patch(es) in =diff-mode=           |
-| =a=     | =git apply= the patch(es) to the source repo tree    |
-| =A=     | =git am= the patch(es) as commits in the source repo |
-| =/=     | filter the list by a query (see /Searching/)         |
-| =S=     | sort by the column at point (=tabulated-list-sort=)  |
-| =r= =t= =s= | toggle the read / todo / sticky mark               |
-| =g=     | reload from the local cache                        |
-| =G=     | refresh the remote cache, then reload              |
+| Key   | Action                                              |
+|-------+-----------------------------------------------------|
+| =RET=   | open the report's email (see /Reading/ below)         |
+| =TAB=   | fold / unfold the patch series at point             |
+| =p=     | view the report's patch(es) in =diff-mode=            |
+| =a=     | =git apply= the patch(es) to the source repo tree     |
+| =A=     | =git am= the patch(es) as commits in the source repo  |
+| =/=     | filter the list by a query (see /Searching/)          |
+| =f=     | filter by one field: =f t= type, =f f= from, =f T= topic… |
+| =t=     | limit to a report type (bug, patch, request…)       |
+| =S=     | sort by the column at point (=tabulated-list-sort=)   |
+| =r= =!= =*= | toggle the read / todo / sticky mark                |
+| =g=     | reload from the local cache                         |
+| =G=     | refresh the remote cache, then reload               |
 
 Patch series are folded into a single row (cover letter or first patch)
 with a status summary like =(2 acked, 1 open)=; =TAB= unfolds the series
@@ -65,19 +67,19 @@ CLI and the front-ends.
 =/= filters the list with a subset of the BARK web query syntax:
 =key:value= tokens (space = AND, =|= = OR).
 
-| Long                  | Short | Matches                              |
-|-----------------------+-------+--------------------------------------|
-| =from:bzg=              | =f:=    | from address or name                 |
-| =subject:crash=         | =s:=    | subject (a bare word matches subject) |
-| =topic:agenda=          | =t:=    | topic                                |
-| =type:patch=            |       | report type                          |
-| =priority:2=            | =p:=    | exact priority                       |
-| =mid:<...>=             | =m:=    | message-id                           |
-| =acked:= =owned:= =closed:= | =a: o: c:= | flag is set (use =*=)             |
-| =urgent:= =important:=    | =u: i:= | priority bits                        |
-| =date:3d= =date:A..B=     | =d:=    | created (durations =Nd/Nw/Nm=, ranges) |
-| =deadline:2m=           | =D:=    | due within / on (forward)            |
-| =expired:10d=           | =e:=    | expiring within (forward)            |
+| Long                  | Short    | Matches                               |
+|-----------------------+----------+---------------------------------------|
+| =from:bzg=              | =f:=       | from address or name                  |
+| =subject:crash=         | =s:=       | subject (a bare word matches subject) |
+| =topic:agenda=          | =t:=       | topic                                 |
+| =type:patch=            |          | report type                           |
+| =priority:2=            | =p:=       | exact priority                        |
+| =mid:<...>=             | =m:=       | message-id                            |
+| =acked:= =owned:= =closed:= | =a: o: c:= | flag is set (use =*=)                   |
+| =urgent:= =important:=    | =u: i:=    | priority bits                         |
+| =date:3d= =date:A..B=     | =d:=       | created (durations =Nd/Nw/Nm=, ranges)  |
+| =deadline:2m=           | =D:=       | due within / on (forward)             |
+| =expired:10d=           | =e:=       | expiring within (forward)             |
 
 The active query shows in the mode line; =/= then =RET= clears it.
 
@@ -126,16 +128,16 @@ incomplete.  See =*bone-git*= for the output; on a failed =git am=, run
 
 * API for front-ends
 
-| Function                          | Purpose                                      |
-|-----------------------------------+----------------------------------------------|
+| Function                        | Purpose                                    |
+|---------------------------------+--------------------------------------------|
 | =(bone-reports)=                  | collect open reports as =(MID . INFO)= pairs |
-| =(bone-sources)=                  | resolved report URLs/paths from config.edn   |
+| =(bone-sources)=                  | resolved report URLs/paths from config.edn |
 | =(bone-load-config)=              | plist =(:addresses :skip-columns :sources)=  |
 | =(bone-read-state)=               | read =state.edn= into an alist               |
 | =(bone-write-state STATE)=        | serialize an alist to =state.edn=            |
 | =(bone-toggle-mark MID INFO ACT)= | toggle =:read=/=:todo=/=:sticky=, persist    |
-| =(bone-action-on-p ST MID ACT)=   | is a mark currently set?                     |
-| =(bone-normalize-mid MID)=        | ensure angle brackets around a message-id    |
+| =(bone-action-on-p ST MID ACT)=   | is a mark currently set?                   |
+| =(bone-normalize-mid MID)=        | ensure angle brackets around a message-id  |
 
 INFO is a plist with =:type :subject :date :from :from-name= (used to
 enrich state) plus display and action keys =:flags :priority :votes
