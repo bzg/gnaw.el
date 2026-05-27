@@ -2,49 +2,145 @@
 
 [[https://intver.org/][https://img.shields.io/badge/versioning-intver.org-blue.svg?style=for-the-badge]]
 
-=bone.el= is an Emacs library for [[https://codeberg.org/bzg/bone][bone]] and [[https://codeberg.org/bzg/bark][BARK]] with two goals:
+=bone.el= is an Emacs tool for [[https://codeberg.org/bzg/bone][bone]] and [[https://codeberg.org/bzg/bark][BARK]] with two faces:
 
+- a *standalone browser* of BARK reports (=M-x bone=): list reports,
+  read the email, view and apply patches, mark and filter -- no [[https://codeberg.org/bzg/bone][bone]]
+  CLI required;
 - the shared *data layer* of the mail front-ends [[https://codeberg.org/bzg/gnus-bone][gnus-bone]],
-  [[https://codeberg.org/bzg/notmuch-bone][notmuch-bone]] and [[https://codeberg.org/bzg/mu4e-bone][mu4e-bone]];
-- a standalone utility to manage BARK reports from Emacs (in progress).
+  [[https://codeberg.org/bzg/notmuch-bone][notmuch-bone]] and [[https://codeberg.org/bzg/mu4e-bone][mu4e-bone]].
 
-It reads =config.edn= and =reports.json= directly (no [[https://codeberg.org/bzg/bone][bone]] CLI needed),
-caches remote reports, and reads/writes the =state.edn= shared with the
-CLI, so state stays consistent across front-ends.
+It reads =config.edn= and =reports.json= directly, caches remote
+reports and patches, and reads/writes =config.edn= and the =state.edn=
+shared with the CLI, so state stays consistent across clients.
 
 * Requirements
 
-- =~/.config/bone/config.edn=: an EDN map with =:addresses= and =:sources=.
-- =reports.json= bark-format =0.9.1=.
+- Emacs 28.1 or later.
+- =~/.config/bone/config.edn= with at least one source under =:sources=
+  (=M-x bone= creates it interactively if missing).
+- A published BARK instance in =0.9.1= format or later (the 0.9.3
+  =meta.json= =reports-files= list is used when present).
+
+* Getting started
+
+=M-x bone= opens the =*bone*= report browser, filling the frame.  With
+no source configured, it asks you to add one (and repeats until you
+decline):
+
+1. a source URL -- a base URL, a =reports/meta.json=, or a
+   =reports/...json= file (all resolve to the =reports/= directory);
+2. which report files to track, chosen from =meta.json='s
+   =reports-files= (default =all-open.json=; several may be picked);
+3. a source name (defaults to =meta.json='s =:source=);
+4. a local git repository for that source, used by =git am=.
+
+These are written to =config.edn=.  =M-x bone-add-source= does the same
+later on.
+
+* The =*bone*= browser
+
+| Key   | Action                                             |
+|-------+----------------------------------------------------|
+| =RET=   | open the report's email (see /Reading/ below)      |
+| =TAB=   | fold / unfold the patch series at point            |
+| =p=     | view the report's patch(es) in =diff-mode=           |
+| =a=     | =git apply= the patch(es) to the source repo tree    |
+| =A=     | =git am= the patch(es) as commits in the source repo |
+| =/=     | filter the list by a query (see /Searching/)         |
+| =S=     | sort by the column at point (=tabulated-list-sort=)  |
+| =r= =t= =s= | toggle the read / todo / sticky mark               |
+| =g=     | reload from the local cache                        |
+| =G=     | refresh the remote cache, then reload              |
+
+Patch series are folded into a single row (cover letter or first patch)
+with a status summary like =(2 acked, 1 open)=; =TAB= unfolds the series
+to list each patch, =TAB= again folds it back.
+
+Marks (read/todo/sticky) are stored in =state.edn=, shared with the
+CLI and the front-ends.
+
+* Searching
+
+=/= filters the list with a subset of the BARK web query syntax:
+=key:value= tokens (space = AND, =|= = OR).
+
+| Long                  | Short | Matches                              |
+|-----------------------+-------+--------------------------------------|
+| =from:bzg=              | =f:=    | from address or name                 |
+| =subject:crash=         | =s:=    | subject (a bare word matches subject) |
+| =topic:agenda=          | =t:=    | topic                                |
+| =type:patch=            |       | report type                          |
+| =priority:2=            | =p:=    | exact priority                       |
+| =mid:<...>=             | =m:=    | message-id                           |
+| =acked:= =owned:= =closed:= | =a: o: c:= | flag is set (use =*=)             |
+| =urgent:= =important:=    | =u: i:= | priority bits                        |
+| =date:3d= =date:A..B=     | =d:=    | created (durations =Nd/Nw/Nm=, ranges) |
+| =deadline:2m=           | =D:=    | due within / on (forward)            |
+| =expired:10d=           | =e:=    | expiring within (forward)            |
+
+The active query shows in the mode line; =/= then =RET= clears it.
+
+* Reading messages
+
+=bone-open-message-method= selects how =RET= opens a report, per source:
+an alist mapping a source name to =auto=, =mua=, =gnus=, =notmuch=, =mu4e=
+or =web= (the entry keyed by =t= is the default).  =gnus= reads the group
+from =bone-gnus-group= (an alist; asked with completion otherwise);
+=notmuch= and =mu4e= open by message-id; =web= fetches the public-inbox
+archive.  =M-x bone-set-source-open-method= sets these with completion.
+
+Front-ends set =bone-open-message-function= to handle =auto=/=mua=.
+
+* Applying patches
+
+=a= runs =git apply= (patch the working tree) and =A= runs =git am=
+(apply as commits) in the source's =:repo= (falling back to
+=bone-apply-repo= or a prompt), warning when a patch series looks
+incomplete.  See =*bone-git*= for the output; on a failed =git am=, run
+=git am --abort=.
+
+* =config.edn=
+
+#+begin_src clojure
+{:sources [{:urls ["https://tracker.orgmode.org/reports/all-open.json"]
+            :name "Org mode ML"
+            :repo "~/src/org-mode"}]
+ :my-addresses ["me@example.org"]
+ :skip-columns ["owner"]}
+#+end_src
+
+- =:sources= -- each has =:urls= (a vector of reports.json URLs), an
+  optional =:name= and a =:repo= for =git am=.
+- =:my-addresses= -- your email addresses.
+- =:skip-columns= -- browser columns to hide (by name, case-insensitive).
 
 * Configuration
 
 - =bone-config-dir= (default =~/.config/bone=): holds =config.edn=,
-  =state.edn= and =cache/=.
-- =bone-reports-source=: a single path or URL used instead of the
-  =:sources= in =config.edn= (nil by default).
+  =state.edn= and =cache/=.  Sources always come from =config.edn=.
+- =bone-open-message-method= / =bone-gnus-group=: per-source open method
+  and Gnus group (see /Reading/).
+- =bone-apply-repo=: fallback git repo for =git am=.
 - =bone-after-update-hook=: run after =M-x bone-update=.
-
-* Commands
-
-- =M-x bone-update=: refresh the local cache from remote sources.
 
 * API for front-ends
 
-| Function                        | Purpose                                    |
-|---------------------------------+--------------------------------------------|
+| Function                          | Purpose                                      |
+|-----------------------------------+----------------------------------------------|
 | =(bone-reports)=                  | collect open reports as =(MID . INFO)= pairs |
-| =(bone-sources)=                  | resolved list of report paths/URLs         |
-| =(bone-load-config)=              | plist =(:addresses :sources)= from config    |
+| =(bone-sources)=                  | resolved report URLs/paths from config.edn   |
+| =(bone-load-config)=              | plist =(:addresses :skip-columns :sources)=  |
 | =(bone-read-state)=               | read =state.edn= into an alist               |
 | =(bone-write-state STATE)=        | serialize an alist to =state.edn=            |
 | =(bone-toggle-mark MID INFO ACT)= | toggle =:read=/=:todo=/=:sticky=, persist    |
-| =(bone-action-on-p ST MID ACT)=   | is a mark currently set?                   |
-| =(bone-normalize-mid MID)=        | ensure angle brackets around a message-id  |
+| =(bone-action-on-p ST MID ACT)=   | is a mark currently set?                     |
+| =(bone-normalize-mid MID)=        | ensure angle brackets around a message-id    |
 
 INFO is a plist with =:type :subject :date :from :from-name= (used to
-enrich state) plus the display keys =:flags :priority :votes :deadline
-:expiry :last-activity :topic=.
+enrich state) plus display and action keys =:flags :priority :votes
+:deadline :expiry :last-activity :topic :source :source-name
+:archived-at :patches :series :version :superseded-by=.
 
 * Contributing
 
