@@ -7,7 +7,7 @@
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/bone.el
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "28.1"))
+;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
 
@@ -47,7 +47,7 @@
 ;;   `bone'              browse reports (interactive)
 ;;   `bone-reports'      collect open reports from all sources
 ;;   `bone-update'       force-refresh the local cache (interactive)
-;;   `bone-toggle-mark'  toggle :read/:todo/:sticky for a message-id
+;;   `bone-toggle-mark'  toggle :sticky/:skip for a message-id
 ;;   `bone-read-state' / `bone-write-state'   state.edn I/O
 ;;
 ;;; Code:
@@ -56,6 +56,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'time-date)
+(require 'transient)
 
 (defvar url-http-response-status)
 
@@ -205,8 +206,7 @@ and :sources (their URLs)."
                    (message "bone: cannot parse %s: %s"
                             file (error-message-string err))
                    nil))))
-         (addresses (or (alist-get :my-addresses cfg)
-                        (alist-get :addresses cfg)))
+         (addresses (alist-get :my-addresses cfg))
          (skip      (alist-get :skip-columns cfg))
          (src-cfgs  (alist-get :sources cfg))
          (sources   (mapcan (lambda (s) (append (alist-get :urls s) nil)) src-cfgs)))
@@ -279,6 +279,7 @@ URL or by `:name'."
             (error "Malformed HTTP response from %s" url))
           (let ((json-object-type 'alist)
                 (json-array-type 'list)
+                (json-key-type 'symbol)
                 (json-false nil)
                 (body (buffer-substring-no-properties (point) (point-max))))
             (json-read-from-string (decode-coding-string body 'utf-8))))
@@ -295,6 +296,7 @@ URL or by `:name'."
   "Read JSON from SOURCE, using local cache for remote URLs if available."
   (let ((json-object-type 'alist)
         (json-array-type 'list)
+        (json-key-type 'symbol)
         (json-false nil))
     (if (bone--http-url-p source)
         (let ((cache-file (bone--source-to-cache-file source)))
@@ -328,6 +330,7 @@ URL or by `:name'."
             (acked        (alist-get 'acked r))
             (owned        (alist-get 'owned r))
             (closed       (alist-get 'closed r))
+            (owned-name   (alist-get 'owned-name r))
             (close-reason (alist-get 'close-reason r))
             (priority     (alist-get 'priority r))
             (votes        (alist-get 'votes r))
@@ -374,19 +377,24 @@ URL or by `:name'."
                                        :series series
                                        :patch-seq patch-seq
                                        :version version
-                                       :superseded-by superseded-by))
+                                       :superseded-by superseded-by
+                                       :acked acked
+                                       :owned owned
+                                       :owned-name owned-name
+                                       :closed closed))
                   result)))))))
 
 (defun bone-reports ()
   "Collect open report pairs from all sources, tolerating failures."
-  (let ((result nil))
-    (dolist (source (bone-sources))
-      (condition-case err
-          (setq result (append result (bone--extract-open-reports source)))
-        (error
-         (message "bone: failed loading source %s: %s"
-                  source (error-message-string err)))))
-    result))
+  (mapcan
+   (lambda (source)
+     (condition-case err
+         (bone--extract-open-reports source)
+       (error
+        (message "bone: failed loading source %s: %s"
+                 source (error-message-string err))
+        nil)))
+   (bone-sources)))
 
 (defun bone-update ()
   "Force-refresh the local cache from remote JSON sources.
@@ -439,7 +447,7 @@ Run `bone-after-update-hook' when finished."
                            state "\n ")
                 "}\n")))))
 
-;;; Local marks (read / todo / sticky)
+;;; Local marks (sticky / skip)
 
 (defun bone--iso-now ()
   "Return the current time as an ISO-8601 UTC string."
@@ -490,36 +498,37 @@ Run `bone-after-update-hook' when finished."
     e))
 
 (defun bone--apply-transition (state action mid info)
-  "Apply ACTION transition for MID in STATE using metadata INFO."
+  "Apply ACTION (:sticky or :skip) for MID in STATE using metadata INFO.
+The two marks are mutually exclusive: :sticky clears a skip and :skip
+clears a flag; re-applying the active mark returns to neutral.  :skip is
+stored as `:skip-since' (the bone CLI hides such reports by default)."
   (let* ((base (bone--enrich-entry (cdr (assoc mid state)) info))
-         (flag (alist-get :flag base))
+         (sticky (eq (alist-get :flag base) :sticky))
+         (skip (and (alist-get :skip-since base) t))
          (new
           (pcase action
-            (:read   (if (alist-get :read-at base)
-                         (bone--alist-dissoc base :read-at)
-                       (bone--alist-assoc  base :read-at
-                                           (bone--iso-now))))
-            (:todo   (if (eq flag :todo)
+            (:sticky (if sticky
                          (bone--alist-dissoc base :flag)
-                       (bone--alist-assoc  base :flag :todo)))
-            (:sticky (if (eq flag :sticky)
-                         (bone--alist-dissoc base :flag)
-                       (bone--alist-assoc  base :flag :sticky))))))
+                       (bone--alist-assoc (bone--alist-dissoc base :skip-since)
+                                          :flag :sticky)))
+            (:skip (if skip
+                       (bone--alist-dissoc base :skip-since)
+                     (bone--alist-assoc (bone--alist-dissoc base :flag)
+                                        :skip-since (bone--iso-now)))))))
     (if (and (null (alist-get :flag    new))
-             (null (alist-get :read-at new)))
+             (null (alist-get :skip-since new)))
         (bone--state-delete state mid)
       (bone--state-put state mid new))))
 
 (defun bone-action-on-p (state mid action)
-  "Return non-nil if ACTION is set for MID in STATE."
+  "Return non-nil if ACTION (:sticky or :skip) is set for MID in STATE."
   (let ((entry (cdr (assoc mid state))))
     (pcase action
-      (:read   (cdr (assq :read-at entry)))
-      (:todo   (eq (cdr (assq :flag entry)) :todo))
-      (:sticky (eq (cdr (assq :flag entry)) :sticky)))))
+      (:sticky (eq (cdr (assq :flag entry)) :sticky))
+      (:skip (and (cdr (assq :skip-since entry)) t)))))
 
 (defun bone-toggle-mark (mid info action)
-  "Toggle ACTION (:read, :todo or :sticky) for MID using metadata INFO.
+  "Toggle ACTION (:sticky or :skip) for MID using metadata INFO.
 Persist the new state and return non-nil if ACTION is now on."
   (let* ((state (bone-read-state))
          (new   (bone--apply-transition state action mid info)))
@@ -616,19 +625,15 @@ asked for with completion, falling back to the Gnus registry."
   "Return the open method for report INFO's source."
   (let ((m bone-open-message-method)
         (name (plist-get info :source-name)))
-    (cond ((symbolp m) m)
-          ((and name (assoc name m)) (cdr (assoc name m)))
+    (cond ((and name (assoc name m)) (cdr (assoc name m)))
           ((assq t m) (cdr (assq t m)))
           (t 'auto))))
 
 (defun bone--gnus-group-for (info)
   "Return the configured Gnus group for report INFO's source, or nil.
-A string `bone-gnus-group' applies to every source; an alist maps a
-source name to its group."
-  (let ((g bone-gnus-group)
-        (name (plist-get info :source-name)))
-    (cond ((stringp g) g)
-          ((and name (assoc name g)) (cdr (assoc name g))))))
+`bone-gnus-group' is an alist mapping a source name to its group."
+  (let ((name (plist-get info :source-name)))
+    (and name (cdr (assoc name bone-gnus-group)))))
 
 (defvar bone--message-archive-url nil
   "Web archive URL of the message shown in the current buffer.")
@@ -898,8 +903,11 @@ HINT is shown on failure."
     (let* ((repo (or (bone--source-repo info)
                      bone-apply-repo
                      (read-directory-name "Apply in git repo: ")))
-           (files (delq nil (mapcar (lambda (p) (bone-patch-file info p)) patches)))
+           (files (mapcar (lambda (p) (bone-patch-file info p)) patches))
            (default-directory (file-name-as-directory repo)))
+      (when (memq nil files)
+        (user-error "Cannot fetch %d of %d patch file(s); not applying"
+                    (seq-count #'null files) (length files)))
       (with-current-buffer (get-buffer-create "*bone-git*")
         (let ((inhibit-read-only t)) (erase-buffer))
         (let ((status (apply #'call-process "git" nil t nil subcommand "--" files)))
@@ -925,6 +933,22 @@ HINT is shown on failure."
 (defvar bone-list--expanded nil
   "Series ids unfolded in the current `bone-list' buffer.  Buffer-local.")
 
+(defvar bone-list--show-skipped nil
+  "When non-nil, show reports marked skipped.  Buffer-local in `bone-list'.")
+
+(defvar bone-list--reports nil
+  "Cached (MID . INFO) report pairs for the current `bone-list' buffer.
+Set by `bone-list-reload'; re-rendering reuses it without re-reading
+the cache.  Buffer-local in use.")
+
+(defvar bone-list--mark-index 0
+  "Index of the Mark column among the active columns.
+Set by `bone--list-format'; used by `bone--mark-sort'.  Buffer-local in use.")
+
+(defface bone-sticky '((t :weight bold))
+  "Face for the sticky mark in the report list."
+  :group 'bone)
+
 (defun bone--query-text-match (needle hay)
   "Non-nil if HAY contains NEEDLE, case-insensitively.
 NEEDLE `*' matches any non-empty HAY; empty NEEDLE matches anything."
@@ -949,19 +973,29 @@ NEEDLE `*' matches any non-empty HAY; empty NEEDLE matches anything."
     (* (string-to-number (match-string 1 s))
        (pcase (match-string 2 s) ("d" 1) ("w" 7) ("m" 30)))))
 
+(defun bone--query-bound (s forward today)
+  "Day number for a range bound S (YYYY-MM-DD or duration), or nil.
+A duration is TODAY plus or minus its days, per FORWARD."
+  (or (bone--query-ymd->days s)
+      (let ((d (bone--query-duration->days s)))
+        (and d (if forward (+ today d) (- today d))))))
+
 (defun bone--query-date-match (spec field forward)
   "Non-nil if FIELD's date satisfies SPEC; FORWARD looks ahead from today.
 SPEC is a duration (3d/2w/2m), a YYYY-MM-DD date, or an A..B range whose
-ends are dates or durations and may be empty."
+ends are dates or durations and may be empty (the order is normalized)."
   (let ((fd (bone--query-ymd->days field))
         (today (time-to-days (current-time))))
     (when fd
       (if (string-match "\\`\\(.*\\)\\.\\.\\(.*\\)\\'" spec)
-          (let* ((a (match-string 1 spec)) (b (match-string 2 spec))
-                 (lo (or (bone--query-ymd->days a)
-                         (let ((d (bone--query-duration->days a))) (and d (- today d)))))
-                 (hi (or (bone--query-ymd->days b)
-                         (let ((d (bone--query-duration->days b))) (and d (+ today d))))))
+          ;; Read both ends before calling `bone--query-bound', which
+          ;; clobbers the match data via its own `string-match'.
+          (let* ((sa (match-string 1 spec))
+                 (sb (match-string 2 spec))
+                 (va (bone--query-bound sa forward today))
+                 (vb (bone--query-bound sb forward today))
+                 (lo (if (and va vb) (min va vb) va))
+                 (hi (if (and va vb) (max va vb) vb)))
             (and (or (null lo) (>= fd lo)) (or (null hi) (<= fd hi))))
         (let ((d (bone--query-duration->days spec))
               (single (bone--query-ymd->days spec)))
@@ -969,15 +1003,18 @@ ends are dates or durations and may be empty."
                      (and (<= fd today) (>= fd (- today d)))))
                 (single (= fd single))))))))
 
-(defun bone--query-flag (info pos ch)
-  "Non-nil if INFO's :flags has character CH at position POS."
-  (let ((f (or (plist-get info :flags) "")))
-    (and (> (length f) pos) (eq (aref f pos) ch))))
-
-(defun bone--query-closed-p (info)
-  "Non-nil if INFO has a close-reason flag set."
-  (let ((f (or (plist-get info :flags) "")))
-    (and (>= (length f) 3) (not (eq (aref f 2) ?-)))))
+(defun bone--query-actor-match (needle &rest actors)
+  "Non-nil if NEEDLE matches one of ACTORS (identity strings).
+`*', `true' or empty NEEDLE matches when any actor is set; otherwise a
+case-insensitive substring of an actor matches."
+  (let ((set (seq-some (lambda (a) (and a (not (string-empty-p a)))) actors)))
+    (if (member needle '("*" "true" nil ""))
+        (and set t)
+      (let ((case-fold-search t))
+        (and (seq-some (lambda (a)
+                         (and a (string-match-p (regexp-quote needle) a)))
+                       actors)
+             t)))))
 
 (defun bone--query-token-match (token mid info)
   "Non-nil if search TOKEN matches report MID with INFO."
@@ -997,9 +1034,10 @@ ends are dates or durations and may be empty."
                                 (downcase (or (plist-get info :type) "")))))
         ((or "priority" "p") (equal val (number-to-string prio)))
         ((or "mid" "m") (bone--query-text-match val mid))
-        ((or "acked" "a") (bone--query-flag info 0 ?A))
-        ((or "owned" "o") (bone--query-flag info 1 ?O))
-        ((or "closed" "c") (bone--query-closed-p info))
+        ((or "acked" "a") (bone--query-actor-match val (plist-get info :acked)))
+        ((or "owned" "o") (bone--query-actor-match
+                           val (plist-get info :owned) (plist-get info :owned-name)))
+        ((or "closed" "c") (bone--query-actor-match val (plist-get info :closed)))
         ((or "urgent" "u") (= (logand prio 2) 2))
         ((or "important" "i") (= (logand prio 1) 1))
         ((or "date" "d") (bone--query-date-match val (plist-get info :date) nil))
@@ -1007,13 +1045,17 @@ ends are dates or durations and may be empty."
         ((or "expired" "e") (bone--query-date-match val (plist-get info :expiry) t))
         (_ (bone--query-text-match token (plist-get info :subject)))))))
 
-(defun bone--query-match (query mid info)
-  "Non-nil if report MID/INFO matches QUERY (`|' = OR, space = AND)."
-  (seq-some
-   (lambda (grp)
-     (seq-every-p (lambda (tok) (bone--query-token-match tok mid info))
-                  (split-string grp "[ \t]+" t)))
-   (split-string query "|" t)))
+(defun bone--query-parse (query)
+  "Parse QUERY into OR-groups of AND-token lists (`|' = OR, space = AND)."
+  (mapcar (lambda (grp) (split-string grp "[ \t]+" t))
+          (split-string query "|" t)))
+
+(defun bone--query-match-p (groups mid info)
+  "Non-nil if report MID/INFO matches parsed GROUPS (from `bone--query-parse')."
+  (seq-some (lambda (toks)
+              (seq-every-p (lambda (tok) (bone--query-token-match tok mid info))
+                           toks))
+            groups))
 
 (defconst bone--query-keys
   '("from:" "subject:" "topic:" "type:" "priority:" "mid:" "acked:"
@@ -1049,45 +1091,77 @@ query to `KEY:value'; an empty value clears the filter."
         (message "bone: filter %s" bone-list--query)
       (message "bone: filter cleared"))))
 
-(defvar bone-list-filter-map
-  (let ((map (make-sparse-keymap)))
-    (dolist (pair '(("f" . "from") ("t" . "type") ("T" . "topic")
-                    ("s" . "subject") ("p" . "priority") ("m" . "mid")
-                    ("d" . "date") ("D" . "deadline") ("e" . "expired")
-                    ("a" . "acked") ("o" . "owned") ("c" . "closed")
-                    ("u" . "urgent") ("i" . "important")))
-      (let ((field (cdr pair)))
-        (define-key map (car pair)
-                    (lambda () (interactive) (bone-list-filter-by field)))))
-    map)
-  "Keymap bound to `f' in `bone-list-mode' to filter by one field.")
+(defmacro bone--define-filter-commands (&rest fields)
+  "Define a `bone-list-filter-FIELD' command for each of FIELDS."
+  `(progn
+     ,@(mapcar (lambda (f)
+                 `(defun ,(intern (concat "bone-list-filter-" f)) ()
+                    ,(concat "Filter the report list by the " f " field.")
+                    (interactive)
+                    (bone-list-filter-by ,f)))
+               fields)))
+
+(bone--define-filter-commands
+ "from" "subject" "topic" "priority" "mid"
+ "date" "deadline" "expired"
+ "acked" "owned" "closed" "urgent" "important")
+
+(transient-define-prefix bone-list-filter-transient ()
+  "Filter the report list by one field."
+  [["Field"
+    ("f" "From"       bone-list-filter-from)
+    ("s" "Subject"    bone-list-filter-subject)
+    ("t" "Type"       bone-list-limit-type)
+    ("T" "Topic"      bone-list-filter-topic)
+    ("p" "Priority"   bone-list-filter-priority)
+    ("m" "Message-id" bone-list-filter-mid)]
+   ["Date"
+    ("d" "Created"    bone-list-filter-date)
+    ("D" "Deadline"   bone-list-filter-deadline)
+    ("e" "Expiring"   bone-list-filter-expired)]
+   ["Flag is set"
+    ("a" "Acked"      bone-list-filter-acked)
+    ("o" "Owned"      bone-list-filter-owned)
+    ("c" "Closed"     bone-list-filter-closed)
+    ("u" "Urgent"     bone-list-filter-urgent)
+    ("i" "Important"  bone-list-filter-important)]])
 
 ;;; Report browser (bone-list)
 
-(defvar bone-list-columns
-  '(("Mark"      5 t :mark)
+(defcustom bone-list-columns
+  '(("Mark"      5 bone--mark-sort :mark)
     ("Type"      8 t :type)
     ("Flags"     5 t :flags)
     ("Pri"       4 t :priority)
     ("Votes"     5 t :votes)
     ("From"     18 t :from-name)
+    ("Att"       4 t :att)
     ("Subject"  50 t :subject)
     ("Created"  11 t :date)
     ("Activity" 11 t :last-activity)
     ("Topic"    16 t :topic))
-  "Columns for `bone-list-mode': (NAME WIDTH SORT KEY) tuples.
-The Subject width is recomputed to fill the window by `bone--list-format'.")
+  "Columns for `bone-list-mode' as (HEADER WIDTH SORT KEY) tuples.
+SORT is t (sort on the printed string), nil, or a predicate function;
+KEY is the INFO key (or :mark / :att) the cell displays.  The Subject
+width is recomputed to fill the window by `bone--list-format'."
+  :type '(repeat (list (string   :tag "Header")
+                       (integer  :tag "Width")
+                       (choice   :tag "Sort"
+                                 (const :tag "By string" t)
+                                 (const :tag "None" nil)
+                                 (function :tag "Predicate"))
+                       (symbol   :tag "Field key")))
+  :group 'bone)
 
 (defun bone--list-cell (key info mid state)
   "Return the display string for column KEY of report MID (INFO, STATE)."
   (pcase key
-    (:mark (concat (cond ((plist-get info :series-summary) "+")
-                         ((plist-get info :series-child) " ")
-                         (t ""))
-                   (if (bone-action-on-p state mid :todo) "T" "")
-                   (if (bone-action-on-p state mid :sticky) "S" "")
-                   (if (bone-action-on-p state mid :read) "" "*")
-                   (if (plist-get info :patches) "P" "")))
+    ;; Local mark, one character like the bone CLI: * sticky, _ skipped.
+    (:mark (cond ((bone-action-on-p state mid :sticky)
+                  (propertize "*" 'face 'bone-sticky))
+                 ((bone-action-on-p state mid :skip) "_")
+                 (t " ")))
+    (:att (if (plist-get info :patches) "+" ""))
     (:priority (number-to-string (or (plist-get info :priority) 0)))
     (:date (let ((d (plist-get info :date)))   ; keep the YYYY-MM-DD part only
              (if d (substring d 0 (min 10 (length d))) "")))
@@ -1097,6 +1171,20 @@ The Subject width is recomputed to fill the window by `bone--list-format'.")
                        (format "%s  (%s)" s (plist-get info :series-summary)))
                       (t s))))
     (_ (let ((v (plist-get info key))) (if v (format "%s" v) "")))))
+
+(defun bone--mark-rank (cell)
+  "Sort rank for a Mark-column CELL string, depending on the view.
+Skipped hidden: skip < normal < sticky; skipped shown: sticky < normal
+< skip."
+  (let ((ch (and (> (length cell) 0) (aref cell 0))))
+    (cond ((eq ch ?*) (if bone-list--show-skipped 0 2))
+          ((eq ch ?_) (if bone-list--show-skipped 2 0))
+          (t 1))))
+
+(defun bone--mark-sort (a b)
+  "Sort tabulated-list entries A and B by their Mark column."
+  (< (bone--mark-rank (aref (cadr a) bone-list--mark-index))
+     (bone--mark-rank (aref (cadr b) bone-list--mark-index))))
 
 (defun bone--active-columns ()
   "Return `bone-list-columns' minus those named in config `:skip-columns'."
@@ -1112,6 +1200,8 @@ width, so Topic stays at the right edge."
          (used (apply #'+ tabulated-list-padding 1
                       (mapcar (lambda (c) (1+ (nth 1 c))) others)))
          (subj (max 20 (- (window-body-width) used))))
+    (setq-local bone-list--mark-index
+                (or (cl-position :mark cols :key (lambda (c) (nth 3 c))) 0))
     (vconcat (mapcar (lambda (c)
                        (list (nth 0 c)
                              (if (eq (nth 3 c) :subject) subj (nth 1 c))
@@ -1125,8 +1215,8 @@ patch) with a status summary; unfolded series (in `bone-list--expanded')
 list each patch.  The query in `bone-list--query' filters the result."
   (let ((state (bone-read-state))
         (cols (bone--active-columns))
-        (query bone-list--query)
-        (pairs (bone-reports))
+        (qgroups (and bone-list--query (bone--query-parse bone-list--query)))
+        (pairs bone-list--reports)
         (groups (make-hash-table :test 'equal))
         (seen (make-hash-table :test 'equal))
         (rows nil))
@@ -1134,7 +1224,10 @@ list each patch.  The query in `bone-list--query' filters the result."
       (let ((sid (bone--series-id (cdr p))))
         (when sid (push p (gethash sid groups)))))
     (cl-flet ((row (pair)
-                (when (or (null query) (bone--query-match query (car pair) (cdr pair)))
+                (when (and (or bone-list--show-skipped
+                               (not (bone-action-on-p state (car pair) :skip)))
+                           (or (null qgroups)
+                               (bone--query-match-p qgroups (car pair) (cdr pair))))
                   (push (list pair
                               (vconcat
                                (mapcar (lambda (c)
@@ -1173,26 +1266,29 @@ list each patch.  The query in `bone-list--query' filters the result."
     (define-key map "p" #'bone-list-view-patches)
     (define-key map "a" #'bone-list-apply-patches)
     (define-key map "A" #'bone-list-am-patches)
-    (define-key map "g" #'bone-list-refresh)
+    (define-key map "g" #'bone-list-reload)
     (define-key map "G" #'bone-list-update)
     (define-key map "/" #'bone-list-filter)
-    (define-key map "f" bone-list-filter-map)
+    (define-key map "=" #'bone-list-filter-transient)
     (define-key map "t" #'bone-list-limit-type)
-    (define-key map "r" #'bone-list-toggle-read)
-    (define-key map "!" #'bone-list-toggle-todo)
     (define-key map "*" #'bone-list-toggle-sticky)
+    (define-key map "_" #'bone-list-toggle-skip)
+    (define-key map "\\" #'bone-list-toggle-skipped)
+    (define-key map "?" #'describe-mode)
     map)
   "Keymap for `bone-list-mode'.")
 
 (define-derived-mode bone-list-mode tabulated-list-mode "Bone"
-  "Major mode listing open BARK reports."
+  "Major mode listing open BARK reports.
+\\<bone-list-mode-map>Press \\[describe-mode] for the full list of key bindings."
   (setq tabulated-list-format (bone--list-format))
   (setq tabulated-list-padding 1)
   (setq tabulated-list-sort-key nil)
   (tabulated-list-init-header))
 
 (defun bone-list-refresh ()
-  "Reload reports and local state into the current list buffer."
+  "Re-render the list from the in-memory reports and current state.
+Does not re-read the report cache; use `bone-list-reload' for that."
   (interactive)
   (setq tabulated-list-format (bone--list-format))
   (tabulated-list-init-header)
@@ -1202,11 +1298,23 @@ list each patch.  The query in `bone-list--query' filters the result."
   (tabulated-list-print t)
   (force-mode-line-update))
 
+(defun bone-list-reload ()
+  "Re-read reports from the local cache, then re-render."
+  (interactive)
+  (setq-local bone-list--reports (bone-reports))
+  (bone-list-refresh))
+
 (defun bone-list-filter (query)
   "Filter the report list by QUERY; an empty QUERY clears the filter.
 QUERY combines `key:value' tokens with spaces (AND) and `|' (OR)."
   (interactive
-   (list (completing-read "Filter: " #'bone--filter-completion nil nil bone-list--query)))
+   (list (let ((minibuffer-local-completion-map
+                (let ((m (copy-keymap minibuffer-local-completion-map)))
+                  (define-key m " " nil)   ; let SPACE separate tokens
+                  (define-key m "?" nil)   ; and `?' self-insert
+                  m)))
+           (completing-read "Filter: " #'bone--filter-completion
+                            nil nil bone-list--query))))
   (setq-local bone-list--query
               (and (not (string-empty-p (string-trim query))) query))
   (bone-list-refresh)
@@ -1218,7 +1326,7 @@ QUERY combines `key:value' tokens with spaces (AND) and `|' (OR)."
   "Refresh the remote cache, then reload the list."
   (interactive)
   (bone-update)
-  (bone-list-refresh))
+  (bone-list-reload))
 
 (defun bone-list-limit-type ()
   "Limit the list to a chosen report type."
@@ -1262,11 +1370,19 @@ QUERY combines `key:value' tokens with spaces (AND) and `|' (OR)."
                     (remove sid bone-list--expanded)
                   (cons sid bone-list--expanded)))
     (bone-list-refresh)
+    ;; Return to the same report; if it is gone (folded from a sub-patch),
+    ;; fall back to the series' representative row.
     (goto-char (point-min))
     (while (and (not (eobp))
                 (let ((p (tabulated-list-get-id)))
                   (not (and p (equal (car p) mid)))))
-      (forward-line 1))))
+      (forward-line 1))
+    (when (eobp)
+      (goto-char (point-min))
+      (while (and (not (eobp))
+                  (let ((p (tabulated-list-get-id)))
+                    (not (and p (equal (bone--series-id (cdr p)) sid)))))
+        (forward-line 1)))))
 
 (defun bone-list--toggle (action)
   "Toggle local mark ACTION on the report at point, then refresh."
@@ -1274,20 +1390,23 @@ QUERY combines `key:value' tokens with spaces (AND) and `|' (OR)."
     (bone-toggle-mark (car p) (cdr p) action)
     (bone-list-refresh)))
 
-(defun bone-list-toggle-read ()
-  "Toggle the read mark on the report at point."
-  (interactive)
-  (bone-list--toggle :read))
-
-(defun bone-list-toggle-todo ()
-  "Toggle the todo mark on the report at point."
-  (interactive)
-  (bone-list--toggle :todo))
-
 (defun bone-list-toggle-sticky ()
-  "Toggle the sticky mark on the report at point."
+  "Toggle the sticky mark (keep visible) on the report at point."
   (interactive)
   (bone-list--toggle :sticky))
+
+(defun bone-list-toggle-skip ()
+  "Toggle the skip mark (hide) on the report at point."
+  (interactive)
+  (bone-list--toggle :skip))
+
+(defun bone-list-toggle-skipped ()
+  "Toggle whether skipped reports are shown."
+  (interactive)
+  (setq-local bone-list--show-skipped (not bone-list--show-skipped))
+  (bone-list-refresh)
+  (message "bone: skipped reports %s"
+           (if bone-list--show-skipped "shown" "hidden")))
 
 (defun bone--resolve-reports-dir (input)
   "Return the reports directory URL (ending in /) for user INPUT.
@@ -1384,7 +1503,7 @@ Prompt to add a source when none is configured."
     (switch-to-buffer buf)
     (delete-other-windows)
     (bone-list-mode)
-    (bone-list-refresh)))
+    (bone-list-reload)))
 
 (provide 'bone)
 ;;; bone.el ends here
