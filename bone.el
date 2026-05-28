@@ -841,6 +841,33 @@ when the source has none, before asking interactively."
   :type '(choice (const :tag "Ask each time" nil) directory)
   :group 'bone)
 
+(defcustom bone-git-apply-options '("--3way")
+  "Extra arguments passed to `git apply' by `bone-apply-patches'.
+The default `--3way' falls back to a 3-way merge when a patch does not
+apply cleanly (which may leave conflict markers to resolve) instead of
+failing outright.  Another useful value is \"--whitespace=fix\"."
+  :type '(repeat string)
+  :group 'bone)
+
+(defcustom bone-git-am-options '("--3way")
+  "Extra arguments passed to `git am' by `bone-am-patches'.
+The default `--3way' falls back to a 3-way merge when a patch does not
+apply cleanly (leaving conflict markers to resolve) instead of failing
+outright.  Other useful values include \"--signoff\" or \"--whitespace=fix\"."
+  :type '(repeat string)
+  :group 'bone)
+
+(defcustom bone-checkout-base 'ask
+  "Whether to check out a patch's recorded base commit before applying.
+Patches made with `git format-patch --base' carry a `base-commit:'
+trailer.  When that commit exists in the target repo, bone can check it
+out first so the patch applies against its intended state.  Values: `ask'
+prompts, nil never checks out, t checks out without prompting."
+  :type '(choice (const :tag "Ask" ask)
+                 (const :tag "Never" nil)
+                 (const :tag "Always" t))
+  :group 'bone)
+
 (defun bone--series-complete-p (info)
   "Return non-nil unless INFO has an explicitly incomplete `:series'."
   (let ((series (plist-get info :series)))
@@ -892,8 +919,44 @@ Cover letters are excluded from the tally."
       (diff-mode)
       (pop-to-buffer (current-buffer)))))
 
-(defun bone--run-git-patches (info subcommand hint)
+(defun bone--patch-base-commit (files)
+  "Return the `base-commit' trailer found in patch FILES, or nil.
+Scans FILES in order and returns the first commit hash recorded by
+`git format-patch --base'."
+  (with-temp-buffer
+    (catch 'found
+      (dolist (f files)
+        (when (and f (file-readable-p f))
+          (erase-buffer)
+          (insert-file-contents f)
+          (goto-char (point-min))
+          (when (re-search-forward "^base-commit: \\([0-9a-f]\\{7,40\\}\\)$" nil t)
+            (throw 'found (match-string 1))))))))
+
+(defun bone--maybe-checkout-base (files)
+  "Offer to check out the base commit recorded in patch FILES.
+Runs in `default-directory' (the target repo).  Does nothing unless
+`bone-checkout-base' is set and the base commit exists locally.  Signals
+a `user-error' if the checkout fails.  Note that this leaves the repo on
+a detached HEAD."
+  (when bone-checkout-base
+    (let ((base (bone--patch-base-commit files)))
+      (when (and base
+                 (zerop (call-process "git" nil nil nil
+                                      "cat-file" "-e" (concat base "^{commit}")))
+                 (or (eq bone-checkout-base t)
+                     (y-or-n-p
+                      (format "Check out base commit %s (detached HEAD) first? "
+                              (substring base 0 (min 12 (length base)))))))
+        (with-current-buffer (get-buffer-create "*bone-git*")
+          (let ((inhibit-read-only t)) (erase-buffer))
+          (unless (zerop (call-process "git" nil t nil "checkout" base))
+            (display-buffer (current-buffer))
+            (user-error "Git checkout %s failed" base)))))))
+
+(defun bone--run-git-patches (info subcommand options hint)
   "Apply INFO's patches in its repo via git SUBCOMMAND (\"apply\" or \"am\").
+OPTIONS is a list of extra arguments inserted before the patch files.
 HINT is shown on failure."
   (let ((patches (plist-get info :patches)))
     (unless patches (user-error "This report has no patches"))
@@ -908,22 +971,26 @@ HINT is shown on failure."
       (when (memq nil files)
         (user-error "Cannot fetch %d of %d patch file(s); not applying"
                     (seq-count #'null files) (length files)))
-      (with-current-buffer (get-buffer-create "*bone-git*")
-        (let ((inhibit-read-only t)) (erase-buffer))
-        (let ((status (apply #'call-process "git" nil t nil subcommand "--" files)))
-          (if (zerop status)
-              (message "bone: git %s applied %d patch(es) in %s"
-                       subcommand (length files) repo)
-            (display-buffer (current-buffer))
-            (message "bone: git %s failed in %s (%s)" subcommand repo hint)))))))
+      (bone--maybe-checkout-base files)
+      (let ((args (append (list subcommand) options (list "--") files)))
+        (with-current-buffer (get-buffer-create "*bone-git*")
+          (let ((inhibit-read-only t)) (erase-buffer))
+          (let ((status (apply #'call-process "git" nil t nil args)))
+            (if (zerop status)
+                (message "bone: git %s applied %d patch(es) in %s"
+                         subcommand (length files) repo)
+              (display-buffer (current-buffer))
+              (message "bone: git %s failed in %s (%s)" subcommand repo hint))))))))
 
 (defun bone-apply-patches (info)
   "Apply INFO's patches to the working tree with `git apply'."
-  (bone--run-git-patches info "apply" "rejects left as .rej"))
+  (bone--run-git-patches info "apply" bone-git-apply-options
+                         "rejects left as .rej"))
 
 (defun bone-am-patches (info)
   "Apply INFO's patches as commits with `git am'."
-  (bone--run-git-patches info "am" "run `git am --abort' to undo"))
+  (bone--run-git-patches info "am" bone-git-am-options
+                         "run `git am --abort' to undo"))
 
 ;;; Query filter (subset of the BARK web search syntax)
 
