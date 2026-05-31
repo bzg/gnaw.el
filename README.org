@@ -70,7 +70,9 @@ in =state.edn=, shared with the bone CLI and the front-ends.
 * Searching
 
 =/= filters the list with a subset of the BARK web query syntax:
-=key:value= tokens (space = AND, =|= = OR).
+=key:value= tokens.  Operators, loosest to tightest binding: =|= is OR
+between clauses, space is AND between tokens, and a comma inside a value
+is OR (=acked:alice,bob=).  So =a b c | d= reads as =(a b c) | d=.
 
 | Long                     | Short    | Matches                               |
 |--------------------------+----------+---------------------------------------|

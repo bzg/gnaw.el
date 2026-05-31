@@ -1083,6 +1083,15 @@ case-insensitive substring of an actor matches."
                        actors)
              t)))))
 
+(defun bone--query-val-any (val pred)
+  "Non-nil if PRED holds for any comma-separated value in VAL.
+Commas inside a field value are OR, as in the BARK web UI
+\(e.g. `acked:alice,bob').  An empty VAL is passed through unsplit so it
+keeps its \"match any\" meaning."
+  (seq-some pred (if (or (null val) (string-empty-p val))
+                     (list val)
+                   (split-string val "," t))))
+
 (defun bone--query-token-match (token mid info)
   "Non-nil if search TOKEN matches report MID with INFO."
   (let* ((i (string-search ":" token))
@@ -1093,18 +1102,35 @@ case-insensitive substring of an actor matches."
         (bone--query-text-match token (plist-get info :subject))
       (pcase key
         ((or "from" "f")
-         (or (bone--query-text-match val (plist-get info :from))
-             (bone--query-text-match val (plist-get info :from-name))))
-        ((or "subject" "s") (bone--query-text-match val (plist-get info :subject)))
-        ((or "topic" "t") (bone--query-text-match val (plist-get info :topic)))
-        ("type" (and val (equal (downcase val)
-                                (downcase (or (plist-get info :type) "")))))
+         (bone--query-val-any
+          val (lambda (v)
+                (or (bone--query-text-match v (plist-get info :from))
+                    (bone--query-text-match v (plist-get info :from-name))))))
+        ((or "subject" "s")
+         (bone--query-val-any
+          val (lambda (v) (bone--query-text-match v (plist-get info :subject)))))
+        ((or "topic" "t")
+         (bone--query-val-any
+          val (lambda (v) (bone--query-text-match v (plist-get info :topic)))))
+        ("type"
+         (bone--query-val-any
+          val (lambda (v)
+                (and v (equal (downcase v)
+                              (downcase (or (plist-get info :type) "")))))))
         ((or "priority" "p") (equal val (number-to-string prio)))
-        ((or "mid" "m") (bone--query-text-match val mid))
-        ((or "acked" "a") (bone--query-actor-match val (plist-get info :acked)))
-        ((or "owned" "o") (bone--query-actor-match
-                           val (plist-get info :owned) (plist-get info :owned-name)))
-        ((or "closed" "c") (bone--query-actor-match val (plist-get info :closed)))
+        ((or "mid" "m")
+         (bone--query-val-any val (lambda (v) (bone--query-text-match v mid))))
+        ((or "acked" "a")
+         (bone--query-val-any
+          val (lambda (v) (bone--query-actor-match v (plist-get info :acked)))))
+        ((or "owned" "o")
+         (bone--query-val-any
+          val (lambda (v) (bone--query-actor-match
+                           v (plist-get info :owned)
+                           (plist-get info :owned-name)))))
+        ((or "closed" "c")
+         (bone--query-val-any
+          val (lambda (v) (bone--query-actor-match v (plist-get info :closed)))))
         ((or "urgent" "u") (= (logand prio 2) 2))
         ((or "important" "i") (= (logand prio 1) 1))
         ((or "date" "d") (bone--query-date-match val (plist-get info :date) nil))
