@@ -40,18 +40,19 @@ later on.
 
 * The =*bone*= browser
 
-| Key | Action                                               |
-|-----+------------------------------------------------------|
-| =RET= | open the report's email (see /Reading/ below)          |
+| Key   | Action                                               |
+|-------+------------------------------------------------------|
+| =RET= | open the report's email (see /Reading/ below)        |
 | =TAB= | fold / unfold the patch series at point              |
-| =p=   | view the report's patch(es) in =diff-mode=             |
-| =a=   | =git apply= the patch(es) to the source repo tree      |
-| =A=   | =git am= the patch(es) as commits in the source repo   |
-| =/=   | filter the list by a query (see /Searching/)           |
-| ~=~   | filter by one field (a =transient= menu)               |
+| =p=   | view the report's patch(es) in =diff-mode=           |
+| =a=   | =git apply= the patch(es) to the source repo tree    |
+| =A=   | =git am= the patch(es) as commits in the source repo |
+| =/=   | filter the list by a query (see /Searching/)         |
+| =\vert=   | clear the active filter (=C-u /= also clears)        |
+| ===   | filter by one field (a =transient= menu)             |
 | =t=   | limit to a report type (bug, patch, request…)        |
 | =S=   | sort by the column at point; on Mark, by sticky/skip |
-| =*=   | mark sticky: keep visible, shown =*=                   |
+| =*=   | mark sticky: keep visible, shown =*=                 |
 | =_=   | skip: hide the report from the list                  |
 | =\=   | show / hide skipped reports                          |
 | =g=   | reload from the local cache                          |
@@ -85,7 +86,8 @@ in =state.edn=, shared with the bone CLI and the front-ends.
 | =deadline:2m=              | =D:=       | due within / on (forward)             |
 | =expired:10d=              | =e:=       | expiring within (forward)             |
 
-The active query shows in the mode line; =/= then =RET= clears it.
+The active query shows in the mode line; =|= (or =C-u /=, or =/= then =RET=)
+clears it.
 
 * Reading messages
 

@@ -1343,6 +1343,7 @@ list each patch.  The query in `bone-list--query' filters the result."
     (define-key map "g" #'bone-list-reload)
     (define-key map "G" #'bone-list-update)
     (define-key map "/" #'bone-list-filter)
+    (define-key map "|" #'bone-list-filter-clear)
     (define-key map "=" #'bone-list-filter-transient)
     (define-key map "t" #'bone-list-limit-type)
     (define-key map "*" #'bone-list-toggle-sticky)
@@ -1378,17 +1379,27 @@ Does not re-read the report cache; use `bone-list-reload' for that."
   (setq-local bone-list--reports (bone-reports))
   (bone-list-refresh))
 
+(defun bone-list-filter-clear ()
+  "Clear the active `bone-list' filter query."
+  (interactive)
+  (setq-local bone-list--query nil)
+  (bone-list-refresh)
+  (message "bone: filter cleared"))
+
 (defun bone-list-filter (query)
   "Filter the report list by QUERY; an empty QUERY clears the filter.
-QUERY combines `key:value' tokens with spaces (AND) and `|' (OR)."
+QUERY combines `key:value' tokens with spaces (AND) and `|' (OR).
+With a prefix argument, clear the active filter without prompting."
   (interactive
-   (list (let ((minibuffer-local-completion-map
-                (let ((m (copy-keymap minibuffer-local-completion-map)))
-                  (define-key m " " nil)   ; let SPACE separate tokens
-                  (define-key m "?" nil)   ; and `?' self-insert
-                  m)))
-           (completing-read "Filter: " #'bone--filter-completion
-                            nil nil bone-list--query))))
+   (list (if current-prefix-arg
+             ""
+           (let ((minibuffer-local-completion-map
+                  (let ((m (copy-keymap minibuffer-local-completion-map)))
+                    (define-key m " " nil)   ; let SPACE separate tokens
+                    (define-key m "?" nil)   ; and `?' self-insert
+                    m)))
+             (completing-read "Filter: " #'bone--filter-completion
+                              nil nil bone-list--query)))))
   (setq-local bone-list--query
               (and (not (string-empty-p (string-trim query))) query))
   (bone-list-refresh)
