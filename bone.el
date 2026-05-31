@@ -1137,7 +1137,14 @@ the query (earlier tokens) is left untouched."
     (if (eq (car-safe action) 'boundaries)
         (let ((suffix (cdr action)))
           `(boundaries ,beg . ,(or (string-match "[ \t|]" suffix) (length suffix))))
-      (complete-with-action action bone--query-keys (substring string beg) pred))))
+      (let ((res (complete-with-action
+                  action bone--query-keys (substring string beg) pred)))
+        ;; For `try-completion' (ACTION nil) the table must return the
+        ;; whole completed string, prefix included; `all-completions'
+        ;; and `test-completion' operate on the last token alone.
+        (if (and (null action) (stringp res))
+            (concat (substring string 0 beg) res)
+          res)))))
 
 (defconst bone-report-types
   '("bug" "patch" "request" "announcement" "change" "release")
