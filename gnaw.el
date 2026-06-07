@@ -1,11 +1,11 @@
-;;; bone.el --- Browse and manage BARK reports in Emacs -*- lexical-binding: t; -*-
+;;; gnaw.el --- Browse and manage BONE reports in Emacs -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Bastien Guerry
 
 ;; Author: Bastien Guerry <bzg@gnu.org>
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
-;; URL: https://codeberg.org/bzg/bone.el
+;; URL: https://codeberg.org/bzg/gnaw.el
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
@@ -26,14 +26,16 @@
 ;;
 ;;; Commentary:
 ;;
-;; Browser and shared data layer for BARK/bone in Emacs.  `M-x bone'
-;; opens a report browser; the same data layer backs the mail front-ends
-;; gnus-bone, notmuch-bone and mu4e-bone.  This library:
+;;   3==3  GNAW -- GNAW is Not Another Workflow
 ;;
-;; - reads the bone configuration (`config.edn') and report sources,
+;; Browser and shared data layer for BONE/gnaw in Emacs.  `M-x gnaw'
+;; opens a report browser; the same data layer backs the mail front-ends
+;; gnus-gnaw, notmuch-gnaw and mu4e-gnaw.  This library:
+;;
+;; - reads the gnaw configuration (`config.edn') and report sources,
 ;; - manages the local cache of remote `reports.json' files,
 ;; - parses and serializes the EDN config and `state.edn' files shared
-;;   with the bone CLI,
+;;   with the gnaw CLI,
 ;; - exposes the report list and the local-mark API the front-ends use.
 ;;
 ;; Front-ends provide the message metadata (an INFO plist with keys
@@ -44,11 +46,11 @@
 ;;
 ;; Entry points:
 ;;
-;;   `bone'              browse reports (interactive)
-;;   `bone-reports'      collect open reports from all sources
-;;   `bone-update'       force-refresh the local cache (interactive)
-;;   `bone-toggle-mark'  toggle :sticky/:skip for a message-id
-;;   `bone-read-state' / `bone-write-state'   state.edn I/O
+;;   `gnaw'              browse reports (interactive)
+;;   `gnaw-reports'      collect open reports from all sources
+;;   `gnaw-update'       force-refresh the local cache (interactive)
+;;   `gnaw-toggle-mark'  toggle :sticky/:skip for a message-id
+;;   `gnaw-read-state' / `gnaw-write-state'   state.edn I/O
 ;;
 ;;; Code:
 
@@ -60,60 +62,60 @@
 
 (defvar url-http-response-status)
 
-(defgroup bone nil
-  "Read and manage BARK reports shared with the bone CLI."
+(defgroup gnaw nil
+  "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defcustom bone-config-dir "~/.config/bone"
-  "Directory containing bone configuration and state/cache files."
+(defcustom gnaw-config-dir "~/.config/gnaw"
+  "Directory containing gnaw configuration and state/cache files."
   :type 'directory
-  :group 'bone)
+  :group 'gnaw)
 
-(defcustom bone-after-update-hook nil
-  "Functions run after `bone-update' refreshes the local cache.
+(defcustom gnaw-after-update-hook nil
+  "Functions run after `gnaw-update' refreshes the local cache.
 Front-ends can use this to re-apply their display."
   :type 'hook
-  :group 'bone)
+  :group 'gnaw)
 
-(defvar bone-addresses nil
+(defvar gnaw-addresses nil
   "List of user email addresses loaded from config.")
 
-(defconst bone-supported-bark-format "0.9.2"
-  "Minimum reports.json bark-format bone.el reads without warning.")
+(defconst gnaw-supported-bone-format "0.9.2"
+  "Minimum reports.json bone-format gnaw.el reads without warning.")
 
-;;; EDN reader/writer (the subset emitted by bone's config.edn and state.edn)
+;;; EDN reader/writer (the subset emitted by gnaw's config.edn and state.edn)
 
-(defun bone-edn--skip-ws ()
+(defun gnaw-edn--skip-ws ()
   "Skip EDN whitespace, commas and line comments at point."
   (skip-chars-forward " \t\n\r,")
   (while (eq (char-after) ?\;)
     (forward-line 1)
     (skip-chars-forward " \t\n\r,")))
 
-(defun bone-edn--read ()
+(defun gnaw-edn--read ()
   "Read one EDN value at point."
-  (bone-edn--skip-ws)
+  (gnaw-edn--skip-ws)
   (let ((c (char-after)))
     (cond
      ((null c)   (error "EDN: unexpected EOF"))
      ((eq c ?\") (read (current-buffer)))
-     ((eq c ?:)  (bone-edn--read-keyword))
-     ((eq c ?\{) (bone-edn--read-map))
-     ((eq c ?\[) (bone-edn--read-vector))
+     ((eq c ?:)  (gnaw-edn--read-keyword))
+     ((eq c ?\{) (gnaw-edn--read-map))
+     ((eq c ?\[) (gnaw-edn--read-vector))
      ((or (and (>= c ?0) (<= c ?9))
           (and (eq c ?-) (let ((d (char-after (1+ (point)))))
                            (and d (>= d ?0) (<= d ?9)))))
-      (bone-edn--read-number))
-     (t (bone-edn--read-symbol)))))
+      (gnaw-edn--read-number))
+     (t (gnaw-edn--read-symbol)))))
 
-(defun bone-edn--read-keyword ()
+(defun gnaw-edn--read-keyword ()
   "Read an EDN keyword at point."
   (forward-char 1)
   (let ((start (1- (point))))
     (skip-chars-forward "a-zA-Z0-9._/?!+*<>=&%$-")
     (intern (buffer-substring-no-properties start (point)))))
 
-(defun bone-edn--read-symbol ()
+(defun gnaw-edn--read-symbol ()
   "Read an EDN symbol at point."
   (let ((start (point)))
     (skip-chars-forward "a-zA-Z0-9._/?!+*<>=&%$-")
@@ -123,42 +125,42 @@ Front-ends can use this to re-apply their display."
       ("false" nil)
       (s       (intern s)))))
 
-(defun bone-edn--read-number ()
+(defun gnaw-edn--read-number ()
   "Read an EDN number at point."
   (let ((start (point)))
     (skip-chars-forward "0-9.eE+-")
     (string-to-number (buffer-substring-no-properties start (point)))))
 
-(defun bone-edn--read-map ()
+(defun gnaw-edn--read-map ()
   "Read an EDN map at point."
   (forward-char 1)
   (let ((acc nil))
-    (bone-edn--skip-ws)
+    (gnaw-edn--skip-ws)
     (while (not (eq (char-after) ?\}))
-      (let ((k (bone-edn--read)))
-        (bone-edn--skip-ws)
-        (push (cons k (bone-edn--read)) acc))
-      (bone-edn--skip-ws))
+      (let ((k (gnaw-edn--read)))
+        (gnaw-edn--skip-ws)
+        (push (cons k (gnaw-edn--read)) acc))
+      (gnaw-edn--skip-ws))
     (forward-char 1)
     (nreverse acc)))
 
-(defun bone-edn--read-vector ()
+(defun gnaw-edn--read-vector ()
   "Read an EDN vector at point."
   (forward-char 1)
   (let ((acc nil))
-    (bone-edn--skip-ws)
+    (gnaw-edn--skip-ws)
     (while (not (eq (char-after) ?\]))
-      (push (bone-edn--read) acc)
-      (bone-edn--skip-ws))
+      (push (gnaw-edn--read) acc)
+      (gnaw-edn--skip-ws))
     (forward-char 1)
     (nreverse acc)))
 
-(defun bone-edn--map-p (x)
+(defun gnaw-edn--map-p (x)
   "Non-nil if list X is an alist to write as an EDN map (not a vector).
 True when every element is a cons whose car is an atom (a key)."
   (and (consp x) (cl-every (lambda (e) (and (consp e) (atom (car e)))) x)))
 
-(defun bone--edn-write (v)
+(defun gnaw--edn-write (v)
   "Serialize EDN value V (maps, vectors and scalars) to a string."
   (cond
    ((stringp v)  (format "%S" v))
@@ -167,73 +169,73 @@ True when every element is a cons whose car is an atom (a key)."
    ((null v)     "nil")
    ((numberp v)  (number-to-string v))
    ((symbolp v)  (symbol-name v))
-   ((bone-edn--map-p v)
+   ((gnaw-edn--map-p v)
     (concat "{" (mapconcat (lambda (kv)
-                             (concat (bone--edn-write (car kv)) " "
-                                     (bone--edn-write (cdr kv))))
+                             (concat (gnaw--edn-write (car kv)) " "
+                                     (gnaw--edn-write (cdr kv))))
                            v " ")
             "}"))
-   ((listp v) (concat "[" (mapconcat #'bone--edn-write v " ") "]"))
+   ((listp v) (concat "[" (mapconcat #'gnaw--edn-write v " ") "]"))
    (t (error "EDN: cannot serialize %S" v))))
 
-(defun bone-edn-read-buffer ()
+(defun gnaw-edn-read-buffer ()
   "Read one EDN map from the current buffer if it starts with `{'.
 Return nil on parse failure or when no map is present."
   (goto-char (point-min))
-  (bone-edn--skip-ws)
+  (gnaw-edn--skip-ws)
   (when (eq (char-after) ?\{)
-    (bone-edn--read-map)))
+    (gnaw-edn--read-map)))
 
 ;;; Configuration and report sources
 
-(defun bone--uri-to-path (uri)
+(defun gnaw--uri-to-path (uri)
   "Convert file:// URI to local path, otherwise return URI."
   (if (string-prefix-p "file://" uri)
       (url-unhex-string (substring uri 7))
     uri))
 
-(defun bone-load-config ()
+(defun gnaw-load-config ()
   "Load `config.edn' and return a plist.
 Keys: :addresses :skip-columns :source-configs (raw `:sources' maps)
 and :sources (their URLs)."
-  (let* ((file (expand-file-name "config.edn" bone-config-dir))
+  (let* ((file (expand-file-name "config.edn" gnaw-config-dir))
          (cfg (when (file-readable-p file)
                 (condition-case err
                     (with-temp-buffer
                       (insert-file-contents file)
-                      (bone-edn-read-buffer))
+                      (gnaw-edn-read-buffer))
                   (error
-                   (message "bone: cannot parse %s: %s"
+                   (message "gnaw: cannot parse %s: %s"
                             file (error-message-string err))
                    nil))))
          (addresses (alist-get :my-addresses cfg))
          (skip      (alist-get :skip-columns cfg))
          (src-cfgs  (alist-get :sources cfg))
          (sources   (mapcan (lambda (s) (append (alist-get :urls s) nil)) src-cfgs)))
-    (setq bone-addresses addresses)
+    (setq gnaw-addresses addresses)
     (list :addresses addresses :skip-columns skip
           :source-configs src-cfgs :sources sources)))
 
-(defun bone-sources ()
+(defun gnaw-sources ()
   "Return report sources from config.edn as URLs or absolute local paths.
-Relative paths are resolved against `bone-config-dir'."
-  (mapcar #'bone--resolve-source
-          (plist-get (bone-load-config) :sources)))
+Relative paths are resolved against `gnaw-config-dir'."
+  (mapcar #'gnaw--resolve-source
+          (plist-get (gnaw-load-config) :sources)))
 
-(defun bone--http-url-p (source)
+(defun gnaw--http-url-p (source)
   "Return non-nil if SOURCE is an HTTP(S) URL."
   (string-match-p "\\`https?://" source))
 
-(defun bone--resolve-source (source)
+(defun gnaw--resolve-source (source)
   "Resolve SOURCE to an HTTP(S) URL or an absolute local path.
 HTTP(S) URLs are returned unchanged; other sources are file paths,
-relative ones resolved against `bone-config-dir'."
-  (if (bone--http-url-p source)
+relative ones resolved against `gnaw-config-dir'."
+  (if (gnaw--http-url-p source)
       source
-    (expand-file-name (bone--uri-to-path source)
-                      (expand-file-name bone-config-dir))))
+    (expand-file-name (gnaw--uri-to-path source)
+                      (expand-file-name gnaw-config-dir))))
 
-(defun bone--source-repo (info)
+(defun gnaw--source-repo (info)
   "Return the local git repo for report INFO's source, or nil.
 Reads `:repo' from the matching config.edn `:sources' entry, matched by
 URL or by `:name'."
@@ -241,14 +243,14 @@ URL or by `:name'."
          (name (plist-get info :source-name))
          (entry (seq-find
                  (lambda (s)
-                   (or (and url (member url (mapcar #'bone--resolve-source
+                   (or (and url (member url (mapcar #'gnaw--resolve-source
                                                     (alist-get :urls s))))
                        (and name (equal name (alist-get :name s)))))
-                 (plist-get (bone-load-config) :source-configs))))
+                 (plist-get (gnaw-load-config) :source-configs))))
     (when-let* ((repo (alist-get :repo entry)))
       (expand-file-name repo))))
 
-(defun bone--java-hash (str)
+(defun gnaw--java-hash (str)
   "Calculate Java String hashCode of STR as an unsigned 32-bit integer."
   (let ((h 0)
         (len (length str)))
@@ -256,16 +258,16 @@ URL or by `:name'."
       (setq h (logand (+ (* h 31) (aref str i)) #xffffffff)))
     h))
 
-(defun bone--source-to-cache-file (src)
+(defun gnaw--source-to-cache-file (src)
   "Return cache file path for remote source SRC."
-  (let* ((h (format "%08x" (bone--java-hash src)))
+  (let* ((h (format "%08x" (gnaw--java-hash src)))
          (safe (replace-regexp-in-string "[^a-zA-Z0-9._-]" "_" src))
          (prefix (substring safe 0 (min 80 (length safe)))))
     (expand-file-name
      (concat "cache/reports/" prefix "-" h ".json")
-     bone-config-dir)))
+     gnaw-config-dir)))
 
-(defun bone--fetch-json-from-url (url)
+(defun gnaw--fetch-json-from-url (url)
   "Synchronously fetch JSON from URL."
   (let ((buf (url-retrieve-synchronously url t)))
     (unless buf (error "Failed to fetch %s" url))
@@ -285,44 +287,44 @@ URL or by `:name'."
             (json-read-from-string (decode-coding-string body 'utf-8))))
       (kill-buffer buf))))
 
-(defun bone--write-json-to-file (data file)
+(defun gnaw--write-json-to-file (data file)
   "Write JSON DATA to FILE as UTF-8."
   (make-directory (file-name-directory file) t)
   (let ((coding-system-for-write 'utf-8))
     (with-temp-file file
       (insert (json-encode data)))))
 
-(defun bone--read-json (source)
+(defun gnaw--read-json (source)
   "Read JSON from SOURCE, using local cache for remote URLs if available."
   (let ((json-object-type 'alist)
         (json-array-type 'list)
         (json-key-type 'symbol)
         (json-false nil))
-    (if (bone--http-url-p source)
-        (let ((cache-file (bone--source-to-cache-file source)))
+    (if (gnaw--http-url-p source)
+        (let ((cache-file (gnaw--source-to-cache-file source)))
           (if (file-exists-p cache-file)
               (json-read-file cache-file)
-            (let ((data (bone--fetch-json-from-url source)))
-              (bone--write-json-to-file data cache-file)
+            (let ((data (gnaw--fetch-json-from-url source)))
+              (gnaw--write-json-to-file data cache-file)
               data)))
       (json-read-file source))))
 
-(defun bone-normalize-mid (mid)
+(defun gnaw-normalize-mid (mid)
   "Ensure MID has angle brackets."
   (if (string-match-p "\\`<.*>\\'" mid)
       mid
     (concat "<" mid ">")))
 
-(defun bone--extract-open-reports (source)
+(defun gnaw--extract-open-reports (source)
   "Extract open reports from SOURCE as (MID . INFO) pairs."
-  (let* ((data (bone--read-json source))
-         (fv (alist-get 'bark-format data))
+  (let* ((data (gnaw--read-json source))
+         (fv (alist-get 'bone-format data))
          (sname (alist-get 'source data))
          (reports (alist-get 'reports data))
          (result '()))
-    (when (and fv (version< fv bone-supported-bark-format))
-      (message "bone: %s has format %s, min supported is %s"
-               source fv bone-supported-bark-format))
+    (when (and fv (version< fv gnaw-supported-bone-format))
+      (message "gnaw: %s has format %s, min supported is %s"
+               source fv gnaw-supported-bone-format))
     (dolist (r reports result)
       (let ((mid          (alist-get 'message-id r))
             (status       (alist-get 'status r))
@@ -357,7 +359,7 @@ URL or by `:name'."
                                  ("expired"    "E")
                                  ("superseded" "S")
                                  (_ (if closed "R" "-")))))
-                (norm-mid (bone-normalize-mid mid)))
+                (norm-mid (gnaw-normalize-mid mid)))
             (push (cons norm-mid (list :type (or type "bug")
                                        :flags flags
                                        :priority (or priority 0)
@@ -384,57 +386,57 @@ URL or by `:name'."
                                        :closed closed))
                   result)))))))
 
-(defun bone-reports ()
+(defun gnaw-reports ()
   "Collect open report pairs from all sources, tolerating failures."
   (mapcan
    (lambda (source)
      (condition-case err
-         (bone--extract-open-reports source)
+         (gnaw--extract-open-reports source)
        (error
-        (message "bone: failed loading source %s: %s"
+        (message "gnaw: failed loading source %s: %s"
                  source (error-message-string err))
         nil)))
-   (bone-sources)))
+   (gnaw-sources)))
 
-(defun bone-update ()
+(defun gnaw-update ()
   "Force-refresh the local cache from remote JSON sources.
-Run `bone-after-update-hook' when finished."
+Run `gnaw-after-update-hook' when finished."
   (interactive)
-  (let ((sources (bone-sources))
+  (let ((sources (gnaw-sources))
         (count 0))
     (dolist (source sources)
-      (when (bone--http-url-p source)
-        (message "bone: updating cache for %s..." source)
+      (when (gnaw--http-url-p source)
+        (message "gnaw: updating cache for %s..." source)
         (condition-case err
-            (let ((data (bone--fetch-json-from-url source))
-                  (cache-file (bone--source-to-cache-file source)))
-              (bone--write-json-to-file data cache-file)
+            (let ((data (gnaw--fetch-json-from-url source))
+                  (cache-file (gnaw--source-to-cache-file source)))
+              (gnaw--write-json-to-file data cache-file)
               (setq count (1+ count))
-              (message "bone: cache updated for %s" source))
+              (message "gnaw: cache updated for %s" source))
           (error
-           (message "bone: failed updating %s: %s"
+           (message "gnaw: failed updating %s: %s"
                     source (error-message-string err))))))
-    (run-hooks 'bone-after-update-hook)
-    (message "bone: cache update finished (%d updated)." count)))
+    (run-hooks 'gnaw-after-update-hook)
+    (message "gnaw: cache update finished (%d updated)." count)))
 
 ;;; State file (state.edn)
 
-(defun bone-read-state ()
-  "Read and return the bone state alist, or nil."
-  (let ((file (expand-file-name "state.edn" bone-config-dir)))
+(defun gnaw-read-state ()
+  "Read and return the gnaw state alist, or nil."
+  (let ((file (expand-file-name "state.edn" gnaw-config-dir)))
     (when (file-readable-p file)
       (condition-case err
           (with-temp-buffer
             (insert-file-contents file)
-            (bone-edn-read-buffer))
+            (gnaw-edn-read-buffer))
         (error
-         (message "bone: cannot parse %s: %s"
+         (message "gnaw: cannot parse %s: %s"
                   file (error-message-string err))
          nil)))))
 
-(defun bone-write-state (state)
+(defun gnaw-write-state (state)
   "Write STATE to the state file as UTF-8, one entry per line."
-  (let ((file (expand-file-name "state.edn" bone-config-dir))
+  (let ((file (expand-file-name "state.edn" gnaw-config-dir))
         (coding-system-for-write 'utf-8))
     (make-directory (file-name-directory file) t)
     (with-temp-file file
@@ -442,18 +444,18 @@ Run `bone-after-update-hook' when finished."
           (insert "{}\n")
         (insert "{"
                 (mapconcat (lambda (kv)
-                             (concat (bone--edn-write (car kv)) " "
-                                     (bone--edn-write (cdr kv))))
+                             (concat (gnaw--edn-write (car kv)) " "
+                                     (gnaw--edn-write (cdr kv))))
                            state "\n ")
                 "}\n")))))
 
 ;;; Local marks (sticky / skip)
 
-(defun bone--iso-now ()
+(defun gnaw--iso-now ()
   "Return the current time as an ISO-8601 UTC string."
   (format-time-string "%Y-%m-%dT%H:%M:%S.%6NZ" nil t))
 
-(defun bone--author-string (info)
+(defun gnaw--author-string (info)
   "Build author string from INFO."
   (let ((n (plist-get info :from-name))
         (e (plist-get info :from)))
@@ -462,7 +464,7 @@ Run `bone-after-update-hook' when finished."
      (e e)
      (n n))))
 
-(defun bone--enrich-entry (existing info)
+(defun gnaw--enrich-entry (existing info)
   "Refresh metadata from INFO in EXISTING state entry."
   (let ((entry (copy-alist existing)))
     (dolist (pair '((:subject . :subject)
@@ -471,73 +473,73 @@ Run `bone-after-update-hook' when finished."
       (let ((v (plist-get info (car pair))))
         (when v
           (setf (alist-get (cdr pair) entry) v))))
-    (let ((author (bone--author-string info)))
+    (let ((author (gnaw--author-string info)))
       (when author
         (setf (alist-get :author entry) author)))
     entry))
 
-(defun bone--state-put (state mid entry)
+(defun gnaw--state-put (state mid entry)
   "Set MID to ENTRY in STATE, keeping order."
   (if (assoc mid state)
       (mapcar (lambda (kv) (if (equal (car kv) mid) (cons mid entry) kv))
               state)
     (append state (list (cons mid entry)))))
 
-(defun bone--state-delete (state mid)
+(defun gnaw--state-delete (state mid)
   "Remove MID from STATE."
   (cl-remove mid state :key #'car :test #'equal))
 
-(defun bone--alist-dissoc (alist key)
+(defun gnaw--alist-dissoc (alist key)
   "Remove KEY from ALIST copy."
   (assq-delete-all key (copy-alist alist)))
 
-(defun bone--alist-assoc (alist key value)
+(defun gnaw--alist-assoc (alist key value)
   "Set KEY to VALUE in ALIST copy."
   (let ((e (copy-alist alist)))
     (setf (alist-get key e) value)
     e))
 
-(defun bone--apply-transition (state action mid info)
+(defun gnaw--apply-transition (state action mid info)
   "Apply ACTION (:sticky or :skip) for MID in STATE using metadata INFO.
 The two marks are mutually exclusive: :sticky clears a skip and :skip
 clears a flag; re-applying the active mark returns to neutral.  :skip is
-stored as `:skip-since' (the bone CLI hides such reports by default)."
-  (let* ((base (bone--enrich-entry (cdr (assoc mid state)) info))
+stored as `:skip-since' (the gnaw CLI hides such reports by default)."
+  (let* ((base (gnaw--enrich-entry (cdr (assoc mid state)) info))
          (sticky (eq (alist-get :flag base) :sticky))
          (skip (and (alist-get :skip-since base) t))
          (new
           (pcase action
             (:sticky (if sticky
-                         (bone--alist-dissoc base :flag)
-                       (bone--alist-assoc (bone--alist-dissoc base :skip-since)
+                         (gnaw--alist-dissoc base :flag)
+                       (gnaw--alist-assoc (gnaw--alist-dissoc base :skip-since)
                                           :flag :sticky)))
             (:skip (if skip
-                       (bone--alist-dissoc base :skip-since)
-                     (bone--alist-assoc (bone--alist-dissoc base :flag)
-                                        :skip-since (bone--iso-now)))))))
+                       (gnaw--alist-dissoc base :skip-since)
+                     (gnaw--alist-assoc (gnaw--alist-dissoc base :flag)
+                                        :skip-since (gnaw--iso-now)))))))
     (if (and (null (alist-get :flag    new))
              (null (alist-get :skip-since new)))
-        (bone--state-delete state mid)
-      (bone--state-put state mid new))))
+        (gnaw--state-delete state mid)
+      (gnaw--state-put state mid new))))
 
-(defun bone-action-on-p (state mid action)
+(defun gnaw-action-on-p (state mid action)
   "Return non-nil if ACTION (:sticky or :skip) is set for MID in STATE."
   (let ((entry (cdr (assoc mid state))))
     (pcase action
       (:sticky (eq (cdr (assq :flag entry)) :sticky))
       (:skip (and (cdr (assq :skip-since entry)) t)))))
 
-(defun bone-toggle-mark (mid info action)
+(defun gnaw-toggle-mark (mid info action)
   "Toggle ACTION (:sticky or :skip) for MID using metadata INFO.
 Persist the new state and return non-nil if ACTION is now on."
-  (let* ((state (bone-read-state))
-         (new   (bone--apply-transition state action mid info)))
-    (bone-write-state new)
-    (bone-action-on-p new mid action)))
+  (let* ((state (gnaw-read-state))
+         (new   (gnaw--apply-transition state action mid info)))
+    (gnaw-write-state new)
+    (gnaw-action-on-p new mid action)))
 
 ;;; Source metadata (meta.json) and patch files
 
-(defun bone--http-body (url &optional binary)
+(defun gnaw--http-body (url &optional binary)
   "Return the HTTP body of URL.  Read raw bytes when BINARY is non-nil."
   (let* ((coding-system-for-read (if binary 'binary coding-system-for-read))
          (buf (url-retrieve-synchronously url t)))
@@ -553,37 +555,37 @@ Persist the new state and return non-nil if ACTION is now on."
           (buffer-substring-no-properties (point) (point-max)))
       (kill-buffer buf))))
 
-(defun bone--fetch-url-to-file (url file)
+(defun gnaw--fetch-url-to-file (url file)
   "Fetch URL synchronously and write its raw body bytes to FILE."
-  (let ((body (bone--http-body url t)))
+  (let ((body (gnaw--http-body url t)))
     (make-directory (file-name-directory file) t)
     (let ((coding-system-for-write 'no-conversion))
       (with-temp-file file
         (set-buffer-multibyte nil)
         (insert body)))))
 
-(defun bone-source-meta (source)
+(defun gnaw-source-meta (source)
   "Return the parsed meta.json sibling of reports SOURCE, or nil."
   (condition-case nil
-      (bone--read-json (concat (file-name-directory source) "meta.json"))
+      (gnaw--read-json (concat (file-name-directory source) "meta.json"))
     (error nil)))
 
-(defun bone--patches-base (source)
+(defun gnaw--patches-base (source)
   "Return the patches base URL or directory for reports SOURCE."
   (concat (file-name-directory (directory-file-name (file-name-directory source)))
           "patches/"))
 
-(defun bone-patch-file (info patch)
+(defun gnaw-patch-file (info patch)
   "Return a local file for PATCH of report INFO, fetching it if absent.
 PATCH is an entry of the report `:patches' list."
   (let* ((file   (alist-get 'file patch))
          (source (plist-get info :source))
          (sname  (or (plist-get info :source-name) "unknown"))
          (cache  (expand-file-name (concat "cache/patches/" sname "/" file)
-                                   bone-config-dir)))
+                                   gnaw-config-dir)))
     (unless (file-exists-p cache)
-      (let ((loc (concat (bone--patches-base source) file)))
-        (cond ((bone--http-url-p source) (bone--fetch-url-to-file loc cache))
+      (let ((loc (concat (gnaw--patches-base source) file)))
+        (cond ((gnaw--http-url-p source) (gnaw--fetch-url-to-file loc cache))
               ((file-exists-p loc)
                (make-directory (file-name-directory cache) t)
                (copy-file loc cache t)))))
@@ -591,14 +593,14 @@ PATCH is an entry of the report `:patches' list."
 
 ;;; Reading the report message
 
-(defcustom bone-open-message-method '((t . auto))
-  "How `bone-read-message' opens a report's email, per source.
+(defcustom gnaw-open-message-method '((t . auto))
+  "How `gnaw-read-message' opens a report's email, per source.
 An alist mapping a source name to a method; the entry keyed by t is the
-default for sources not listed.  A source name is BARK's source, the
+default for sources not listed.  A source name is BONE's source, the
 `:name' of a `:sources' entry in config.edn.  Methods: `auto' uses
-`bone-open-message-function' if set, else the web archive; `mua' forces
+`gnaw-open-message-function' if set, else the web archive; `mua' forces
 that function; `gnus', `notmuch' and `mu4e' open in that MUA by
-message-id (Gnus also reads `bone-gnus-group'); `web' forces the web
+message-id (Gnus also reads `gnaw-gnus-group'); `web' forces the web
 archive."
   :type '(alist :key-type (choice (const :tag "Default (any source)" t)
                                   (string :tag "Source name"))
@@ -608,69 +610,69 @@ archive."
                                     (const :tag "Notmuch" notmuch)
                                     (const :tag "mu4e" mu4e)
                                     (const :tag "Web archive" web)))
-  :group 'bone)
+  :group 'gnaw)
 
-(defcustom bone-gnus-group nil
+(defcustom gnaw-gnus-group nil
   "Alist mapping a source name to the Gnus group holding its mails.
 Used by the `gnus' open method.  For a source not listed, the group is
 asked for with completion, falling back to the Gnus registry."
   :type '(alist :key-type (string :tag "Source name")
                 :value-type (string :tag "Gnus group"))
-  :group 'bone)
+  :group 'gnaw)
 
-(defvar bone-open-message-function nil
+(defvar gnaw-open-message-function nil
   "Function (MID INFO) a front-end sets to open a message in its MUA.")
 
-(defun bone--method-for (info)
+(defun gnaw--method-for (info)
   "Return the open method for report INFO's source."
-  (let ((m bone-open-message-method)
+  (let ((m gnaw-open-message-method)
         (name (plist-get info :source-name)))
     (cond ((and name (assoc name m)) (cdr (assoc name m)))
           ((assq t m) (cdr (assq t m)))
           (t 'auto))))
 
-(defun bone--gnus-group-for (info)
+(defun gnaw--gnus-group-for (info)
   "Return the configured Gnus group for report INFO's source, or nil.
-`bone-gnus-group' is an alist mapping a source name to its group."
+`gnaw-gnus-group' is an alist mapping a source name to its group."
   (let ((name (plist-get info :source-name)))
-    (and name (cdr (assoc name bone-gnus-group)))))
+    (and name (cdr (assoc name gnaw-gnus-group)))))
 
-(defvar bone--message-archive-url nil
+(defvar gnaw--message-archive-url nil
   "Web archive URL of the message shown in the current buffer.")
 
-(defun bone--strip-mid (mid)
+(defun gnaw--strip-mid (mid)
   "Return message-id MID without surrounding angle brackets."
   (replace-regexp-in-string "\\`<\\|>\\'" "" mid))
 
-(defun bone-message-archive-url (mid info)
+(defun gnaw-message-archive-url (mid info)
   "Return the web archive URL for MID using INFO, or nil."
   (or (plist-get info :archived-at)
       (let* ((source (plist-get info :source))
-             (meta (and source (bone-source-meta source)))
+             (meta (and source (gnaw-source-meta source)))
              (fmt (and meta (alist-get 'archive-format-string meta))))
-        (and fmt (format fmt (bone--strip-mid mid))))))
+        (and fmt (format fmt (gnaw--strip-mid mid))))))
 
-(defvar bone-message-mode-map
+(defvar gnaw-message-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map "w" #'bone-message-browse)
+    (define-key map "w" #'gnaw-message-browse)
     (define-key map "q" #'quit-window)
     map)
-  "Keymap for `bone-message-mode'.")
+  "Keymap for `gnaw-message-mode'.")
 
-(define-derived-mode bone-message-mode special-mode "Bone-Message"
-  "Major mode for a fetched BARK report message.")
+(define-derived-mode gnaw-message-mode special-mode "Gnaw-Message"
+  "Major mode for a fetched BONE report message.")
 
-(defun bone-message-browse ()
+(defun gnaw-message-browse ()
   "Open the current message's web archive page in a browser."
   (interactive)
-  (if bone--message-archive-url
-      (browse-url bone--message-archive-url)
+  (if gnaw--message-archive-url
+      (browse-url gnaw--message-archive-url)
     (user-error "No archive URL for this message")))
 
 (declare-function quoted-printable-decode-string "qp")
 (declare-function rfc2047-decode-string "rfc2047")
 
-(defun bone--decode-message (raw)
+(defun gnaw--decode-message (raw)
   "Decode raw RFC822 message string RAW for display (best effort).
 Decode encoded-word headers, and the single part's transfer-encoding
 and charset; multipart bodies are decoded as UTF-8."
@@ -699,18 +701,18 @@ and charset; multipart bodies are decoded as UTF-8."
     (concat (rfc2047-decode-string headers) "\n\n"
             (decode-coding-string bytes coding))))
 
-(defun bone--show-message-web (mid info)
+(defun gnaw--show-message-web (mid info)
   "Fetch and display the message for MID using INFO, decoded for reading."
-  (let ((url (bone-message-archive-url mid info)))
+  (let ((url (gnaw-message-archive-url mid info)))
     (unless url (error "No web archive URL for %s" mid))
-    (let ((raw (bone--http-body (concat url "/raw") t)))
-      (with-current-buffer (get-buffer-create "*bone-message*")
+    (let ((raw (gnaw--http-body (concat url "/raw") t)))
+      (with-current-buffer (get-buffer-create "*gnaw-message*")
         (let ((inhibit-read-only t))
           (erase-buffer)
-          (insert (bone--decode-message raw))
+          (insert (gnaw--decode-message raw))
           (goto-char (point-min)))
-        (bone-message-mode)
-        (setq bone--message-archive-url url)
+        (gnaw-message-mode)
+        (setq gnaw--message-archive-url url)
         (pop-to-buffer (current-buffer))))))
 
 (declare-function gnus "gnus")
@@ -727,14 +729,14 @@ and charset; multipart bodies are decoded as UTF-8."
 (declare-function mu4e-headers-search "mu4e-headers")
 (defvar gnus-registry-enabled)
 
-(defun bone--read-gnus-group (prompt)
+(defun gnaw--read-gnus-group (prompt)
   "Read a Gnus group with PROMPT, completing over all known groups.
 Start Gnus first when needed so the group list is populated."
   (require 'gnus)
   (unless (gnus-alive-p) (gnus))
   (gnus-group-completing-read prompt))
 
-(defun bone--gnus-return-to (buffer)
+(defun gnaw--gnus-return-to (buffer)
   "Switch back to BUFFER once the next Gnus summary is exited."
   (when (buffer-live-p buffer)
     (letrec ((fn (lambda ()
@@ -745,7 +747,7 @@ Start Gnus first when needed so the group list is populated."
                                     (switch-to-buffer buffer)))))))
       (add-hook 'gnus-summary-exit-hook fn))))
 
-(defun bone--show-message-gnus (mid info)
+(defun gnaw--show-message-gnus (mid info)
   "Open MID in Gnus using INFO's source group, the registry, or a prompt.
 Enter the group reading a single article (avoiding a full fetch of a
 large group), then select MID by its message-id; return to the calling
@@ -753,29 +755,29 @@ buffer on summary exit."
   (require 'gnus)
   (let ((origin (current-buffer)))
     (unless (gnus-alive-p) (gnus))
-    (let* ((id (bone-normalize-mid mid))
-           (cfg (bone--gnus-group-for info))
+    (let* ((id (gnaw-normalize-mid mid))
+           (cfg (gnaw--gnus-group-for info))
            (group (or (and cfg (not (string-empty-p cfg)) cfg)
                       (and (bound-and-true-p gnus-registry-enabled)
                            (fboundp 'gnus-registry-get-id-key)
                            (car (gnus-registry-get-id-key id 'group)))
-                      (bone--read-gnus-group "Gnus group for this message: "))))
+                      (gnaw--read-gnus-group "Gnus group for this message: "))))
       (gnus-activate-group group)
       (gnus-group-read-group 1 t group)
       (gnus-summary-goto-article id nil t)
-      (bone--gnus-return-to origin))))
+      (gnaw--gnus-return-to origin))))
 
-(defun bone--show-message-notmuch (mid info)
+(defun gnaw--show-message-notmuch (mid info)
   "Open MID in Notmuch by message-id (INFO is unused)."
   (ignore info)
   (require 'notmuch)
-  (notmuch-show (concat "id:" (bone--strip-mid mid))))
+  (notmuch-show (concat "id:" (gnaw--strip-mid mid))))
 
-(defun bone--show-message-mu4e (mid info)
+(defun gnaw--show-message-mu4e (mid info)
   "Open MID in mu4e by message-id (INFO is unused)."
   (ignore info)
   (require 'mu4e)
-  (let ((id (bone--strip-mid mid)))
+  (let ((id (gnaw--strip-mid mid)))
     (cond
      ((fboundp 'mu4e-view-message-with-message-id)
       (mu4e-view-message-with-message-id id))
@@ -785,115 +787,115 @@ buffer on summary exit."
 
 (declare-function customize-save-variable "cus-edit")
 
-(defun bone--alist-put (alist key val)
+(defun gnaw--alist-put (alist key val)
   "Return ALIST with KEY set to VAL, KEY compared with `equal'."
   (cons (cons key val)
         (assoc-delete-all key (copy-alist (if (listp alist) alist nil)))))
 
-(defun bone--known-source-names ()
+(defun gnaw--known-source-names ()
   "Return known source names from each source's meta.json."
   (delete-dups
-   (delq nil (mapcar (lambda (s) (alist-get 'source (bone-source-meta s)))
-                     (bone-sources)))))
+   (delq nil (mapcar (lambda (s) (alist-get 'source (gnaw-source-meta s)))
+                     (gnaw-sources)))))
 
 ;;;###autoload
-(defun bone-set-source-open-method (source method &optional group)
+(defun gnaw-set-source-open-method (source method &optional group)
   "Set the open METHOD for SOURCE (a source name, or t for the default).
 For Gnus, also store GROUP.  Interactively, complete SOURCE, METHOD and
 \(for Gnus) GROUP, then save with Customize."
   (interactive
    (let* ((s (completing-read "Source name (empty = default): "
-                              (bone--known-source-names) nil nil))
+                              (gnaw--known-source-names) nil nil))
           (src (if (string-empty-p s) t s))
           (m (intern (completing-read
                       "Open with: "
                       '("auto" "mua" "gnus" "notmuch" "mu4e" "web") nil t)))
           (g (when (eq m 'gnus)
-               (bone--read-gnus-group "Gnus group (empty = ask each time): "))))
+               (gnaw--read-gnus-group "Gnus group (empty = ask each time): "))))
      (list src m g)))
-  (customize-save-variable 'bone-open-message-method
-                           (bone--alist-put bone-open-message-method source method))
+  (customize-save-variable 'gnaw-open-message-method
+                           (gnaw--alist-put gnaw-open-message-method source method))
   (when (and (eq method 'gnus) group (not (string-empty-p group)))
-    (customize-save-variable 'bone-gnus-group
-                             (bone--alist-put bone-gnus-group source group)))
+    (customize-save-variable 'gnaw-gnus-group
+                             (gnaw--alist-put gnaw-gnus-group source group)))
   method)
 
-(defun bone-read-message (mid info)
-  "Open the email for MID using INFO per `bone-open-message-method'."
-  (pcase (bone--method-for info)
-    ('mua (if bone-open-message-function
-              (funcall bone-open-message-function mid info)
-            (user-error "No `bone-open-message-function' set")))
-    ('gnus (bone--show-message-gnus mid info))
-    ('notmuch (bone--show-message-notmuch mid info))
-    ('mu4e (bone--show-message-mu4e mid info))
-    ('web (bone--show-message-web mid info))
-    (_ (if bone-open-message-function
-           (funcall bone-open-message-function mid info)
-         (bone--show-message-web mid info)))))
+(defun gnaw-read-message (mid info)
+  "Open the email for MID using INFO per `gnaw-open-message-method'."
+  (pcase (gnaw--method-for info)
+    ('mua (if gnaw-open-message-function
+              (funcall gnaw-open-message-function mid info)
+            (user-error "No `gnaw-open-message-function' set")))
+    ('gnus (gnaw--show-message-gnus mid info))
+    ('notmuch (gnaw--show-message-notmuch mid info))
+    ('mu4e (gnaw--show-message-mu4e mid info))
+    ('web (gnaw--show-message-web mid info))
+    (_ (if gnaw-open-message-function
+           (funcall gnaw-open-message-function mid info)
+         (gnaw--show-message-web mid info)))))
 
 ;;; Viewing and applying patches
 
-(defcustom bone-apply-repo nil
-  "Fallback git repository for `bone-apply-patches'.
+(defcustom gnaw-apply-repo nil
+  "Fallback git repository for `gnaw-apply-patches'.
 A source's `:repo' in config.edn takes precedence; this is used only
 when the source has none, before asking interactively."
   :type '(choice (const :tag "Ask each time" nil) directory)
-  :group 'bone)
+  :group 'gnaw)
 
-(defcustom bone-git-apply-options '("--3way")
-  "Extra arguments passed to `git apply' by `bone-apply-patches'.
+(defcustom gnaw-git-apply-options '("--3way")
+  "Extra arguments passed to `git apply' by `gnaw-apply-patches'.
 The default `--3way' falls back to a 3-way merge when a patch does not
 apply cleanly (which may leave conflict markers to resolve) instead of
 failing outright.  Another useful value is \"--whitespace=fix\"."
   :type '(repeat string)
-  :group 'bone)
+  :group 'gnaw)
 
-(defcustom bone-git-am-options '("--3way")
-  "Extra arguments passed to `git am' by `bone-am-patches'.
+(defcustom gnaw-git-am-options '("--3way")
+  "Extra arguments passed to `git am' by `gnaw-am-patches'.
 The default `--3way' falls back to a 3-way merge when a patch does not
 apply cleanly (leaving conflict markers to resolve) instead of failing
 outright.  Other useful values include \"--signoff\" or \"--whitespace=fix\"."
   :type '(repeat string)
-  :group 'bone)
+  :group 'gnaw)
 
-(defcustom bone-checkout-base 'ask
+(defcustom gnaw-checkout-base 'ask
   "Whether to check out a patch's recorded base commit before applying.
 Patches made with `git format-patch --base' carry a `base-commit:'
-trailer.  When that commit exists in the target repo, bone can check it
+trailer.  When that commit exists in the target repo, gnaw can check it
 out first so the patch applies against its intended state.  Values: `ask'
 prompts, nil never checks out, t checks out without prompting."
   :type '(choice (const :tag "Ask" ask)
                  (const :tag "Never" nil)
                  (const :tag "Always" t))
-  :group 'bone)
+  :group 'gnaw)
 
-(defun bone--series-complete-p (info)
+(defun gnaw--series-complete-p (info)
   "Return non-nil unless INFO has an explicitly incomplete `:series'."
   (let ((series (plist-get info :series)))
     (or (null series) (alist-get 'complete series))))
 
-(defun bone--series-id (info)
+(defun gnaw--series-id (info)
   "Return the patch-series id of report INFO, or nil."
   (alist-get 'id (plist-get info :series)))
 
-(defun bone--patch-seq-n (info)
+(defun gnaw--patch-seq-n (info)
   "Leading integer of INFO's `:patch-seq' (\"2/5\" -> 2), or 0."
   (let ((s (plist-get info :patch-seq)))
     (if (and s (string-match "\\`\\([0-9]+\\)" s))
         (string-to-number (match-string 1 s))
       0)))
 
-(defun bone--cover-p (info)
+(defun gnaw--cover-p (info)
   "Non-nil if report INFO is a series cover letter (patch-seq \"0/...\")."
   (string-prefix-p "0/" (or (plist-get info :patch-seq) "")))
 
-(defun bone--series-summary (members)
+(defun gnaw--series-summary (members)
   "Summarize series MEMBERS (INFO plists) like \"2 acked, 1 open\".
 Cover letters are excluded from the tally."
   (let ((acked 0) (closed 0) (open 0))
     (dolist (m members)
-      (unless (bone--cover-p m)
+      (unless (gnaw--cover-p m)
         (let ((f (or (plist-get m :flags) "---")))
           (cond ((and (>= (length f) 3) (not (eq (aref f 2) ?-))) (cl-incf closed))
                 ((and (>= (length f) 1) (not (eq (aref f 0) ?-))) (cl-incf acked))
@@ -903,15 +905,15 @@ Cover letters are excluded from the tally."
                                  (and (> open 0) (format "%d open" open))))
                  ", ")))
 
-(defun bone-view-patches (info)
+(defun gnaw-view-patches (info)
   "Show the patches of report INFO in a `diff-mode' buffer."
   (let ((patches (plist-get info :patches)))
     (unless patches (user-error "This report has no patches"))
-    (with-current-buffer (get-buffer-create "*bone-patches*")
+    (with-current-buffer (get-buffer-create "*gnaw-patches*")
       (let ((inhibit-read-only t))
         (erase-buffer)
         (dolist (p patches)
-          (let ((f (bone-patch-file info p)))
+          (let ((f (gnaw-patch-file info p)))
             (when f
               (insert-file-contents f)
               (goto-char (point-max)))))
@@ -919,7 +921,7 @@ Cover letters are excluded from the tally."
       (diff-mode)
       (pop-to-buffer (current-buffer)))))
 
-(defun bone--patch-base-commit (files)
+(defun gnaw--patch-base-commit (files)
   "Return the `base-commit' trailer found in patch FILES, or nil.
 Scans FILES in order and returns the first commit hash recorded by
 `git format-patch --base'."
@@ -933,90 +935,90 @@ Scans FILES in order and returns the first commit hash recorded by
           (when (re-search-forward "^base-commit: \\([0-9a-f]\\{7,40\\}\\)$" nil t)
             (throw 'found (match-string 1))))))))
 
-(defun bone--maybe-checkout-base (files)
+(defun gnaw--maybe-checkout-base (files)
   "Offer to check out the base commit recorded in patch FILES.
 Runs in `default-directory' (the target repo).  Does nothing unless
-`bone-checkout-base' is set and the base commit exists locally.  Signals
+`gnaw-checkout-base' is set and the base commit exists locally.  Signals
 a `user-error' if the checkout fails.  Note that this leaves the repo on
 a detached HEAD."
-  (when bone-checkout-base
-    (let ((base (bone--patch-base-commit files)))
+  (when gnaw-checkout-base
+    (let ((base (gnaw--patch-base-commit files)))
       (when (and base
                  (zerop (call-process "git" nil nil nil
                                       "cat-file" "-e" (concat base "^{commit}")))
-                 (or (eq bone-checkout-base t)
+                 (or (eq gnaw-checkout-base t)
                      (y-or-n-p
                       (format "Check out base commit %s (detached HEAD) first? "
                               (substring base 0 (min 12 (length base)))))))
-        (with-current-buffer (get-buffer-create "*bone-git*")
+        (with-current-buffer (get-buffer-create "*gnaw-git*")
           (let ((inhibit-read-only t)) (erase-buffer))
           (unless (zerop (call-process "git" nil t nil "checkout" base))
             (display-buffer (current-buffer))
             (user-error "Git checkout %s failed" base)))))))
 
-(defun bone--run-git-patches (info subcommand options hint)
+(defun gnaw--run-git-patches (info subcommand options hint)
   "Apply INFO's patches in its repo via git SUBCOMMAND (\"apply\" or \"am\").
 OPTIONS is a list of extra arguments inserted before the patch files.
 HINT is shown on failure."
   (let ((patches (plist-get info :patches)))
     (unless patches (user-error "This report has no patches"))
-    (when (and (not (bone--series-complete-p info))
+    (when (and (not (gnaw--series-complete-p info))
                (not (yes-or-no-p "Patch series looks incomplete; apply anyway? ")))
       (user-error "Aborted"))
-    (let* ((repo (or (bone--source-repo info)
-                     bone-apply-repo
+    (let* ((repo (or (gnaw--source-repo info)
+                     gnaw-apply-repo
                      (read-directory-name "Apply in git repo: ")))
-           (files (mapcar (lambda (p) (bone-patch-file info p)) patches))
+           (files (mapcar (lambda (p) (gnaw-patch-file info p)) patches))
            (default-directory (file-name-as-directory repo)))
       (when (memq nil files)
         (user-error "Cannot fetch %d of %d patch file(s); not applying"
                     (seq-count #'null files) (length files)))
-      (bone--maybe-checkout-base files)
+      (gnaw--maybe-checkout-base files)
       (let ((args (append (list subcommand) options (list "--") files)))
-        (with-current-buffer (get-buffer-create "*bone-git*")
+        (with-current-buffer (get-buffer-create "*gnaw-git*")
           (let ((inhibit-read-only t)) (erase-buffer))
           (let ((status (apply #'call-process "git" nil t nil args)))
             (if (zerop status)
-                (message "bone: git %s applied %d patch(es) in %s"
+                (message "gnaw: git %s applied %d patch(es) in %s"
                          subcommand (length files) repo)
               (display-buffer (current-buffer))
-              (message "bone: git %s failed in %s (%s)" subcommand repo hint))))))))
+              (message "gnaw: git %s failed in %s (%s)" subcommand repo hint))))))))
 
-(defun bone-apply-patches (info)
+(defun gnaw-apply-patches (info)
   "Apply INFO's patches to the working tree with `git apply'."
-  (bone--run-git-patches info "apply" bone-git-apply-options
+  (gnaw--run-git-patches info "apply" gnaw-git-apply-options
                          "rejects left as .rej"))
 
-(defun bone-am-patches (info)
+(defun gnaw-am-patches (info)
   "Apply INFO's patches as commits with `git am'."
-  (bone--run-git-patches info "am" bone-git-am-options
+  (gnaw--run-git-patches info "am" gnaw-git-am-options
                          "run `git am --abort' to undo"))
 
-;;; Query filter (subset of the BARK web search syntax)
+;;; Query filter (subset of the BONE web search syntax)
 
-(defvar bone-list--query nil
-  "Active `bone-list' filter query string, or nil.  Buffer-local in use.")
+(defvar gnaw-list--query nil
+  "Active `gnaw-list' filter query string, or nil.  Buffer-local in use.")
 
-(defvar bone-list--expanded nil
-  "Series ids unfolded in the current `bone-list' buffer.  Buffer-local.")
+(defvar gnaw-list--expanded nil
+  "Series ids unfolded in the current `gnaw-list' buffer.  Buffer-local.")
 
-(defvar bone-list--show-skipped nil
-  "When non-nil, show reports marked skipped.  Buffer-local in `bone-list'.")
+(defvar gnaw-list--show-skipped nil
+  "When non-nil, show reports marked skipped.  Buffer-local in `gnaw-list'.")
 
-(defvar bone-list--reports nil
-  "Cached (MID . INFO) report pairs for the current `bone-list' buffer.
-Set by `bone-list-reload'; re-rendering reuses it without re-reading
+(defvar gnaw-list--reports nil
+  "Cached (MID . INFO) report pairs for the current `gnaw-list' buffer.
+Set by `gnaw-list-reload'; re-rendering reuses it without re-reading
 the cache.  Buffer-local in use.")
 
-(defvar bone-list--mark-index 0
+(defvar gnaw-list--mark-index 0
   "Index of the Mark column among the active columns.
-Set by `bone--list-format'; used by `bone--mark-sort'.  Buffer-local in use.")
+Set by `gnaw--list-format'; used by `gnaw--mark-sort'.  Buffer-local in use.")
 
-(defface bone-sticky '((t :weight bold))
+(defface gnaw-sticky '((t :weight bold))
   "Face for the sticky mark in the report list."
-  :group 'bone)
+  :group 'gnaw)
 
-(defun bone--query-text-match (needle hay)
+(defun gnaw--query-text-match (needle hay)
   "Non-nil if HAY contains NEEDLE, case-insensitively.
 NEEDLE `*' matches any non-empty HAY; empty NEEDLE matches anything."
   (let ((hay (or hay "")))
@@ -1025,7 +1027,7 @@ NEEDLE `*' matches any non-empty HAY; empty NEEDLE matches anything."
           (t (let ((case-fold-search t))
                (and (string-match-p (regexp-quote needle) hay) t))))))
 
-(defun bone--query-ymd->days (s)
+(defun gnaw--query-ymd->days (s)
   "Absolute day number for the YYYY-MM-DD prefix of S, or nil."
   (when (and s (string-match
                 "\\`\\([0-9]\\{4\\}\\)-\\([0-9]\\{2\\}\\)-\\([0-9]\\{2\\}\\)" s))
@@ -1034,43 +1036,43 @@ NEEDLE `*' matches any non-empty HAY; empty NEEDLE matches anything."
                                (string-to-number (match-string 2 s))
                                (string-to-number (match-string 1 s))))))
 
-(defun bone--query-duration->days (s)
+(defun gnaw--query-duration->days (s)
   "Number of days for a duration S like 3d, 2w or 2m, or nil."
   (when (and s (string-match "\\`\\([0-9]+\\)\\([dwm]\\)\\'" s))
     (* (string-to-number (match-string 1 s))
        (pcase (match-string 2 s) ("d" 1) ("w" 7) ("m" 30)))))
 
-(defun bone--query-bound (s forward today)
+(defun gnaw--query-bound (s forward today)
   "Day number for a range bound S (YYYY-MM-DD or duration), or nil.
 A duration is TODAY plus or minus its days, per FORWARD."
-  (or (bone--query-ymd->days s)
-      (let ((d (bone--query-duration->days s)))
+  (or (gnaw--query-ymd->days s)
+      (let ((d (gnaw--query-duration->days s)))
         (and d (if forward (+ today d) (- today d))))))
 
-(defun bone--query-date-match (spec field forward)
+(defun gnaw--query-date-match (spec field forward)
   "Non-nil if FIELD's date satisfies SPEC; FORWARD looks ahead from today.
 SPEC is a duration (3d/2w/2m), a YYYY-MM-DD date, or an A..B range whose
 ends are dates or durations and may be empty (the order is normalized)."
-  (let ((fd (bone--query-ymd->days field))
+  (let ((fd (gnaw--query-ymd->days field))
         (today (time-to-days (current-time))))
     (when fd
       (if (string-match "\\`\\(.*\\)\\.\\.\\(.*\\)\\'" spec)
-          ;; Read both ends before calling `bone--query-bound', which
+          ;; Read both ends before calling `gnaw--query-bound', which
           ;; clobbers the match data via its own `string-match'.
           (let* ((sa (match-string 1 spec))
                  (sb (match-string 2 spec))
-                 (va (bone--query-bound sa forward today))
-                 (vb (bone--query-bound sb forward today))
+                 (va (gnaw--query-bound sa forward today))
+                 (vb (gnaw--query-bound sb forward today))
                  (lo (if (and va vb) (min va vb) va))
                  (hi (if (and va vb) (max va vb) vb)))
             (and (or (null lo) (>= fd lo)) (or (null hi) (<= fd hi))))
-        (let ((d (bone--query-duration->days spec))
-              (single (bone--query-ymd->days spec)))
+        (let ((d (gnaw--query-duration->days spec))
+              (single (gnaw--query-ymd->days spec)))
           (cond (d (if forward (and (>= fd today) (<= fd (+ today d)))
                      (and (<= fd today) (>= fd (- today d)))))
                 (single (= fd single))))))))
 
-(defun bone--query-actor-match (needle &rest actors)
+(defun gnaw--query-actor-match (needle &rest actors)
   "Non-nil if NEEDLE matches one of ACTORS (identity strings).
 `*', `true' or empty NEEDLE matches when any actor is set; otherwise a
 case-insensitive substring of an actor matches."
@@ -1083,79 +1085,79 @@ case-insensitive substring of an actor matches."
                        actors)
              t)))))
 
-(defun bone--query-val-any (val pred)
+(defun gnaw--query-val-any (val pred)
   "Non-nil if PRED holds for any comma-separated value in VAL.
-Commas inside a field value are OR, as in the BARK web UI
+Commas inside a field value are OR, as in the BONE web UI
 \(e.g. `acked:alice,bob').  An empty VAL is passed through unsplit so it
 keeps its \"match any\" meaning."
   (seq-some pred (if (or (null val) (string-empty-p val))
                      (list val)
                    (split-string val "," t))))
 
-(defun bone--query-token-match (token mid info)
+(defun gnaw--query-token-match (token mid info)
   "Non-nil if search TOKEN matches report MID with INFO."
   (let* ((i (string-search ":" token))
          (key (and i (substring token 0 i)))
          (val (and i (substring token (1+ i))))
          (prio (or (plist-get info :priority) 0)))
     (if (null key)
-        (bone--query-text-match token (plist-get info :subject))
+        (gnaw--query-text-match token (plist-get info :subject))
       (pcase key
         ((or "from" "f")
-         (bone--query-val-any
+         (gnaw--query-val-any
           val (lambda (v)
-                (or (bone--query-text-match v (plist-get info :from))
-                    (bone--query-text-match v (plist-get info :from-name))))))
+                (or (gnaw--query-text-match v (plist-get info :from))
+                    (gnaw--query-text-match v (plist-get info :from-name))))))
         ((or "subject" "s")
-         (bone--query-val-any
-          val (lambda (v) (bone--query-text-match v (plist-get info :subject)))))
+         (gnaw--query-val-any
+          val (lambda (v) (gnaw--query-text-match v (plist-get info :subject)))))
         ((or "topic" "t")
-         (bone--query-val-any
-          val (lambda (v) (bone--query-text-match v (plist-get info :topic)))))
+         (gnaw--query-val-any
+          val (lambda (v) (gnaw--query-text-match v (plist-get info :topic)))))
         ("type"
-         (bone--query-val-any
+         (gnaw--query-val-any
           val (lambda (v)
                 (and v (equal (downcase v)
                               (downcase (or (plist-get info :type) "")))))))
         ((or "priority" "p") (equal val (number-to-string prio)))
         ((or "mid" "m")
-         (bone--query-val-any val (lambda (v) (bone--query-text-match v mid))))
+         (gnaw--query-val-any val (lambda (v) (gnaw--query-text-match v mid))))
         ((or "acked" "a")
-         (bone--query-val-any
-          val (lambda (v) (bone--query-actor-match v (plist-get info :acked)))))
+         (gnaw--query-val-any
+          val (lambda (v) (gnaw--query-actor-match v (plist-get info :acked)))))
         ((or "owned" "o")
-         (bone--query-val-any
-          val (lambda (v) (bone--query-actor-match
+         (gnaw--query-val-any
+          val (lambda (v) (gnaw--query-actor-match
                            v (plist-get info :owned)
                            (plist-get info :owned-name)))))
         ((or "closed" "c")
-         (bone--query-val-any
-          val (lambda (v) (bone--query-actor-match v (plist-get info :closed)))))
+         (gnaw--query-val-any
+          val (lambda (v) (gnaw--query-actor-match v (plist-get info :closed)))))
         ((or "urgent" "u") (= (logand prio 2) 2))
         ((or "important" "i") (= (logand prio 1) 1))
-        ((or "date" "d") (bone--query-date-match val (plist-get info :date) nil))
-        ((or "deadline" "D") (bone--query-date-match val (plist-get info :deadline) t))
-        ((or "expired" "e") (bone--query-date-match val (plist-get info :expiry) t))
-        (_ (bone--query-text-match token (plist-get info :subject)))))))
+        ((or "date" "d") (gnaw--query-date-match val (plist-get info :date) nil))
+        ((or "deadline" "D") (gnaw--query-date-match val (plist-get info :deadline) t))
+        ((or "expired" "e") (gnaw--query-date-match val (plist-get info :expiry) t))
+        (_ (gnaw--query-text-match token (plist-get info :subject)))))))
 
-(defun bone--query-parse (query)
+(defun gnaw--query-parse (query)
   "Parse QUERY into OR-groups of AND-token lists (`|' = OR, space = AND)."
   (mapcar (lambda (grp) (split-string grp "[ \t]+" t))
           (split-string query "|" t)))
 
-(defun bone--query-match-p (groups mid info)
-  "Non-nil if report MID/INFO matches parsed GROUPS (from `bone--query-parse')."
+(defun gnaw--query-match-p (groups mid info)
+  "Non-nil if report MID/INFO matches parsed GROUPS (from `gnaw--query-parse')."
   (seq-some (lambda (toks)
-              (seq-every-p (lambda (tok) (bone--query-token-match tok mid info))
+              (seq-every-p (lambda (tok) (gnaw--query-token-match tok mid info))
                            toks))
             groups))
 
-(defconst bone--query-keys
+(defconst gnaw--query-keys
   '("from:" "subject:" "topic:" "type:" "priority:" "mid:" "acked:"
     "owned:" "closed:" "urgent:" "important:" "date:" "deadline:" "expired:")
-  "Long-form query keys completed in `bone-list-filter'.")
+  "Long-form query keys completed in `gnaw-list-filter'.")
 
-(defun bone--filter-completion (string pred action)
+(defun gnaw--filter-completion (string pred action)
   "Completion table completing the query key of STRING's last token.
 PRED and ACTION are the usual `completing-read' arguments; the rest of
 the query (earlier tokens) is left untouched."
@@ -1164,7 +1166,7 @@ the query (earlier tokens) is left untouched."
         (let ((suffix (cdr action)))
           `(boundaries ,beg . ,(or (string-match "[ \t|]" suffix) (length suffix))))
       (let ((res (complete-with-action
-                  action bone--query-keys (substring string beg) pred)))
+                  action gnaw--query-keys (substring string beg) pred)))
         ;; For `try-completion' (ACTION nil) the table must return the
         ;; whole completed string, prefix included; `all-completions'
         ;; and `test-completion' operate on the last token alone.
@@ -1172,64 +1174,64 @@ the query (earlier tokens) is left untouched."
             (concat (substring string 0 beg) res)
           res)))))
 
-(defconst bone-report-types
+(defconst gnaw-report-types
   '("bug" "patch" "request" "announcement" "change" "release")
-  "BARK report types, offered when filtering by type.")
+  "BONE report types, offered when filtering by type.")
 
-(defun bone-list-filter-by (key)
+(defun gnaw-list-filter-by (key)
   "Limit the list to reports whose KEY field matches a read value.
 Read the value (completing types, `*' for flag fields), then set the
 query to `KEY:value'; an empty value clears the filter."
   (let* ((flag (member key '("acked" "owned" "closed" "urgent" "important")))
          (val (cond (flag "*")
-                    ((equal key "type") (completing-read "Type: " bone-report-types))
+                    ((equal key "type") (completing-read "Type: " gnaw-report-types))
                     (t (read-string (format "%s: " key))))))
-    (setq-local bone-list--query
+    (setq-local gnaw-list--query
                 (and val (not (string-empty-p val)) (format "%s:%s" key val)))
-    (bone-list-refresh)
-    (if bone-list--query
-        (message "bone: filter %s" bone-list--query)
-      (message "bone: filter cleared"))))
+    (gnaw-list-refresh)
+    (if gnaw-list--query
+        (message "gnaw: filter %s" gnaw-list--query)
+      (message "gnaw: filter cleared"))))
 
-(defmacro bone--define-filter-commands (&rest fields)
-  "Define a `bone-list-filter-FIELD' command for each of FIELDS."
+(defmacro gnaw--define-filter-commands (&rest fields)
+  "Define a `gnaw-list-filter-FIELD' command for each of FIELDS."
   `(progn
      ,@(mapcar (lambda (f)
-                 `(defun ,(intern (concat "bone-list-filter-" f)) ()
+                 `(defun ,(intern (concat "gnaw-list-filter-" f)) ()
                     ,(concat "Filter the report list by the " f " field.")
                     (interactive)
-                    (bone-list-filter-by ,f)))
+                    (gnaw-list-filter-by ,f)))
                fields)))
 
-(bone--define-filter-commands
+(gnaw--define-filter-commands
  "from" "subject" "topic" "priority" "mid"
  "date" "deadline" "expired"
  "acked" "owned" "closed" "urgent" "important")
 
-(transient-define-prefix bone-list-filter-transient ()
+(transient-define-prefix gnaw-list-filter-transient ()
   "Filter the report list by one field."
   [["Field"
-    ("f" "From"       bone-list-filter-from)
-    ("s" "Subject"    bone-list-filter-subject)
-    ("t" "Type"       bone-list-limit-type)
-    ("T" "Topic"      bone-list-filter-topic)
-    ("p" "Priority"   bone-list-filter-priority)
-    ("m" "Message-id" bone-list-filter-mid)]
+    ("f" "From"       gnaw-list-filter-from)
+    ("s" "Subject"    gnaw-list-filter-subject)
+    ("t" "Type"       gnaw-list-limit-type)
+    ("T" "Topic"      gnaw-list-filter-topic)
+    ("p" "Priority"   gnaw-list-filter-priority)
+    ("m" "Message-id" gnaw-list-filter-mid)]
    ["Date"
-    ("d" "Created"    bone-list-filter-date)
-    ("D" "Deadline"   bone-list-filter-deadline)
-    ("e" "Expiring"   bone-list-filter-expired)]
+    ("d" "Created"    gnaw-list-filter-date)
+    ("D" "Deadline"   gnaw-list-filter-deadline)
+    ("e" "Expiring"   gnaw-list-filter-expired)]
    ["Flag is set"
-    ("a" "Acked"      bone-list-filter-acked)
-    ("o" "Owned"      bone-list-filter-owned)
-    ("c" "Closed"     bone-list-filter-closed)
-    ("u" "Urgent"     bone-list-filter-urgent)
-    ("i" "Important"  bone-list-filter-important)]])
+    ("a" "Acked"      gnaw-list-filter-acked)
+    ("o" "Owned"      gnaw-list-filter-owned)
+    ("c" "Closed"     gnaw-list-filter-closed)
+    ("u" "Urgent"     gnaw-list-filter-urgent)
+    ("i" "Important"  gnaw-list-filter-important)]])
 
-;;; Report browser (bone-list)
+;;; Report browser (gnaw-list)
 
-(defcustom bone-list-columns
-  '(("Mark"      5 bone--mark-sort :mark)
+(defcustom gnaw-list-columns
+  '(("Mark"      5 gnaw--mark-sort :mark)
     ("Type"      8 t :type)
     ("Flags"     5 t :flags)
     ("Pri"       4 t :priority)
@@ -1240,10 +1242,10 @@ query to `KEY:value'; an empty value clears the filter."
     ("Created"  11 t :date)
     ("Activity" 11 t :last-activity)
     ("Topic"    16 t :topic))
-  "Columns for `bone-list-mode' as (HEADER WIDTH SORT KEY) tuples.
+  "Columns for `gnaw-list-mode' as (HEADER WIDTH SORT KEY) tuples.
 SORT is t (sort on the printed string), nil, or a predicate function;
 KEY is the INFO key (or :mark / :att) the cell displays.  The Subject
-width is recomputed to fill the window by `bone--list-format'."
+width is recomputed to fill the window by `gnaw--list-format'."
   :type '(repeat (list (string   :tag "Header")
                        (integer  :tag "Width")
                        (choice   :tag "Sort"
@@ -1251,15 +1253,15 @@ width is recomputed to fill the window by `bone--list-format'."
                                  (const :tag "None" nil)
                                  (function :tag "Predicate"))
                        (symbol   :tag "Field key")))
-  :group 'bone)
+  :group 'gnaw)
 
-(defun bone--list-cell (key info mid state)
+(defun gnaw--list-cell (key info mid state)
   "Return the display string for column KEY of report MID (INFO, STATE)."
   (pcase key
-    ;; Local mark, one character like the bone CLI: * sticky, _ skipped.
-    (:mark (cond ((bone-action-on-p state mid :sticky)
-                  (propertize "*" 'face 'bone-sticky))
-                 ((bone-action-on-p state mid :skip) "_")
+    ;; Local mark, one character like the gnaw CLI: * sticky, _ skipped.
+    (:mark (cond ((gnaw-action-on-p state mid :sticky)
+                  (propertize "*" 'face 'gnaw-sticky))
+                 ((gnaw-action-on-p state mid :skip) "_")
                  (t " ")))
     (:att (if (plist-get info :patches) "+" ""))
     (:priority (number-to-string (or (plist-get info :priority) 0)))
@@ -1272,35 +1274,35 @@ width is recomputed to fill the window by `bone--list-format'."
                       (t s))))
     (_ (let ((v (plist-get info key))) (if v (format "%s" v) "")))))
 
-(defun bone--mark-rank (cell)
+(defun gnaw--mark-rank (cell)
   "Sort rank for a Mark-column CELL string, depending on the view.
 Skipped hidden: skip < normal < sticky; skipped shown: sticky < normal
 < skip."
   (let ((ch (and (> (length cell) 0) (aref cell 0))))
-    (cond ((eq ch ?*) (if bone-list--show-skipped 0 2))
-          ((eq ch ?_) (if bone-list--show-skipped 2 0))
+    (cond ((eq ch ?*) (if gnaw-list--show-skipped 0 2))
+          ((eq ch ?_) (if gnaw-list--show-skipped 2 0))
           (t 1))))
 
-(defun bone--mark-sort (a b)
+(defun gnaw--mark-sort (a b)
   "Sort tabulated-list entries A and B by their Mark column."
-  (< (bone--mark-rank (aref (cadr a) bone-list--mark-index))
-     (bone--mark-rank (aref (cadr b) bone-list--mark-index))))
+  (< (gnaw--mark-rank (aref (cadr a) gnaw-list--mark-index))
+     (gnaw--mark-rank (aref (cadr b) gnaw-list--mark-index))))
 
-(defun bone--active-columns ()
-  "Return `bone-list-columns' minus those named in config `:skip-columns'."
-  (let ((skip (mapcar #'downcase (plist-get (bone-load-config) :skip-columns))))
-    (cl-remove-if (lambda (c) (member (downcase (car c)) skip)) bone-list-columns)))
+(defun gnaw--active-columns ()
+  "Return `gnaw-list-columns' minus those named in config `:skip-columns'."
+  (let ((skip (mapcar #'downcase (plist-get (gnaw-load-config) :skip-columns))))
+    (cl-remove-if (lambda (c) (member (downcase (car c)) skip)) gnaw-list-columns)))
 
-(defun bone--list-format ()
+(defun gnaw--list-format ()
   "Return the `tabulated-list-format' vector for the active columns.
 Grow the Subject column to fill the window; other columns keep their
 width, so Topic stays at the right edge."
-  (let* ((cols (bone--active-columns))
+  (let* ((cols (gnaw--active-columns))
          (others (cl-remove-if (lambda (c) (eq (nth 3 c) :subject)) cols))
          (used (apply #'+ tabulated-list-padding 1
                       (mapcar (lambda (c) (1+ (nth 1 c))) others)))
          (subj (max 20 (- (window-body-width) used))))
-    (setq-local bone-list--mark-index
+    (setq-local gnaw-list--mark-index
                 (or (cl-position :mark cols :key (lambda (c) (nth 3 c))) 0))
     (vconcat (mapcar (lambda (c)
                        (list (nth 0 c)
@@ -1308,34 +1310,34 @@ width, so Topic stays at the right edge."
                              (nth 2 c)))
                      cols))))
 
-(defun bone--list-entries ()
+(defun gnaw--list-entries ()
   "Return `tabulated-list-entries', folding patch series unless expanded.
 A series is shown as one representative row (cover letter or first
-patch) with a status summary; unfolded series (in `bone-list--expanded')
-list each patch.  The query in `bone-list--query' filters the result."
-  (let ((state (bone-read-state))
-        (cols (bone--active-columns))
-        (qgroups (and bone-list--query (bone--query-parse bone-list--query)))
-        (pairs bone-list--reports)
+patch) with a status summary; unfolded series (in `gnaw-list--expanded')
+list each patch.  The query in `gnaw-list--query' filters the result."
+  (let ((state (gnaw-read-state))
+        (cols (gnaw--active-columns))
+        (qgroups (and gnaw-list--query (gnaw--query-parse gnaw-list--query)))
+        (pairs gnaw-list--reports)
         (groups (make-hash-table :test 'equal))
         (seen (make-hash-table :test 'equal))
         (rows nil))
     (dolist (p pairs)
-      (let ((sid (bone--series-id (cdr p))))
+      (let ((sid (gnaw--series-id (cdr p))))
         (when sid (push p (gethash sid groups)))))
     (cl-flet ((row (pair)
-                (when (and (or bone-list--show-skipped
-                               (not (bone-action-on-p state (car pair) :skip)))
+                (when (and (or gnaw-list--show-skipped
+                               (not (gnaw-action-on-p state (car pair) :skip)))
                            (or (null qgroups)
-                               (bone--query-match-p qgroups (car pair) (cdr pair))))
+                               (gnaw--query-match-p qgroups (car pair) (cdr pair))))
                   (push (list pair
                               (vconcat
                                (mapcar (lambda (c)
-                                         (bone--list-cell (nth 3 c) (cdr pair) (car pair) state))
+                                         (gnaw--list-cell (nth 3 c) (cdr pair) (car pair) state))
                                        cols)))
                         rows))))
       (dolist (p pairs)
-        (let ((sid (bone--series-id (cdr p))))
+        (let ((sid (gnaw--series-id (cdr p))))
           (cond
            ((null sid) (row p))
            ((gethash sid seen) nil)
@@ -1343,76 +1345,76 @@ list each patch.  The query in `bone-list--query' filters the result."
             (puthash sid t seen)
             (let* ((members (sort (nreverse (gethash sid groups))
                                   (lambda (a b)
-                                    (< (bone--patch-seq-n (cdr a))
-                                       (bone--patch-seq-n (cdr b))))))
+                                    (< (gnaw--patch-seq-n (cdr a))
+                                       (gnaw--patch-seq-n (cdr b))))))
                    (multi (cdr members)))
-              (if (and multi (member sid bone-list--expanded))
+              (if (and multi (member sid gnaw-list--expanded))
                   (dolist (m members)
                     (row (cons (car m)
                                (plist-put (copy-sequence (cdr m)) :series-child t))))
-                (let* ((cover (seq-find (lambda (m) (bone--cover-p (cdr m))) members))
+                (let* ((cover (seq-find (lambda (m) (gnaw--cover-p (cdr m))) members))
                        (rep (or cover (car members))))
                   (row (cons (car rep)
                              (if multi
                                  (plist-put (copy-sequence (cdr rep)) :series-summary
-                                            (bone--series-summary (mapcar #'cdr members)))
+                                            (gnaw--series-summary (mapcar #'cdr members)))
                                (cdr rep)))))))))))
       (nreverse rows))))
 
-(defvar bone-list-mode-map
+(defvar gnaw-list-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "RET") #'bone-list-open)
-    (define-key map (kbd "TAB") #'bone-list-toggle-fold)
-    (define-key map "p" #'bone-list-view-patches)
-    (define-key map "a" #'bone-list-apply-patches)
-    (define-key map "A" #'bone-list-am-patches)
-    (define-key map "g" #'bone-list-reload)
-    (define-key map "G" #'bone-list-update)
-    (define-key map "/" #'bone-list-filter)
-    (define-key map "|" #'bone-list-filter-clear)
-    (define-key map "=" #'bone-list-filter-transient)
-    (define-key map "t" #'bone-list-limit-type)
-    (define-key map "*" #'bone-list-toggle-sticky)
-    (define-key map "_" #'bone-list-toggle-skip)
-    (define-key map "\\" #'bone-list-toggle-skipped)
+    (define-key map (kbd "RET") #'gnaw-list-open)
+    (define-key map (kbd "TAB") #'gnaw-list-toggle-fold)
+    (define-key map "p" #'gnaw-list-view-patches)
+    (define-key map "a" #'gnaw-list-apply-patches)
+    (define-key map "A" #'gnaw-list-am-patches)
+    (define-key map "g" #'gnaw-list-reload)
+    (define-key map "G" #'gnaw-list-update)
+    (define-key map "/" #'gnaw-list-filter)
+    (define-key map "|" #'gnaw-list-filter-clear)
+    (define-key map "=" #'gnaw-list-filter-transient)
+    (define-key map "t" #'gnaw-list-limit-type)
+    (define-key map "*" #'gnaw-list-toggle-sticky)
+    (define-key map "_" #'gnaw-list-toggle-skip)
+    (define-key map "\\" #'gnaw-list-toggle-skipped)
     (define-key map "?" #'describe-mode)
     map)
-  "Keymap for `bone-list-mode'.")
+  "Keymap for `gnaw-list-mode'.")
 
-(define-derived-mode bone-list-mode tabulated-list-mode "Bone"
-  "Major mode listing open BARK reports.
-\\<bone-list-mode-map>Press \\[describe-mode] for the full list of key bindings."
-  (setq tabulated-list-format (bone--list-format))
+(define-derived-mode gnaw-list-mode tabulated-list-mode "Gnaw"
+  "Major mode listing open BONE reports.
+\\<gnaw-list-mode-map>Press \\[describe-mode] for the full list of key bindings."
+  (setq tabulated-list-format (gnaw--list-format))
   (setq tabulated-list-padding 1)
   (setq tabulated-list-sort-key nil)
   (tabulated-list-init-header))
 
-(defun bone-list-refresh ()
+(defun gnaw-list-refresh ()
   "Re-render the list from the in-memory reports and current state.
-Does not re-read the report cache; use `bone-list-reload' for that."
+Does not re-read the report cache; use `gnaw-list-reload' for that."
   (interactive)
-  (setq tabulated-list-format (bone--list-format))
+  (setq tabulated-list-format (gnaw--list-format))
   (tabulated-list-init-header)
-  (setq mode-line-process (and bone-list--query
-                               (format " [%s]" bone-list--query)))
-  (setq tabulated-list-entries (bone--list-entries))
+  (setq mode-line-process (and gnaw-list--query
+                               (format " [%s]" gnaw-list--query)))
+  (setq tabulated-list-entries (gnaw--list-entries))
   (tabulated-list-print t)
   (force-mode-line-update))
 
-(defun bone-list-reload ()
+(defun gnaw-list-reload ()
   "Re-read reports from the local cache, then re-render."
   (interactive)
-  (setq-local bone-list--reports (bone-reports))
-  (bone-list-refresh))
+  (setq-local gnaw-list--reports (gnaw-reports))
+  (gnaw-list-refresh))
 
-(defun bone-list-filter-clear ()
-  "Clear the active `bone-list' filter query."
+(defun gnaw-list-filter-clear ()
+  "Clear the active `gnaw-list' filter query."
   (interactive)
-  (setq-local bone-list--query nil)
-  (bone-list-refresh)
-  (message "bone: filter cleared"))
+  (setq-local gnaw-list--query nil)
+  (gnaw-list-refresh)
+  (message "gnaw: filter cleared"))
 
-(defun bone-list-filter (query)
+(defun gnaw-list-filter (query)
   "Filter the report list by QUERY; an empty QUERY clears the filter.
 QUERY combines `key:value' tokens with spaces (AND) and `|' (OR).
 With a prefix argument, clear the active filter without prompting."
@@ -1424,63 +1426,63 @@ With a prefix argument, clear the active filter without prompting."
                     (define-key m " " nil)   ; let SPACE separate tokens
                     (define-key m "?" nil)   ; and `?' self-insert
                     m)))
-             (completing-read "Filter: " #'bone--filter-completion
-                              nil nil bone-list--query)))))
-  (setq-local bone-list--query
+             (completing-read "Filter: " #'gnaw--filter-completion
+                              nil nil gnaw-list--query)))))
+  (setq-local gnaw-list--query
               (and (not (string-empty-p (string-trim query))) query))
-  (bone-list-refresh)
-  (if bone-list--query
-      (message "bone: filter %s" bone-list--query)
-    (message "bone: filter cleared")))
+  (gnaw-list-refresh)
+  (if gnaw-list--query
+      (message "gnaw: filter %s" gnaw-list--query)
+    (message "gnaw: filter cleared")))
 
-(defun bone-list-update ()
+(defun gnaw-list-update ()
   "Refresh the remote cache, then reload the list."
   (interactive)
-  (bone-update)
-  (bone-list-reload))
+  (gnaw-update)
+  (gnaw-list-reload))
 
-(defun bone-list-limit-type ()
+(defun gnaw-list-limit-type ()
   "Limit the list to a chosen report type."
   (interactive)
-  (bone-list-filter-by "type"))
+  (gnaw-list-filter-by "type"))
 
-(defun bone-list--current ()
+(defun gnaw-list--current ()
   "Return the (MID . INFO) pair at point, or signal an error."
   (or (tabulated-list-get-id) (user-error "No report at point")))
 
-(defun bone-list-open ()
+(defun gnaw-list-open ()
   "Open the email of the report at point."
   (interactive)
-  (let ((p (bone-list--current)))
-    (bone-read-message (car p) (cdr p))))
+  (let ((p (gnaw-list--current)))
+    (gnaw-read-message (car p) (cdr p))))
 
-(defun bone-list-view-patches ()
+(defun gnaw-list-view-patches ()
   "View the patches of the report at point."
   (interactive)
-  (bone-view-patches (cdr (bone-list--current))))
+  (gnaw-view-patches (cdr (gnaw-list--current))))
 
-(defun bone-list-apply-patches ()
+(defun gnaw-list-apply-patches ()
   "Apply the patches of the report at point with `git apply'."
   (interactive)
-  (bone-apply-patches (cdr (bone-list--current))))
+  (gnaw-apply-patches (cdr (gnaw-list--current))))
 
-(defun bone-list-am-patches ()
+(defun gnaw-list-am-patches ()
   "Apply the patches of the report at point with `git am'."
   (interactive)
-  (bone-am-patches (cdr (bone-list--current))))
+  (gnaw-am-patches (cdr (gnaw-list--current))))
 
-(defun bone-list-toggle-fold ()
+(defun gnaw-list-toggle-fold ()
   "Fold or unfold the patch series of the report at point."
   (interactive)
-  (let* ((pair (bone-list--current))
-         (sid (bone--series-id (cdr pair)))
+  (let* ((pair (gnaw-list--current))
+         (sid (gnaw--series-id (cdr pair)))
          (mid (car pair)))
     (unless sid (user-error "Not part of a patch series"))
-    (setq-local bone-list--expanded
-                (if (member sid bone-list--expanded)
-                    (remove sid bone-list--expanded)
-                  (cons sid bone-list--expanded)))
-    (bone-list-refresh)
+    (setq-local gnaw-list--expanded
+                (if (member sid gnaw-list--expanded)
+                    (remove sid gnaw-list--expanded)
+                  (cons sid gnaw-list--expanded)))
+    (gnaw-list-refresh)
     ;; Return to the same report; if it is gone (folded from a sub-patch),
     ;; fall back to the series' representative row.
     (goto-char (point-min))
@@ -1492,34 +1494,34 @@ With a prefix argument, clear the active filter without prompting."
       (goto-char (point-min))
       (while (and (not (eobp))
                   (let ((p (tabulated-list-get-id)))
-                    (not (and p (equal (bone--series-id (cdr p)) sid)))))
+                    (not (and p (equal (gnaw--series-id (cdr p)) sid)))))
         (forward-line 1)))))
 
-(defun bone-list--toggle (action)
+(defun gnaw-list--toggle (action)
   "Toggle local mark ACTION on the report at point, then refresh."
-  (let ((p (bone-list--current)))
-    (bone-toggle-mark (car p) (cdr p) action)
-    (bone-list-refresh)))
+  (let ((p (gnaw-list--current)))
+    (gnaw-toggle-mark (car p) (cdr p) action)
+    (gnaw-list-refresh)))
 
-(defun bone-list-toggle-sticky ()
+(defun gnaw-list-toggle-sticky ()
   "Toggle the sticky mark (keep visible) on the report at point."
   (interactive)
-  (bone-list--toggle :sticky))
+  (gnaw-list--toggle :sticky))
 
-(defun bone-list-toggle-skip ()
+(defun gnaw-list-toggle-skip ()
   "Toggle the skip mark (hide) on the report at point."
   (interactive)
-  (bone-list--toggle :skip))
+  (gnaw-list--toggle :skip))
 
-(defun bone-list-toggle-skipped ()
+(defun gnaw-list-toggle-skipped ()
   "Toggle whether skipped reports are shown."
   (interactive)
-  (setq-local bone-list--show-skipped (not bone-list--show-skipped))
-  (bone-list-refresh)
-  (message "bone: skipped reports %s"
-           (if bone-list--show-skipped "shown" "hidden")))
+  (setq-local gnaw-list--show-skipped (not gnaw-list--show-skipped))
+  (gnaw-list-refresh)
+  (message "gnaw: skipped reports %s"
+           (if gnaw-list--show-skipped "shown" "hidden")))
 
-(defun bone--resolve-reports-dir (input)
+(defun gnaw--resolve-reports-dir (input)
   "Return the reports directory URL (ending in /) for user INPUT.
 A `.json' (including `meta.json') URL yields its directory; a URL
 ending in /reports yields that directory; otherwise /reports/ is
@@ -1529,16 +1531,16 @@ appended."
           ((string-suffix-p "/reports" u) (concat u "/"))
           (t (concat u "/reports/")))))
 
-(defun bone--read-config-raw ()
+(defun gnaw--read-config-raw ()
   "Read config.edn and return its raw alist, or nil."
-  (let ((file (expand-file-name "config.edn" bone-config-dir)))
+  (let ((file (expand-file-name "config.edn" gnaw-config-dir)))
     (when (file-readable-p file)
       (ignore-errors
         (with-temp-buffer
           (insert-file-contents file)
-          (bone-edn-read-buffer))))))
+          (gnaw-edn-read-buffer))))))
 
-(defun bone--config-add-source (config urls name repo)
+(defun gnaw--config-add-source (config urls name repo)
   "Return CONFIG alist with a source (URLS, NAME, REPO) added or updated.
 URLS is a list of reports.json URLs.  An existing source sharing any
 URL or the NAME is replaced."
@@ -1553,18 +1555,18 @@ URL or the NAME is replaced."
     (cons (cons :sources (append others (list src)))
           (assq-delete-all :sources (copy-alist config)))))
 
-(defun bone--write-config (config)
+(defun gnaw--write-config (config)
   "Write CONFIG alist to config.edn as UTF-8."
-  (let ((file (expand-file-name "config.edn" bone-config-dir)))
+  (let ((file (expand-file-name "config.edn" gnaw-config-dir)))
     (make-directory (file-name-directory file) t)
     (let ((coding-system-for-write 'utf-8))
       (with-temp-file file
-        (insert (bone--edn-write config) "\n")))))
+        (insert (gnaw--edn-write config) "\n")))))
 
 (declare-function completing-read-multiple "crm")
 
 ;;;###autoload
-(defun bone-add-source (urls &optional name repo)
+(defun gnaw-add-source (urls &optional name repo)
   "Add a source (URLS, NAME, REPO) to config.edn.
 URLS is a list of reports.json URLs.  Interactively, give a base,
 meta.json or reports.json URL; the report files listed in meta.json's
@@ -1573,8 +1575,8 @@ source NAME (from meta.json) and its local git REPO are requested."
   (interactive
    (let* ((input (read-string "Report source URL (base, meta.json or .json): "))
           (_ (when (string-empty-p (string-trim input)) (user-error "No URL given")))
-          (dir (bone--resolve-reports-dir input))
-          (meta (ignore-errors (bone-source-meta dir)))
+          (dir (gnaw--resolve-reports-dir input))
+          (meta (ignore-errors (gnaw-source-meta dir)))
           (files (or (alist-get 'reports-files meta) '("all.json")))
           (def (cond ((member "all-open.json" files) "all-open.json")
                      ((member "all.json" files) "all.json")
@@ -1593,28 +1595,28 @@ source NAME (from meta.json) and its local git REPO are requested."
   (let ((urls (if (listp urls) urls (list urls)))
         (name (and name (not (string-empty-p (string-trim name))) name)))
     (unless urls (user-error "No report file selected"))
-    (bone--write-config (bone--config-add-source (bone--read-config-raw) urls name repo))
-    (message "bone: added to config.edn: %s%s"
+    (gnaw--write-config (gnaw--config-add-source (gnaw--read-config-raw) urls name repo))
+    (message "gnaw: added to config.edn: %s%s"
              (string-join urls ", ") (if name (format " (%s)" name) ""))
     urls))
 
-(defun bone--setup-sources ()
+(defun gnaw--setup-sources ()
   "Interactively add sources to config.edn until the user declines."
-  (while (y-or-n-p (if (bone-sources) "Add another source? " "Add a source? "))
-    (call-interactively #'bone-add-source)))
+  (while (y-or-n-p (if (gnaw-sources) "Add another source? " "Add a source? "))
+    (call-interactively #'gnaw-add-source)))
 
 ;;;###autoload
-(defun bone ()
-  "Browse open BARK reports in a tabulated list filling the frame.
+(defun gnaw ()
+  "Browse open BONE reports in a tabulated list filling the frame.
 Prompt to add a source when none is configured."
   (interactive)
-  (unless (bone-sources)
-    (bone--setup-sources))
-  (let ((buf (get-buffer-create "*bone*")))
+  (unless (gnaw-sources)
+    (gnaw--setup-sources))
+  (let ((buf (get-buffer-create "*gnaw*")))
     (switch-to-buffer buf)
     (delete-other-windows)
-    (bone-list-mode)
-    (bone-list-reload)))
+    (gnaw-list-mode)
+    (gnaw-list-reload)))
 
-(provide 'bone)
-;;; bone.el ends here
+(provide 'gnaw)
+;;; gnaw.el ends here

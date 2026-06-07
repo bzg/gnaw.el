@@ -1,14 +1,16 @@
-#+title: bone.el --- Manage BARK reports from Emacs
+#+title: gnaw.el --- Manage BONE reports from Emacs
+
+: 3==3  GNAW -- GNAW is Not Another Workflow
 
 [[https://intver.org/][https://img.shields.io/badge/versioning-intver.org-blue.svg?style=for-the-badge]]
 
-=bone.el= is an Emacs tool for [[https://codeberg.org/bzg/bone][bone]] and [[https://codeberg.org/bzg/bark][BARK]] with two faces:
+=gnaw.el= is an Emacs tool for [[https://codeberg.org/bzg/gnaw][gnaw]] and [[https://codeberg.org/bzg/bone][BONE]] with two faces:
 
-- a *standalone browser* of BARK reports (=M-x bone=): list reports,
-  read the email, view and apply patches, mark and filter -- no [[https://codeberg.org/bzg/bone][bone]]
+- a *standalone browser* of BONE reports (=M-x gnaw=): list reports,
+  read the email, view and apply patches, mark and filter -- no [[https://codeberg.org/bzg/gnaw][gnaw]]
   CLI required;
-- the shared *data layer* of the mail front-ends [[https://codeberg.org/bzg/gnus-bone][gnus-bone]],
-  [[https://codeberg.org/bzg/notmuch-bone][notmuch-bone]] and [[https://codeberg.org/bzg/mu4e-bone][mu4e-bone]].
+- the shared *data layer* of the mail front-ends [[https://codeberg.org/bzg/gnus-gnaw][gnus-gnaw]],
+  [[https://codeberg.org/bzg/notmuch-gnaw][notmuch-gnaw]] and [[https://codeberg.org/bzg/mu4e-gnaw][mu4e-gnaw]].
 
 It reads =config.edn= and =reports.json= directly, caches remote
 reports and patches, and reads/writes =config.edn= and the =state.edn=
@@ -17,31 +19,31 @@ shared with the CLI, so state stays consistent across clients.
 * Requirements
 
 - Emacs 28.1 or later.
-- =~/.config/bone/config.edn= with at least one source under =:sources=
-  (=M-x bone= creates it interactively if missing).
-- A published BARK instance in =0.9.1= format or later (the 0.9.3
+- =~/.config/gnaw/config.edn= with at least one source under =:sources=
+  (=M-x gnaw= creates it interactively if missing).
+- A published BONE instance in =0.9.1= format or later (the 0.9.3
   =meta.json= =reports-files= list is used when present).
 
 * Installation
 
-=bone.el= is not on MELPA yet.  On Emacs 30 or later, install it
+=gnaw.el= is not on MELPA yet.  On Emacs 30 or later, install it
 straight from its git repository with the built-in =package-vc=:
 
 #+begin_src emacs-lisp
-(use-package bone
-  :vc (:url "https://codeberg.org/bzg/bone.el" :rev :newest))
+(use-package gnaw
+  :vc (:url "https://codeberg.org/bzg/gnaw.el" :rev :newest))
 #+end_src
 
 Or interactively, without =use-package=:
 
-: M-x package-vc-install RET https://codeberg.org/bzg/bone.el RET
+: M-x package-vc-install RET https://codeberg.org/bzg/gnaw.el RET
 
 The =transient= dependency is pulled from your regular package archives.
-Update later with =M-x package-vc-upgrade RET bone RET=.
+Update later with =M-x package-vc-upgrade RET gnaw RET=.
 
 * Getting started
 
-=M-x bone= opens the =*bone*= report browser, filling the frame.  With
+=M-x gnaw= opens the =*gnaw*= report browser, filling the frame.  With
 no source configured, it asks you to add one (and repeats until you
 decline):
 
@@ -52,10 +54,10 @@ decline):
 3. a source name (defaults to =meta.json='s =:source=);
 4. a local git repository for that source, used by =git am=.
 
-These are written to =config.edn=.  =M-x bone-add-source= does the same
+These are written to =config.edn=.  =M-x gnaw-add-source= does the same
 later on.
 
-* The =*bone*= browser
+* The =*gnaw*= browser
 
 | Key   | Action                                               |
 |-------+------------------------------------------------------|
@@ -82,11 +84,11 @@ to list each patch, =TAB= again folds it back.
 Two mutually exclusive local marks drive the view: *sticky* keeps a
 report visible (shown =*= in the Mark column), *skip* hides it.  Skipped
 reports are hidden by default; =\= reveals them (shown =_=).  Marks live
-in =state.edn=, shared with the bone CLI and the front-ends.
+in =state.edn=, shared with the gnaw CLI and the front-ends.
 
 * Searching
 
-=/= filters the list with a subset of the BARK web query syntax:
+=/= filters the list with a subset of the BONE web query syntax:
 =key:value= tokens.  Operators, loosest to tightest binding: =|= is OR
 between clauses, space is AND between tokens, and a comma inside a value
 is OR (=acked:alice,bob=).  So =a b c | d= reads as =(a b c) | d=.
@@ -110,21 +112,21 @@ clears it.
 
 * Reading messages
 
-=bone-open-message-method= selects how =RET= opens a report, per source:
+=gnaw-open-message-method= selects how =RET= opens a report, per source:
 an alist mapping a source name to =auto=, =mua=, =gnus=, =notmuch=, =mu4e=
 or =web= (the entry keyed by =t= is the default).  =gnus= reads the group
-from =bone-gnus-group= (an alist; asked with completion otherwise);
+from =gnaw-gnus-group= (an alist; asked with completion otherwise);
 =notmuch= and =mu4e= open by message-id; =web= fetches the public-inbox
-archive.  =M-x bone-set-source-open-method= sets these with completion.
+archive.  =M-x gnaw-set-source-open-method= sets these with completion.
 
-Front-ends set =bone-open-message-function= to handle =auto=/=mua=.
+Front-ends set =gnaw-open-message-function= to handle =auto=/=mua=.
 
 * Applying patches
 
 =a= runs =git apply= (patch the working tree) and =A= runs =git am=
 (apply as commits) in the source's =:repo= (falling back to
-=bone-apply-repo= or a prompt), warning when a patch series looks
-incomplete.  See =*bone-git*= for the output; on a failed =git am=, run
+=gnaw-apply-repo= or a prompt), warning when a patch series looks
+incomplete.  See =*gnaw-git*= for the output; on a failed =git am=, run
 =git am --abort=.
 
 * =config.edn=
@@ -144,25 +146,25 @@ incomplete.  See =*bone-git*= for the output; on a failed =git am=, run
 
 * Configuration
 
-- =bone-config-dir= (default =~/.config/bone=): holds =config.edn=,
+- =gnaw-config-dir= (default =~/.config/gnaw=): holds =config.edn=,
   =state.edn= and =cache/=. Sources always come from =config.edn=.
-- =bone-open-message-method= / =bone-gnus-group=: per-source open method
+- =gnaw-open-message-method= / =gnaw-gnus-group=: per-source open method
   and Gnus group (see /Reading/).
-- =bone-apply-repo=: fallback git repo for =git am=.
-- =bone-after-update-hook=: run after =M-x bone-update=.
+- =gnaw-apply-repo=: fallback git repo for =git am=.
+- =gnaw-after-update-hook=: run after =M-x gnaw-update=.
 
 * API for front-ends
 
 | Function                        | Purpose                                    |
 |---------------------------------+--------------------------------------------|
-| =(bone-reports)=                  | collect open reports as =(MID . INFO)= pairs |
-| =(bone-sources)=                  | resolved report URLs/paths from config.edn |
-| =(bone-load-config)=              | plist =(:addresses :skip-columns :sources)=  |
-| =(bone-read-state)=               | read =state.edn= into an alist               |
-| =(bone-write-state STATE)=        | serialize an alist to =state.edn=            |
-| =(bone-toggle-mark MID INFO ACT)= | toggle =:read=/=:todo=/=:sticky=, persist    |
-| =(bone-action-on-p ST MID ACT)=   | is a mark currently set?                   |
-| =(bone-normalize-mid MID)=        | ensure angle brackets around a message-id  |
+| =(gnaw-reports)=                  | collect open reports as =(MID . INFO)= pairs |
+| =(gnaw-sources)=                  | resolved report URLs/paths from config.edn |
+| =(gnaw-load-config)=              | plist =(:addresses :skip-columns :sources)=  |
+| =(gnaw-read-state)=               | read =state.edn= into an alist               |
+| =(gnaw-write-state STATE)=        | serialize an alist to =state.edn=            |
+| =(gnaw-toggle-mark MID INFO ACT)= | toggle =:read=/=:todo=/=:sticky=, persist    |
+| =(gnaw-action-on-p ST MID ACT)=   | is a mark currently set?                   |
+| =(gnaw-normalize-mid MID)=        | ensure angle brackets around a message-id  |
 
 INFO is a plist with =:type :subject :date :from :from-name= (used to
 enrich state) plus display and action keys =:flags :priority :votes
@@ -171,10 +173,10 @@ enrich state) plus display and action keys =:flags :priority :votes
 
 * Contributing
 
-- Send a [[mailto:~bzg/barkyard@lists.sr.ht][bug report]] with =[BUG] bone.el: <SHORT EXPLICIT BUG DESCRIPTION>=
-- Send a [[mailto:~bzg/barkyard@lists.sr.ht][patch]] with =[PATCH] bone.el: <COMMIT SUMMARY>=
-- Send a [[mailto:~bzg/barkyard@lists.sr.ht][feature request]] with =[FR] bone.el: <FEATURE REQUEST>=
-- Share any [[mailto:~bzg/barkyard@lists.sr.ht <ANYTHING>][other question or idea]]
+- Send a [[mailto:~bzg/boneyard@lists.sr.ht][bug report]] with =[BUG] gnaw.el: <SHORT EXPLICIT BUG DESCRIPTION>=
+- Send a [[mailto:~bzg/boneyard@lists.sr.ht][patch]] with =[PATCH] gnaw.el: <COMMIT SUMMARY>=
+- Send a [[mailto:~bzg/boneyard@lists.sr.ht][feature request]] with =[FR] gnaw.el: <FEATURE REQUEST>=
+- Share any [[mailto:~bzg/boneyard@lists.sr.ht <ANYTHING>][other question or idea]]
 
 You can also [[mailto:bzg@bzg.fr][send me an email]] and support my work on [[https://liberapay.com/bzg/][liberapay]].
 
@@ -190,6 +192,6 @@ This project uses [[https://intver.org][Intentional Versioning]], with three aud
 
 Copyright © 2026 Bastien Guerry
 
-=bone.el= is published under the terms of the GNU General Public
+=gnaw.el= is published under the terms of the GNU General Public
 License, either version 3 of the License, or (at your option) any
 later version.
