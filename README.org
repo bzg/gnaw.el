@@ -22,6 +22,23 @@ shared with the CLI, so state stays consistent across clients.
 - A published BARK instance in =0.9.1= format or later (the 0.9.3
   =meta.json= =reports-files= list is used when present).
 
+* Installation
+
+=bone.el= is not on MELPA yet.  On Emacs 30 or later, install it
+straight from its git repository with the built-in =package-vc=:
+
+#+begin_src emacs-lisp
+(use-package bone
+  :vc (:url "https://codeberg.org/bzg/bone.el" :rev :newest))
+#+end_src
+
+Or interactively, without =use-package=:
+
+: M-x package-vc-install RET https://codeberg.org/bzg/bone.el RET
+
+The =transient= dependency is pulled from your regular package archives.
+Update later with =M-x package-vc-upgrade RET bone RET=.
+
 * Getting started
 
 =M-x bone= opens the =*bone*= report browser, filling the frame.  With
