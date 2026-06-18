@@ -21,7 +21,7 @@ shared with the CLI, so state stays consistent across clients.
 - Emacs 28.1 or later.
 - =~/.config/gnaw/config.edn= with at least one source under =:sources=
   (=M-x gnaw= creates it interactively if missing).
-- A published BONE instance in =0.9.1= format or later (the 0.9.3
+- A published BONE instance in =0.9.2= format or later (the 0.9.3
   =meta.json= =reports-files= list is used when present).
 
 * Installation
@@ -99,7 +99,7 @@ is OR (=acked:alice,bob=).  So =a b c | d= reads as =(a b c) | d=.
 | =subject:crash=            | =s:=       | subject (a bare word matches subject) |
 | =topic:agenda=             | =t:=       | topic                                 |
 | =type:patch=               |          | report type                           |
-| =priority:2=               | =p:=       | exact priority                        |
+| =priority:2=               | =p:=       | exact priority (0-3, shown A/B/C)     |
 | =mid:<...>=                | =m:=       | message-id                            |
 | =acked:bzg= =owned:= =closed:= | =a: o: c:= | by person (or =*= for any)              |
 | =urgent:= =important:=       | =u: i:=    | priority bits (set or not)            |
