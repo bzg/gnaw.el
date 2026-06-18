@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.1.0
+;; Version: 0.2.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -36,7 +36,9 @@
 ;; - manages the local cache of remote `reports.json' files,
 ;; - parses and serializes the EDN config and `state.edn' files shared
 ;;   with the gnaw CLI,
-;; - exposes the report list and the local-mark API the front-ends use.
+;; - exposes the report list, the local-mark API and the MUA-independent
+;;   presentation helpers (annotation string, topic filtering) the
+;;   front-ends use.
 ;;
 ;; Front-ends provide the message metadata (an INFO plist with keys
 ;; :type :subject :date :from :from-name, plus display keys :flags
@@ -51,6 +53,7 @@
 ;;   `gnaw-update'       force-refresh the local cache (interactive)
 ;;   `gnaw-toggle-mark'  toggle :sticky/:skip for a message-id
 ;;   `gnaw-read-state' / `gnaw-write-state'   state.edn I/O
+;;   `gnaw-annotation'   fixed-width report annotation for MUA lines
 ;;
 ;;; Code:
 
@@ -194,27 +197,39 @@ Return nil on parse failure or when no map is present."
       (url-unhex-string (substring uri 7))
     uri))
 
+(defvar gnaw--config-cache nil
+  "Cons (MTIME . PLIST) caching the last `gnaw-load-config' result.
+Invalidated when config.edn's modification time changes or when
+`gnaw--write-config' rewrites it.")
+
 (defun gnaw-load-config ()
   "Load `config.edn' and return a plist.
 Keys: :addresses :skip-columns :source-configs (raw `:sources' maps)
-and :sources (their URLs)."
+and :sources (their URLs).  The result is cached and reused while
+config.edn is unchanged, since a single list refresh queries it
+several times."
   (let* ((file (expand-file-name "config.edn" gnaw-config-dir))
-         (cfg (when (file-readable-p file)
-                (condition-case err
-                    (with-temp-buffer
-                      (insert-file-contents file)
-                      (gnaw-edn-read-buffer))
-                  (error
-                   (message "gnaw: cannot parse %s: %s"
-                            file (error-message-string err))
-                   nil))))
-         (addresses (alist-get :my-addresses cfg))
-         (skip      (alist-get :skip-columns cfg))
-         (src-cfgs  (alist-get :sources cfg))
-         (sources   (mapcan (lambda (s) (append (alist-get :urls s) nil)) src-cfgs)))
-    (setq gnaw-addresses addresses)
-    (list :addresses addresses :skip-columns skip
-          :source-configs src-cfgs :sources sources)))
+         (mtime (file-attribute-modification-time (file-attributes file))))
+    (if (and gnaw--config-cache (equal (car gnaw--config-cache) mtime))
+        (cdr gnaw--config-cache)
+      (let* ((cfg (when (file-readable-p file)
+                    (condition-case err
+                        (with-temp-buffer
+                          (insert-file-contents file)
+                          (gnaw-edn-read-buffer))
+                      (error
+                       (message "gnaw: cannot parse %s: %s"
+                                file (error-message-string err))
+                       nil))))
+             (addresses (alist-get :my-addresses cfg))
+             (skip      (alist-get :skip-columns cfg))
+             (src-cfgs  (alist-get :sources cfg))
+             (sources   (mapcan (lambda (s) (append (alist-get :urls s) nil)) src-cfgs))
+             (plist (list :addresses addresses :skip-columns skip
+                          :source-configs src-cfgs :sources sources)))
+        (setq gnaw-addresses addresses)
+        (setq gnaw--config-cache (cons mtime plist))
+        plist))))
 
 (defun gnaw-sources ()
   "Return report sources from config.edn as URLs or absolute local paths.
@@ -267,9 +282,10 @@ URL or by `:name'."
      (concat "cache/reports/" prefix "-" h ".json")
      gnaw-config-dir)))
 
-(defun gnaw--fetch-json-from-url (url)
-  "Synchronously fetch JSON from URL."
-  (let ((buf (url-retrieve-synchronously url t)))
+(defun gnaw--http-body (url &optional binary)
+  "Return the HTTP body of URL.  Read raw bytes when BINARY is non-nil."
+  (let* ((coding-system-for-read (if binary 'binary coding-system-for-read))
+         (buf (url-retrieve-synchronously url t)))
     (unless buf (error "Failed to fetch %s" url))
     (unwind-protect
         (with-current-buffer buf
@@ -279,13 +295,18 @@ URL or by `:name'."
             (error "HTTP error %d from %s" url-http-response-status url))
           (unless (re-search-forward "\r?\n\r?\n" nil t)
             (error "Malformed HTTP response from %s" url))
-          (let ((json-object-type 'alist)
-                (json-array-type 'list)
-                (json-key-type 'symbol)
-                (json-false nil)
-                (body (buffer-substring-no-properties (point) (point-max))))
-            (json-read-from-string (decode-coding-string body 'utf-8))))
+          (buffer-substring-no-properties (point) (point-max)))
       (kill-buffer buf))))
+
+(defun gnaw--fetch-json-from-url (url)
+  "Synchronously fetch JSON from URL.
+The body is read as raw bytes and decoded as UTF-8."
+  (let ((json-object-type 'alist)
+        (json-array-type 'list)
+        (json-key-type 'symbol)
+        (json-false nil))
+    (json-read-from-string
+     (decode-coding-string (gnaw--http-body url t) 'utf-8))))
 
 (defun gnaw--write-json-to-file (data file)
   "Write JSON DATA to FILE as UTF-8."
@@ -537,23 +558,82 @@ Persist the new state and return non-nil if ACTION is now on."
     (gnaw-write-state new)
     (gnaw-action-on-p new mid action)))
 
-;;; Source metadata (meta.json) and patch files
+;;; Presentation helpers shared by the MUA front-ends
 
-(defun gnaw--http-body (url &optional binary)
-  "Return the HTTP body of URL.  Read raw bytes when BINARY is non-nil."
-  (let* ((coding-system-for-read (if binary 'binary coding-system-for-read))
-         (buf (url-retrieve-synchronously url t)))
-    (unless buf (error "Failed to fetch %s" url))
-    (unwind-protect
-        (with-current-buffer buf
-          (goto-char (point-min))
-          (when (and (bound-and-true-p url-http-response-status)
-                     (>= url-http-response-status 400))
-            (error "HTTP error %d from %s" url-http-response-status url))
-          (unless (re-search-forward "\r?\n\r?\n" nil t)
-            (error "Malformed HTTP response from %s" url))
-          (buffer-substring-no-properties (point) (point-max)))
-      (kill-buffer buf))))
+(defvar gnaw-annotation-votes-width 7
+  "Fixed width of the votes column in `gnaw-annotation'.")
+
+(defvar gnaw-annotation-deadline-width 5
+  "Fixed width of the deadline column in `gnaw-annotation'.")
+
+(defvar gnaw-annotation-expiry-width 5
+  "Fixed width of the expiry column in `gnaw-annotation'.")
+
+(defun gnaw-type-letter (type)
+  "Return the one-letter abbreviation of report TYPE."
+  (pcase type
+    ("bug"          "B")
+    ("patch"        "P")
+    ("request"      "?")
+    ("announcement" "A")
+    ("release"      "R")
+    ("change"       "C")
+    (_              "·")))
+
+(defun gnaw-priority-letter (priority)
+  "Return the letter for PRIORITY: A (3), B (2), C (1), space otherwise."
+  (pcase priority (3 "A") (2 "B") (1 "C") (_ " ")))
+
+(defun gnaw-mark-prefix (entry)
+  "Return the mark character for state ENTRY: `*' sticky, `_' skip."
+  (let ((flag (cdr (assq :flag entry)))
+        (skip (cdr (assq :skip-since entry))))
+    (cond ((eq flag :sticky) "*")
+          (skip              "_")
+          (t                 " "))))
+
+(defun gnaw-days-until (date)
+  "Days from now until YYYY-MM-DD DATE, or nil when DATE is nil."
+  (when date
+    (let* ((d (date-to-time (concat date " 00:00:00")))
+           (diff (float-time (time-subtract d (current-time)))))
+      (ceiling (/ diff 86400.0)))))
+
+(defun gnaw-annotation (info &optional entry)
+  "Build the fixed-width annotation string for report INFO and state ENTRY.
+Columns: local mark, type letter, flags, priority letter, deadline
+\(D±n days), expiry (E±n days) and votes ([score/total])."
+  (let* ((mark      (gnaw-mark-prefix entry))
+         (type      (gnaw-type-letter (plist-get info :type)))
+         (flags     (plist-get info :flags))
+         (priority  (plist-get info :priority))
+         (votes     (plist-get info :votes))
+         (dl-days   (gnaw-days-until (plist-get info :deadline)))
+         (ex-days   (gnaw-days-until (plist-get info :expiry)))
+         (pri-str   (gnaw-priority-letter priority))
+         (dl-pad    (string-pad (if dl-days (format "D%+d" dl-days) "")
+                                gnaw-annotation-deadline-width))
+         (ex-pad    (string-pad (if ex-days (format "E%+d" ex-days) "")
+                                gnaw-annotation-expiry-width))
+         (votes-pad (string-pad (if votes (format "[%s]" votes) "")
+                                gnaw-annotation-votes-width)))
+    (concat mark " " type " " flags " " pri-str " " dl-pad ex-pad votes-pad)))
+
+(defun gnaw-topics (reports)
+  "Return the sorted list of topics in REPORTS ((MID . INFO) pairs)."
+  (let ((topics nil))
+    (dolist (r reports)
+      (let ((topic (plist-get (cdr r) :topic)))
+        (when topic
+          (cl-pushnew topic topics :test #'equal))))
+    (sort topics #'string<)))
+
+(defun gnaw-filter-by-topic (reports topic)
+  "Return the REPORTS pairs whose info matches TOPIC."
+  (cl-remove-if-not (lambda (r) (equal (plist-get (cdr r) :topic) topic))
+                    reports))
+
+;;; Source metadata (meta.json) and patch files
 
 (defun gnaw--fetch-url-to-file (url file)
   "Fetch URL synchronously and write its raw body bytes to FILE."
@@ -625,11 +705,10 @@ asked for with completion, falling back to the Gnus registry."
 
 (defun gnaw--method-for (info)
   "Return the open method for report INFO's source."
-  (let ((m gnaw-open-message-method)
-        (name (plist-get info :source-name)))
-    (cond ((and name (assoc name m)) (cdr (assoc name m)))
-          ((assq t m) (cdr (assq t m)))
-          (t 'auto))))
+  (let* ((m gnaw-open-message-method)
+         (name (plist-get info :source-name))
+         (entry (or (and name (assoc name m)) (assq t m))))
+    (if entry (cdr entry) 'auto)))
 
 (defun gnaw--gnus-group-for (info)
   "Return the configured Gnus group for report INFO's source, or nil.
@@ -1119,7 +1198,9 @@ keeps its \"match any\" meaning."
           val (lambda (v)
                 (and v (equal (downcase v)
                               (downcase (or (plist-get info :type) "")))))))
-        ((or "priority" "p") (equal val (number-to-string prio)))
+        ((or "priority" "p")
+         (gnaw--query-val-any
+          val (lambda (v) (equal v (number-to-string prio)))))
         ((or "mid" "m")
          (gnaw--query-val-any val (lambda (v) (gnaw--query-text-match v mid))))
         ((or "acked" "a")
@@ -1234,7 +1315,7 @@ query to `KEY:value'; an empty value clears the filter."
   '(("Mark"      5 gnaw--mark-sort :mark)
     ("Type"      8 t :type)
     ("Flags"     5 t :flags)
-    ("Pri"       4 t :priority)
+    ("Pri"       4 gnaw--priority-sort :priority)
     ("Votes"     5 t :votes)
     ("From"     18 t :from-name)
     ("Att"       4 t :att)
@@ -1264,7 +1345,7 @@ width is recomputed to fill the window by `gnaw--list-format'."
                  ((gnaw-action-on-p state mid :skip) "_")
                  (t " ")))
     (:att (if (plist-get info :patches) "+" ""))
-    (:priority (number-to-string (or (plist-get info :priority) 0)))
+    (:priority (gnaw-priority-letter (plist-get info :priority)))
     (:date (let ((d (plist-get info :date)))   ; keep the YYYY-MM-DD part only
              (if d (substring d 0 (min 10 (length d))) "")))
     (:subject (let ((s (or (plist-get info :subject) "")))
@@ -1287,6 +1368,11 @@ Skipped hidden: skip < normal < sticky; skipped shown: sticky < normal
   "Sort tabulated-list entries A and B by their Mark column."
   (< (gnaw--mark-rank (aref (cadr a) gnaw-list--mark-index))
      (gnaw--mark-rank (aref (cadr b) gnaw-list--mark-index))))
+
+(defun gnaw--priority-sort (a b)
+  "Sort tabulated-list entries A and B by numeric report priority."
+  (< (or (plist-get (cdr (car a)) :priority) 0)
+     (or (plist-get (cdr (car b)) :priority) 0)))
 
 (defun gnaw--active-columns ()
   "Return `gnaw-list-columns' minus those named in config `:skip-columns'."
@@ -1325,11 +1411,17 @@ list each patch.  The query in `gnaw-list--query' filters the result."
     (dolist (p pairs)
       (let ((sid (gnaw--series-id (cdr p))))
         (when sid (push p (gethash sid groups)))))
-    (cl-flet ((row (pair)
+    (cl-flet ((row (pair &optional match-pairs)
+                ;; Skip is judged on the displayed PAIR, but the query may
+                ;; match any of MATCH-PAIRS (a folded series stays visible
+                ;; when any of its members matches, not just the row shown).
                 (when (and (or gnaw-list--show-skipped
                                (not (gnaw-action-on-p state (car pair) :skip)))
                            (or (null qgroups)
-                               (gnaw--query-match-p qgroups (car pair) (cdr pair))))
+                               (seq-some
+                                (lambda (mp)
+                                  (gnaw--query-match-p qgroups (car mp) (cdr mp)))
+                                (or match-pairs (list pair)))))
                   (push (list pair
                               (vconcat
                                (mapcar (lambda (c)
@@ -1358,7 +1450,8 @@ list each patch.  The query in `gnaw-list--query' filters the result."
                              (if multi
                                  (plist-put (copy-sequence (cdr rep)) :series-summary
                                             (gnaw--series-summary (mapcar #'cdr members)))
-                               (cdr rep)))))))))))
+                               (cdr rep)))
+                       members))))))))
       (nreverse rows))))
 
 (defvar gnaw-list-mode-map
@@ -1561,7 +1654,8 @@ URL or the NAME is replaced."
     (make-directory (file-name-directory file) t)
     (let ((coding-system-for-write 'utf-8))
       (with-temp-file file
-        (insert (gnaw--edn-write config) "\n")))))
+        (insert (gnaw--edn-write config) "\n")))
+    (setq gnaw--config-cache nil)))
 
 (declare-function completing-read-multiple "crm")
 
