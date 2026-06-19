@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.2.0
+;; Version: 0.3.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -593,11 +593,14 @@ Persist the new state and return non-nil if ACTION is now on."
           (t                 " "))))
 
 (defun gnaw-days-until (date)
-  "Days from now until YYYY-MM-DD DATE, or nil when DATE is nil."
+  "Days from now until YYYY-MM-DD DATE, or nil when DATE is nil or invalid.
+A malformed DATE returns nil rather than signaling, since this feeds the
+per-line annotation rendered by the MUA front-ends."
   (when date
-    (let* ((d (date-to-time (concat date " 00:00:00")))
-           (diff (float-time (time-subtract d (current-time)))))
-      (ceiling (/ diff 86400.0)))))
+    (ignore-errors
+      (let* ((d (date-to-time (concat date " 00:00:00")))
+             (diff (float-time (time-subtract d (current-time)))))
+        (ceiling (/ diff 86400.0))))))
 
 (defun gnaw-annotation (info &optional entry)
   "Build the fixed-width annotation string for report INFO and state ENTRY.
@@ -655,14 +658,26 @@ Columns: local mark, type letter, flags, priority letter, deadline
   (concat (file-name-directory (directory-file-name (file-name-directory source)))
           "patches/"))
 
+(defun gnaw--sanitize-path-component (s)
+  "Return S reduced to a single safe path component, or nil.
+Strips any directory part and rejects empty or `.'/`..' names, so an
+attacker-supplied value from a remote reports.json cannot escape the
+cache directory via path traversal."
+  (let ((base (and s (file-name-nondirectory s))))
+    (and base (not (member base '("" "." ".."))) base)))
+
 (defun gnaw-patch-file (info patch)
   "Return a local file for PATCH of report INFO, fetching it if absent.
 PATCH is an entry of the report `:patches' list."
-  (let* ((file   (alist-get 'file patch))
+  (let* ((file   (gnaw--sanitize-path-component (alist-get 'file patch)))
          (source (plist-get info :source))
-         (sname  (or (plist-get info :source-name) "unknown"))
-         (cache  (expand-file-name (concat "cache/patches/" sname "/" file)
-                                   gnaw-config-dir)))
+         (sname  (or (gnaw--sanitize-path-component (plist-get info :source-name))
+                     "unknown"))
+         (cache  (and file
+                      (expand-file-name (concat "cache/patches/" sname "/" file)
+                                        gnaw-config-dir))))
+    (unless file
+      (user-error "Patch entry has no usable file name"))
     (unless (file-exists-p cache)
       (let ((loc (concat (gnaw--patches-base source) file)))
         (cond ((gnaw--http-url-p source) (gnaw--fetch-url-to-file loc cache))
