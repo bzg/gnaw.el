@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.3.0
+;; Version: 0.4.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -59,6 +59,7 @@
 
 (require 'json)
 (require 'cl-lib)
+(require 'seq)
 (require 'subr-x)
 (require 'time-date)
 (require 'transient)
@@ -709,27 +710,50 @@ archive."
 
 (defcustom gnaw-gnus-group nil
   "Alist mapping a source name to the Gnus group holding its mails.
-Used by the `gnus' open method.  For a source not listed, the group is
-asked for with completion, falling back to the Gnus registry."
-  :type '(alist :key-type (string :tag "Source name")
+Used by the `gnus' open method.  The key t stores the default group.  For
+a source not listed, the default group is used before falling back to the
+Gnus registry or asking with completion."
+  :type '(alist :key-type (choice (const :tag "Default (any source)" t)
+                                  (string :tag "Source name"))
                 :value-type (string :tag "Gnus group"))
   :group 'gnaw)
 
 (defvar gnaw-open-message-function nil
   "Function (MID INFO) a front-end sets to open a message in its MUA.")
 
+(defconst gnaw--open-message-method-choices
+  '("auto" "mua" "gnus" "notmuch" "mu4e" "web")
+  "Open-message methods offered during interactive configuration.")
+
+(defun gnaw--source-config-entry (info)
+  "Return the config.edn source entry matching report INFO, or nil."
+  (let ((url  (plist-get info :source))
+        (name (plist-get info :source-name)))
+    (seq-find
+     (lambda (s)
+       (or (and url (member url (mapcar #'gnaw--resolve-source
+                                        (alist-get :urls s))))
+           (and name (equal name (alist-get :name s)))))
+     (plist-get (gnaw-load-config) :source-configs))))
+
 (defun gnaw--method-for (info)
   "Return the open method for report INFO's source."
   (let* ((m gnaw-open-message-method)
          (name (plist-get info :source-name))
-         (entry (or (and name (assoc name m)) (assq t m))))
+         (cfg-name (alist-get :name (gnaw--source-config-entry info)))
+         (entry (or (and name (assoc name m))
+                    (and cfg-name (assoc cfg-name m))
+                    (assq t m))))
     (if entry (cdr entry) 'auto)))
 
 (defun gnaw--gnus-group-for (info)
   "Return the configured Gnus group for report INFO's source, or nil.
 `gnaw-gnus-group' is an alist mapping a source name to its group."
-  (let ((name (plist-get info :source-name)))
-    (and name (cdr (assoc name gnaw-gnus-group)))))
+  (let* ((name (plist-get info :source-name))
+         (cfg-name (alist-get :name (gnaw--source-config-entry info))))
+    (or (and name (cdr (assoc name gnaw-gnus-group)))
+        (and cfg-name (cdr (assoc cfg-name gnaw-gnus-group)))
+        (cdr (assq t gnaw-gnus-group)))))
 
 (defvar gnaw--message-archive-url nil
   "Web archive URL of the message shown in the current buffer.")
@@ -886,11 +910,66 @@ buffer on summary exit."
   (cons (cons key val)
         (assoc-delete-all key (copy-alist (if (listp alist) alist nil)))))
 
-(defun gnaw--known-source-names ()
-  "Return known source names from each source's meta.json."
+(defun gnaw--read-open-message-method ()
+  "Read an open-message method interactively."
+  (intern (completing-read
+           "Open messages with: "
+           gnaw--open-message-method-choices nil t nil nil "auto")))
+
+(defun gnaw--configured-source-names ()
+  "Return source names from config.edn without fetching metadata."
   (delete-dups
-   (delq nil (mapcar (lambda (s) (alist-get 'source (gnaw-source-meta s)))
-                     (gnaw-sources)))))
+   (delq nil (mapcar (lambda (s) (alist-get :name s))
+                     (plist-get (gnaw-load-config) :source-configs)))))
+
+(defun gnaw--save-source-open-method (source method &optional group)
+  "Persist METHOD, and optional Gnus GROUP, for SOURCE via Customize.
+SOURCE is a source name string, or t for the default entry."
+  (customize-save-variable
+   'gnaw-open-message-method
+   (gnaw--alist-put gnaw-open-message-method source method))
+  (when (and (eq method 'gnus) group (not (string-empty-p group)))
+    (customize-save-variable
+     'gnaw-gnus-group
+     (gnaw--alist-put gnaw-gnus-group source group))))
+
+(defun gnaw--known-source-names ()
+  "Return known source names from config.edn and each source's meta.json."
+  (delete-dups
+   (delq nil (append (gnaw--configured-source-names)
+                     (mapcar (lambda (s) (alist-get 'source (gnaw-source-meta s)))
+                             (gnaw-sources))))))
+
+(defun gnaw--read-email-client-source (&optional default)
+  "Read a source name for message opening, or t for the default entry.
+When DEFAULT is non-nil, use it as the default source name."
+  (let* ((names (gnaw--known-source-names))
+         (prompt (if default
+                     (format "Source name (default %s, empty = global default): " default)
+                   "Source name (empty = global default): "))
+         (s (completing-read prompt names nil nil nil nil default)))
+    (if (string-empty-p s) t s)))
+
+;;;###autoload
+(defun gnaw-configure-email-client (source method &optional group)
+  "Configure how SOURCE messages are opened.
+SOURCE is a configured source name, or t for the global default.  METHOD is
+one of `auto', `mua', `gnus', `notmuch', `mu4e' or `web'.  When METHOD is
+`gnus', GROUP stores the Gnus group to search first."
+  (interactive
+   (let* ((source (gnaw--read-email-client-source))
+          (method (gnaw--read-open-message-method))
+          (group (when (eq method 'gnus)
+                   (gnaw--read-gnus-group "Gnus group (empty = ask each time): "))))
+     (list source method group)))
+  (gnaw--save-source-open-method source method group)
+  (message "gnaw: %s messages open with %s%s"
+           (if (eq source t) "all sources" source)
+           method
+           (if (and (eq method 'gnus) group (not (string-empty-p group)))
+               (format " in %s" group)
+             ""))
+  method)
 
 ;;;###autoload
 (defun gnaw-set-source-open-method (source method &optional group)
@@ -898,20 +977,14 @@ buffer on summary exit."
 For Gnus, also store GROUP.  Interactively, complete SOURCE, METHOD and
 \(for Gnus) GROUP, then save with Customize."
   (interactive
-   (let* ((s (completing-read "Source name (empty = default): "
-                              (gnaw--known-source-names) nil nil))
-          (src (if (string-empty-p s) t s))
+   (let* ((src (gnaw--read-email-client-source))
           (m (intern (completing-read
                       "Open with: "
-                      '("auto" "mua" "gnus" "notmuch" "mu4e" "web") nil t)))
+                      gnaw--open-message-method-choices nil t)))
           (g (when (eq m 'gnus)
                (gnaw--read-gnus-group "Gnus group (empty = ask each time): "))))
      (list src m g)))
-  (customize-save-variable 'gnaw-open-message-method
-                           (gnaw--alist-put gnaw-open-message-method source method))
-  (when (and (eq method 'gnus) group (not (string-empty-p group)))
-    (customize-save-variable 'gnaw-gnus-group
-                             (gnaw--alist-put gnaw-gnus-group source group)))
+  (gnaw--save-source-open-method source method group)
   method)
 
 (defun gnaw-read-message (mid info)
@@ -1680,7 +1753,8 @@ URL or the NAME is replaced."
 URLS is a list of reports.json URLs.  Interactively, give a base,
 meta.json or reports.json URL; the report files listed in meta.json's
 `reports-files' are offered for selection (default all-open.json), the
-source NAME (from meta.json) and its local git REPO are requested."
+source NAME (from meta.json) and its local git REPO for patches are
+requested."
   (interactive
    (let* ((input (read-string "Report source URL (base, meta.json or .json): "))
           (_ (when (string-empty-p (string-trim input)) (user-error "No URL given")))
@@ -1690,37 +1764,79 @@ source NAME (from meta.json) and its local git REPO are requested."
           (def (cond ((member "all-open.json" files) "all-open.json")
                      ((member "all.json" files) "all.json")
                      (t (car files))))
-          (chosen (or (completing-read-multiple
-                       (format "Report file(s) (default %s): " def)
-                       files nil t nil nil def)
-                      (list def)))
-          (sname (alist-get 'source meta))
-          (name (read-string
-                 (format "Source name%s: " (if sname (format " (default %s)" sname) ""))
-                 nil nil sname))
-          (repo (when (y-or-n-p "Link a local git repo (for git am)? ")
-                  (expand-file-name (read-directory-name "Git repo: ")))))
+	  (chosen (or (completing-read-multiple
+	               (format "Report file(s) (default %s): " def)
+	               files nil t nil nil def)
+	              (list def)))
+	  (sname (alist-get 'source meta))
+	  (name (read-string
+	         (format "Source name%s: " (if sname (format " (default %s)" sname) ""))
+	         nil nil sname))
+	  (repo (when (y-or-n-p "Link a local git repo (for patches)? ")
+	          (expand-file-name (read-directory-name "Git repo: ")))))
      (list (mapcar (lambda (f) (concat dir f)) chosen) name repo)))
   (let ((urls (if (listp urls) urls (list urls)))
         (name (and name (not (string-empty-p (string-trim name))) name)))
     (unless urls (user-error "No report file selected"))
     (gnaw--write-config (gnaw--config-add-source (gnaw--read-config-raw) urls name repo))
     (message "gnaw: added to config.edn: %s%s"
-             (string-join urls ", ") (if name (format " (%s)" name) ""))
+	     (string-join urls ", ") (if name (format " (%s)" name) ""))
     urls))
 
+(defun gnaw--source-name-for-urls (urls)
+  "Return the configured source name whose URL list intersects URLS."
+  (let* ((urls (if (listp urls) urls (list urls)))
+         (entry (seq-find
+                 (lambda (s) (seq-intersection urls (alist-get :urls s)))
+                 (plist-get (gnaw-load-config) :source-configs))))
+    (alist-get :name entry)))
+
+(defun gnaw--configure-email-client-for-source (source)
+  "Read and save the message-opening setup for SOURCE.
+SOURCE may be a source name string or t for the global default."
+  (let* ((method (gnaw--read-open-message-method))
+         (group (when (eq method 'gnus)
+                  (gnaw--read-gnus-group "Gnus group (empty = ask each time): "))))
+    (gnaw-configure-email-client source method group)))
+
+(defun gnaw--configure-one-source ()
+  "Add one source, then configure how its messages are opened."
+  (let* ((urls (call-interactively #'gnaw-add-source))
+         (source (or (gnaw--source-name-for-urls urls) t)))
+    (gnaw--configure-email-client-for-source source)
+    urls))
+
+;;;###autoload
+(defun gnaw-configure ()
+  "Run interactive gnaw setup.
+This configures a report source, its local patch repository, and the mail
+client used to open report messages.  With existing sources, it can also
+configure only the mail client."
+  (interactive)
+  (let ((added-source nil))
+    (if (gnaw-sources)
+        (if (y-or-n-p "Add or update a report source? ")
+            (progn
+              (gnaw--configure-one-source)
+              (setq added-source t))
+          (call-interactively #'gnaw-configure-email-client))
+      (gnaw--configure-one-source)
+      (setq added-source t))
+    (when added-source
+      (while (y-or-n-p "Add another source? ")
+        (gnaw--configure-one-source)))))
+
 (defun gnaw--setup-sources ()
-  "Interactively add sources to config.edn until the user declines."
-  (while (y-or-n-p (if (gnaw-sources) "Add another source? " "Add a source? "))
-    (call-interactively #'gnaw-add-source)))
+  "Interactively run the full gnaw setup."
+  (gnaw-configure))
 
 ;;;###autoload
 (defun gnaw ()
   "Browse open BONE reports in a tabulated list filling the frame.
-Prompt to add a source when none is configured."
+Prompt for full interactive configuration when no source is configured."
   (interactive)
   (unless (gnaw-sources)
-    (gnaw--setup-sources))
+    (gnaw-configure))
   (let ((buf (get-buffer-create "*gnaw*")))
     (switch-to-buffer buf)
     (delete-other-windows)

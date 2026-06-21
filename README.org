@@ -44,18 +44,23 @@ Update later with =M-x package-vc-upgrade RET gnaw RET=.
 * Getting started
 
 =M-x gnaw= opens the =*gnaw*= report browser, filling the frame.  With
-no source configured, it asks you to add one (and repeats until you
-decline):
+no source configured, it runs the full interactive setup (and repeats for
+additional sources until you decline):
 
 1. a source URL -- a base URL, a =reports/meta.json=, or a
    =reports/...json= file (all resolve to the =reports/= directory);
 2. which report files to track, chosen from =meta.json='s
    =reports-files= (default =all-open.json=; several may be picked);
 3. a source name (defaults to =meta.json='s =:source=);
-4. a local git repository for that source, used by =git am=.
+4. a local git repository for that source, used to apply patches;
+5. how to open report mail (=auto=, =mua=, =gnus=, =notmuch=, =mu4e= or
+   =web=);
+6. when =gnus= is chosen, the Gnus group where the mails are stored.
 
-These are written to =config.edn=.  =M-x gnaw-add-source= does the same
-later on.
+The source and patch repository are written to =config.edn=.  The mail
+client settings are saved through Customize.  =M-x gnaw-configure= reruns
+the full setup later on; =M-x gnaw-add-source= only adds or updates a
+source.
 
 * The =*gnaw*= browser
 
@@ -120,6 +125,8 @@ from =gnaw-gnus-group= (an alist; asked with completion otherwise);
 archive.  =M-x gnaw-set-source-open-method= sets these with completion.
 
 Front-ends set =gnaw-open-message-function= to handle =auto=/=mua=.
+=M-x gnaw-configure-email-client= configures this per source, including
+the Gnus group when =gnus= is selected.
 
 * Applying patches
 
