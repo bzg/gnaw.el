@@ -586,11 +586,11 @@ Persist the new state and return non-nil if ACTION is now on."
   (pcase priority (3 "A") (2 "B") (1 "C") (_ " ")))
 
 (defun gnaw-mark-prefix (entry)
-  "Return the mark character for state ENTRY: `*' sticky, `_' skip."
+  "Return the mark character for state ENTRY: `!' sticky, `s' skipped."
   (let ((flag (cdr (assq :flag entry)))
         (skip (cdr (assq :skip-since entry))))
-    (cond ((eq flag :sticky) "*")
-          (skip              "_")
+    (cond ((eq flag :sticky) "!")
+          (skip              "s")
           (t                 " "))))
 
 (defun gnaw-days-until (date)
@@ -1182,7 +1182,7 @@ the cache.  Buffer-local in use.")
 Set by `gnaw--list-format'; used by `gnaw--mark-sort'.  Buffer-local in use.")
 
 (defface gnaw-sticky '((t :weight bold))
-  "Face for the sticky mark in the report list."
+  "Face for sticky reports in the report list."
   :group 'gnaw)
 
 (defun gnaw--query-text-match (needle hay)
@@ -1424,13 +1424,32 @@ width is recomputed to fill the window by `gnaw--list-format'."
                        (symbol   :tag "Field key")))
   :group 'gnaw)
 
+(defcustom gnaw-list-sort-key '("Created" . t)
+  "Default sort key for `gnaw-list-mode'.
+A cons cell (COLUMN . FLIP) where COLUMN is the header name of a
+column in `gnaw-list-columns' and FLIP non-nil sorts in descending
+order.  The default sorts by creation date, most recent first.  Set
+to nil to keep reports in their natural order.  Within a buffer the
+key can still be changed interactively with \\<gnaw-list-mode-map>\\[tabulated-list-sort]."
+  :type '(choice (const :tag "Natural order" nil)
+                 (cons (string  :tag "Column header")
+                       (boolean :tag "Descending")))
+  :group 'gnaw)
+
+(defcustom gnaw-preset-filters nil
+  "Predefined filter queries for `gnaw-select-preset-filter'.
+A list of query strings in the syntax of `gnaw-list-filter' (for
+example \"type:patch\" or \"pri:A is:urgent\").  When nil, no presets
+are offered."
+  :type '(repeat string)
+  :group 'gnaw)
+
 (defun gnaw--list-cell (key info mid state)
   "Return the display string for column KEY of report MID (INFO, STATE)."
   (pcase key
-    ;; Local mark, one character like the gnaw CLI: * sticky, _ skipped.
-    (:mark (cond ((gnaw-action-on-p state mid :sticky)
-                  (propertize "*" 'face 'gnaw-sticky))
-                 ((gnaw-action-on-p state mid :skip) "_")
+    ;; Local mark, one character: ! sticky, s skipped (hidden).
+    (:mark (cond ((gnaw-action-on-p state mid :sticky) "!")
+                 ((gnaw-action-on-p state mid :skip) "s")
                  (t " ")))
     (:att (if (plist-get info :patches) "+" ""))
     (:priority (gnaw-priority-letter (plist-get info :priority)))
@@ -1448,8 +1467,8 @@ width is recomputed to fill the window by `gnaw--list-format'."
 Skipped hidden: skip < normal < sticky; skipped shown: sticky < normal
 < skip."
   (let ((ch (and (> (length cell) 0) (aref cell 0))))
-    (cond ((eq ch ?*) (if gnaw-list--show-skipped 0 2))
-          ((eq ch ?_) (if gnaw-list--show-skipped 2 0))
+    (cond ((eq ch ?!) (if gnaw-list--show-skipped 0 2))
+          ((eq ch ?s) (if gnaw-list--show-skipped 2 0))
           (t 1))))
 
 (defun gnaw--mark-sort (a b)
@@ -1510,12 +1529,13 @@ list each patch.  The query in `gnaw-list--query' filters the result."
                                 (lambda (mp)
                                   (gnaw--query-match-p qgroups (car mp) (cdr mp)))
                                 (or match-pairs (list pair)))))
-                  (push (list pair
-                              (vconcat
-                               (mapcar (lambda (c)
+                  (let ((cells (mapcar (lambda (c)
                                          (gnaw--list-cell (nth 3 c) (cdr pair) (car pair) state))
                                        cols)))
-                        rows))))
+                    (when (gnaw-action-on-p state (car pair) :sticky)
+                      (setq cells (mapcar (lambda (s) (propertize s 'face 'gnaw-sticky))
+                                          cells)))
+                    (push (list pair (vconcat cells)) rows)))))
       (dolist (p pairs)
         (let ((sid (gnaw--series-id (cdr p))))
           (cond
@@ -1555,9 +1575,10 @@ list each patch.  The query in `gnaw-list--query' filters the result."
     (define-key map "|" #'gnaw-list-filter-clear)
     (define-key map "=" #'gnaw-list-filter-transient)
     (define-key map "t" #'gnaw-list-limit-type)
-    (define-key map "*" #'gnaw-list-toggle-sticky)
-    (define-key map "_" #'gnaw-list-toggle-skip)
-    (define-key map "\\" #'gnaw-list-toggle-skipped)
+    (define-key map "!" #'gnaw-list-toggle-sticky)
+    (define-key map "s" #'gnaw-list-toggle-skip)
+    (define-key map "_" #'gnaw-list-toggle-skipped)
+    (define-key map "\\" #'gnaw-select-preset-filter)
     (define-key map "?" #'describe-mode)
     map)
   "Keymap for `gnaw-list-mode'.")
@@ -1567,7 +1588,10 @@ list each patch.  The query in `gnaw-list--query' filters the result."
 \\<gnaw-list-mode-map>Press \\[describe-mode] for the full list of key bindings."
   (setq tabulated-list-format (gnaw--list-format))
   (setq tabulated-list-padding 1)
-  (setq tabulated-list-sort-key nil)
+  (setq tabulated-list-sort-key
+        (and gnaw-list-sort-key
+             (assoc (car gnaw-list-sort-key) (gnaw--active-columns))
+             gnaw-list-sort-key))
   (tabulated-list-init-header))
 
 (defun gnaw-list-refresh ()
@@ -1685,7 +1709,8 @@ With a prefix argument, clear the active filter without prompting."
     (gnaw-list-refresh)))
 
 (defun gnaw-list-toggle-sticky ()
-  "Toggle the sticky mark (keep visible) on the report at point."
+  "Toggle the sticky mark on the report at point.
+Sticky reports are shown in bold and exported to todo.org by the gnaw CLI."
   (interactive)
   (gnaw-list--toggle :sticky))
 
@@ -1701,6 +1726,15 @@ With a prefix argument, clear the active filter without prompting."
   (gnaw-list-refresh)
   (message "gnaw: skipped reports %s"
            (if gnaw-list--show-skipped "shown" "hidden")))
+
+(defun gnaw-select-preset-filter ()
+  "Apply a filter chosen from `gnaw-preset-filters'.
+Each preset is a query string in the syntax of `gnaw-list-filter'."
+  (interactive)
+  (unless gnaw-preset-filters
+    (user-error "No preset filters defined; customize `gnaw-preset-filters'"))
+  (gnaw-list-filter
+   (completing-read "Preset filter: " gnaw-preset-filters nil t)))
 
 (defun gnaw--resolve-reports-dir (input)
   "Return the reports directory URL (ending in /) for user INPUT.

@@ -64,21 +64,22 @@ source.
 
 * The =*gnaw*= browser
 
-| Key   | Action                                               |
-|-------+------------------------------------------------------|
-| =RET= | open the report's email (see /Reading/ below)        |
+| Key | Action                                               |
+|-----+------------------------------------------------------|
+| =RET= | open the report's email (see /Reading/ below)          |
 | =TAB= | fold / unfold the patch series at point              |
-| =p=   | view the report's patch(es) in =diff-mode=           |
-| =a=   | =git apply= the patch(es) to the source repo tree    |
-| =A=   | =git am= the patch(es) as commits in the source repo |
-| =/=   | filter the list by a query (see /Searching/)         |
-| =\vert=   | clear the active filter (=C-u /= also clears)        |
-| ===   | filter by one field (a =transient= menu)             |
+| =p=   | view the report's patch(es) in =diff-mode=             |
+| =a=   | =git apply= the patch(es) to the source repo tree      |
+| =A=   | =git am= the patch(es) as commits in the source repo   |
+| =/=   | filter the list by a query (see /Searching/)           |
+| =\vert=   | clear the active filter (=C-u /= also clears)          |
+| ===   | filter by one field (a =transient= menu)               |
 | =t=   | limit to a report type (bug, patch, request…)        |
 | =S=   | sort by the column at point; on Mark, by sticky/skip |
-| =*=   | mark sticky: keep visible, shown =*=                 |
-| =_=   | skip: hide the report from the list                  |
-| =\=   | show / hide skipped reports                          |
+| =!=   | mark sticky: bold + exported to todo.org, shown =!=    |
+| =s=   | skip: hide the report from the list, shown =s=         |
+| =_=   | show / hide skipped reports                          |
+| =\=   | apply a preset filter (see =gnaw-preset-filters=)      |
 | =g=   | reload from the local cache                          |
 | =G=   | refresh the remote cache, then reload                |
 
@@ -86,10 +87,11 @@ Patch series are folded into a single row (cover letter or first patch)
 with a status summary like =(2 acked, 1 open)=; =TAB= unfolds the series
 to list each patch, =TAB= again folds it back.
 
-Two mutually exclusive local marks drive the view: *sticky* keeps a
-report visible (shown =*= in the Mark column), *skip* hides it.  Skipped
-reports are hidden by default; =\= reveals them (shown =_=).  Marks live
-in =state.edn=, shared with the gnaw CLI and the front-ends.
+Two mutually exclusive local marks drive the view: *sticky* promotes a
+report (shown =!= in bold in the Mark column, and exported to =todo.org=
+by the gnaw CLI), *skip* hides it.  Skipped reports are hidden by
+default; =_= reveals them (shown =s=).  Marks live in =state.edn=,
+shared with the gnaw CLI and the front-ends.
 
 * Searching
 
@@ -159,6 +161,11 @@ incomplete.  See =*gnaw-git*= for the output; on a failed =git am=, run
   and Gnus group (see /Reading/).
 - =gnaw-apply-repo=: fallback git repo for =git am=.
 - =gnaw-after-update-hook=: run after =M-x gnaw-update=.
+- =gnaw-list-sort-key= (default =("Created" . t)=): default sort column
+  and direction; defaults to creation date, most recent first. Press
+  =S= on a column to re-sort interactively.
+- =gnaw-preset-filters= (default nil): list of predefined filter query
+  strings; =\= prompts to apply one (=gnaw-select-preset-filter=).
 
 * API for front-ends
 
