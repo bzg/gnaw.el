@@ -51,7 +51,7 @@
 ;;   `gnaw'              browse reports (interactive)
 ;;   `gnaw-reports'      collect open reports from all sources
 ;;   `gnaw-update'       force-refresh the local cache (interactive)
-;;   `gnaw-toggle-mark'  toggle :sticky/:skip for a message-id
+;;   `gnaw-toggle-mark'  toggle :sticky/:dismiss for a message-id
 ;;   `gnaw-read-state' / `gnaw-write-state'   state.edn I/O
 ;;   `gnaw-annotation'   fixed-width report annotation for MUA lines
 ;;
@@ -369,9 +369,7 @@ The body is read as raw bytes and decoded as UTF-8."
             (archived-at  (alist-get 'archived-at r))
             (patches      (alist-get 'patches r))
             (series       (alist-get 'series r))
-            (patch-seq    (alist-get 'patch-seq r))
-            (version      (alist-get 'version r))
-            (superseded-by (alist-get 'superseded-by r)))
+            (patch-seq    (alist-get 'patch-seq r)))
         (when (and mid (numberp status) (>= status 4))
           (let ((flags (concat (if acked "A" "-")
                                (if owned "O" "-")
@@ -400,8 +398,6 @@ The body is read as raw bytes and decoded as UTF-8."
                                        :patches patches
                                        :series series
                                        :patch-seq patch-seq
-                                       :version version
-                                       :superseded-by superseded-by
                                        :acked acked
                                        :owned owned
                                        :owned-name owned-name
@@ -471,7 +467,7 @@ Run `gnaw-after-update-hook' when finished."
                            state "\n ")
                 "}\n")))))
 
-;;; Local marks (sticky / skip)
+;;; Local marks (sticky / dismiss)
 
 (defun gnaw--iso-now ()
   "Return the current time as an ISO-8601 UTC string."
@@ -522,42 +518,53 @@ Run `gnaw-after-update-hook' when finished."
     e))
 
 (defun gnaw--apply-transition (state action mid info)
-  "Apply ACTION (:sticky or :skip) for MID in STATE using metadata INFO.
-The two marks are mutually exclusive: :sticky clears a skip and :skip
-clears a flag; re-applying the active mark returns to neutral.  :skip is
-stored as `:skip-since' (the gnaw CLI hides such reports by default)."
+  "Apply ACTION (:sticky or :dismiss) for MID in STATE using metadata INFO.
+The two marks are mutually exclusive: setting one clears the other, and
+re-applying the active mark returns to neutral.  Each mark is stored
+under its own key (`:sticky' or `:dismiss') holding the ISO timestamp at
+which it was set."
   (let* ((base (gnaw--enrich-entry (cdr (assoc mid state)) info))
-         (sticky (eq (alist-get :flag base) :sticky))
-         (skip (and (alist-get :skip-since base) t))
-         (new
-          (pcase action
-            (:sticky (if sticky
-                         (gnaw--alist-dissoc base :flag)
-                       (gnaw--alist-assoc (gnaw--alist-dissoc base :skip-since)
-                                          :flag :sticky)))
-            (:skip (if skip
-                       (gnaw--alist-dissoc base :skip-since)
-                     (gnaw--alist-assoc (gnaw--alist-dissoc base :flag)
-                                        :skip-since (gnaw--iso-now)))))))
-    (if (and (null (alist-get :flag    new))
-             (null (alist-get :skip-since new)))
+         (other (if (eq action :sticky) :dismiss :sticky))
+         (new (if (alist-get action base)
+                  (gnaw--alist-dissoc base action)
+                (gnaw--alist-assoc (gnaw--alist-dissoc base other)
+                                   action (gnaw--iso-now)))))
+    (if (and (null (alist-get :sticky  new))
+             (null (alist-get :dismiss new)))
         (gnaw--state-delete state mid)
       (gnaw--state-put state mid new))))
 
 (defun gnaw-action-on-p (state mid action)
-  "Return non-nil if ACTION (:sticky or :skip) is set for MID in STATE."
+  "Return non-nil if ACTION (:sticky or :dismiss) is set for MID in STATE."
   (let ((entry (cdr (assoc mid state))))
     (pcase action
-      (:sticky (eq (cdr (assq :flag entry)) :sticky))
-      (:skip (and (cdr (assq :skip-since entry)) t)))))
+      (:sticky (and (cdr (assq :sticky entry)) t))
+      (:dismiss (and (cdr (assq :dismiss entry)) t)))))
 
 (defun gnaw-toggle-mark (mid info action)
-  "Toggle ACTION (:sticky or :skip) for MID using metadata INFO.
+  "Toggle ACTION (:sticky or :dismiss) for MID using metadata INFO.
 Persist the new state and return non-nil if ACTION is now on."
   (let* ((state (gnaw-read-state))
          (new   (gnaw--apply-transition state action mid info)))
     (gnaw-write-state new)
     (gnaw-action-on-p new mid action)))
+
+(defun gnaw-remove-marks (mid)
+  "Remove any sticky or dismiss mark for MID, persisting the new state.
+Return non-nil if a mark was actually cleared."
+  (let* ((state (gnaw-read-state))
+         (entry (cdr (assoc mid state))))
+    (when (and entry
+               (or (alist-get :sticky entry)
+                   (alist-get :dismiss entry)))
+      (let ((new (gnaw--alist-dissoc (gnaw--alist-dissoc entry :sticky)
+                                     :dismiss)))
+        (gnaw-write-state
+         (if (and (null (alist-get :sticky new))
+                  (null (alist-get :dismiss new)))
+             (gnaw--state-delete state mid)
+           (gnaw--state-put state mid new))))
+      t)))
 
 ;;; Presentation helpers shared by the MUA front-ends
 
@@ -586,12 +593,12 @@ Persist the new state and return non-nil if ACTION is now on."
   (pcase priority (3 "A") (2 "B") (1 "C") (_ " ")))
 
 (defun gnaw-mark-prefix (entry)
-  "Return the mark character for state ENTRY: `!' sticky, `s' skipped."
-  (let ((flag (cdr (assq :flag entry)))
-        (skip (cdr (assq :skip-since entry))))
-    (cond ((eq flag :sticky) "!")
-          (skip              "s")
-          (t                 " "))))
+  "Return the mark character for state ENTRY: `!' sticky, `d' dismissed."
+  (let ((sticky (cdr (assq :sticky entry)))
+        (dismiss (cdr (assq :dismiss entry))))
+    (cond (sticky  "!")
+          (dismiss "d")
+          (t       " "))))
 
 (defun gnaw-days-until (date)
   "Days from now until YYYY-MM-DD DATE, or nil when DATE is nil or invalid.
@@ -1169,8 +1176,8 @@ HINT is shown on failure."
 (defvar gnaw-list--expanded nil
   "Series ids unfolded in the current `gnaw-list' buffer.  Buffer-local.")
 
-(defvar gnaw-list--show-skipped nil
-  "When non-nil, show reports marked skipped.  Buffer-local in `gnaw-list'.")
+(defvar gnaw-list--show-dismissed nil
+  "When non-nil, show reports marked dismissed.  Buffer-local in `gnaw-list'.")
 
 (defvar gnaw-list--reports nil
   "Cached (MID . INFO) report pairs for the current `gnaw-list' buffer.
@@ -1183,6 +1190,10 @@ Set by `gnaw--list-format'; used by `gnaw--mark-sort'.  Buffer-local in use.")
 
 (defface gnaw-sticky '((t :weight bold))
   "Face for sticky reports in the report list."
+  :group 'gnaw)
+
+(defface gnaw-dismissed '((t :slant italic))
+  "Face for dismissed reports when they are shown in the report list."
   :group 'gnaw)
 
 (defun gnaw--query-text-match (needle hay)
@@ -1439,18 +1450,17 @@ key can still be changed interactively with \\<gnaw-list-mode-map>\\[tabulated-l
 (defcustom gnaw-preset-filters nil
   "Predefined filter queries for `gnaw-select-preset-filter'.
 A list of query strings in the syntax of `gnaw-list-filter' (for
-example \"type:patch\" or \"pri:A is:urgent\").  When nil, no presets
+example \"type:patch\" or \"priority:3 urgent:\").  When nil, no presets
 are offered."
   :type '(repeat string)
   :group 'gnaw)
 
-(defun gnaw--list-cell (key info mid state)
-  "Return the display string for column KEY of report MID (INFO, STATE)."
+(defun gnaw--list-cell (key info entry)
+  "Return the display string for column KEY of a report.
+INFO is the report plist; ENTRY its state.edn alist (used for the mark)."
   (pcase key
-    ;; Local mark, one character: ! sticky, s skipped (hidden).
-    (:mark (cond ((gnaw-action-on-p state mid :sticky) "!")
-                 ((gnaw-action-on-p state mid :skip) "s")
-                 (t " ")))
+    ;; Local mark, one character: ! sticky, d dismissed (hidden).
+    (:mark (gnaw-mark-prefix entry))
     (:att (if (plist-get info :patches) "+" ""))
     (:priority (gnaw-priority-letter (plist-get info :priority)))
     (:date (let ((d (plist-get info :date)))   ; keep the YYYY-MM-DD part only
@@ -1464,11 +1474,11 @@ are offered."
 
 (defun gnaw--mark-rank (cell)
   "Sort rank for a Mark-column CELL string, depending on the view.
-Skipped hidden: skip < normal < sticky; skipped shown: sticky < normal
-< skip."
+Dismissed hidden: dismiss < normal < sticky; dismissed shown: sticky <
+normal < dismiss."
   (let ((ch (and (> (length cell) 0) (aref cell 0))))
-    (cond ((eq ch ?!) (if gnaw-list--show-skipped 0 2))
-          ((eq ch ?s) (if gnaw-list--show-skipped 2 0))
+    (cond ((eq ch ?!) (if gnaw-list--show-dismissed 0 2))
+          ((eq ch ?d) (if gnaw-list--show-dismissed 2 0))
           (t 1))))
 
 (defun gnaw--mark-sort (a b)
@@ -1519,23 +1529,29 @@ list each patch.  The query in `gnaw-list--query' filters the result."
       (let ((sid (gnaw--series-id (cdr p))))
         (when sid (push p (gethash sid groups)))))
     (cl-flet ((row (pair &optional match-pairs)
-                ;; Skip is judged on the displayed PAIR, but the query may
-                ;; match any of MATCH-PAIRS (a folded series stays visible
-                ;; when any of its members matches, not just the row shown).
-                (when (and (or gnaw-list--show-skipped
-                               (not (gnaw-action-on-p state (car pair) :skip)))
-                           (or (null qgroups)
-                               (seq-some
-                                (lambda (mp)
-                                  (gnaw--query-match-p qgroups (car mp) (cdr mp)))
-                                (or match-pairs (list pair)))))
-                  (let ((cells (mapcar (lambda (c)
-                                         (gnaw--list-cell (nth 3 c) (cdr pair) (car pair) state))
-                                       cols)))
-                    (when (gnaw-action-on-p state (car pair) :sticky)
-                      (setq cells (mapcar (lambda (s) (propertize s 'face 'gnaw-sticky))
-                                          cells)))
-                    (push (list pair (vconcat cells)) rows)))))
+                ;; Resolve the state entry once: it drives the dismiss filter,
+                ;; the Mark cell and the row face.  Dismiss is judged on the
+                ;; displayed PAIR, but the query may match any of MATCH-PAIRS
+                ;; (a folded series stays visible when any member matches, not
+                ;; just the row shown).
+                (let* ((entry   (cdr (assoc (car pair) state)))
+                       (sticky  (and (assq :sticky entry) t))
+                       (dismiss (and (assq :dismiss entry) t)))
+                  (when (and (or gnaw-list--show-dismissed (not dismiss))
+                             (or (null qgroups)
+                                 (seq-some
+                                  (lambda (mp)
+                                    (gnaw--query-match-p qgroups (car mp) (cdr mp)))
+                                  (or match-pairs (list pair)))))
+                    (let ((cells (mapcar (lambda (c)
+                                           (gnaw--list-cell (nth 3 c) (cdr pair) entry))
+                                         cols)))
+                      (cond
+                       (sticky  (setq cells (mapcar (lambda (s) (propertize s 'face 'gnaw-sticky))
+                                                    cells)))
+                       (dismiss (setq cells (mapcar (lambda (s) (propertize s 'face 'gnaw-dismissed))
+                                                    cells))))
+                      (push (list pair (vconcat cells)) rows))))))
       (dolist (p pairs)
         (let ((sid (gnaw--series-id (cdr p))))
           (cond
@@ -1576,8 +1592,10 @@ list each patch.  The query in `gnaw-list--query' filters the result."
     (define-key map "=" #'gnaw-list-filter-transient)
     (define-key map "t" #'gnaw-list-limit-type)
     (define-key map "!" #'gnaw-list-toggle-sticky)
-    (define-key map "s" #'gnaw-list-toggle-skip)
-    (define-key map "_" #'gnaw-list-toggle-skipped)
+    (define-key map "d" #'gnaw-list-toggle-dismiss)
+    (define-key map "u" #'gnaw-list-remove-marks)
+    (define-key map "o" #'gnaw-sort)
+    (define-key map "_" #'gnaw-list-toggle-dismissed)
     (define-key map "\\" #'gnaw-select-preset-filter)
     (define-key map "?" #'describe-mode)
     map)
@@ -1598,13 +1616,19 @@ list each patch.  The query in `gnaw-list--query' filters the result."
   "Re-render the list from the in-memory reports and current state.
 Does not re-read the report cache; use `gnaw-list-reload' for that."
   (interactive)
-  (setq tabulated-list-format (gnaw--list-format))
-  (tabulated-list-init-header)
-  (setq mode-line-process (and gnaw-list--query
-                               (format " [%s]" gnaw-list--query)))
-  (setq tabulated-list-entries (gnaw--list-entries))
-  (tabulated-list-print t)
-  (force-mode-line-update))
+  ;; `tabulated-list-print' erases and reprints the whole buffer, losing the
+  ;; window's scroll position; restoring `window-start' avoids a C-l-like
+  ;; recenter on in-place refreshes (e.g. toggling a mark).  NOFORCE lets
+  ;; redisplay pick a new start should point fall off-screen.
+  (let ((start (window-start)))
+    (setq tabulated-list-format (gnaw--list-format))
+    (tabulated-list-init-header)
+    (setq mode-line-process (and gnaw-list--query
+                                 (format " [%s]" gnaw-list--query)))
+    (setq tabulated-list-entries (gnaw--list-entries))
+    (tabulated-list-print t)
+    (force-mode-line-update)
+    (set-window-start (selected-window) start t)))
 
 (defun gnaw-list-reload ()
   "Re-read reports from the local cache, then re-render."
@@ -1690,17 +1714,25 @@ With a prefix argument, clear the active filter without prompting."
     (gnaw-list-refresh)
     ;; Return to the same report; if it is gone (folded from a sub-patch),
     ;; fall back to the series' representative row.
-    (goto-char (point-min))
-    (while (and (not (eobp))
-                (let ((p (tabulated-list-get-id)))
-                  (not (and p (equal (car p) mid)))))
-      (forward-line 1))
-    (when (eobp)
+    (unless (gnaw-list--goto-mid mid)
       (goto-char (point-min))
       (while (and (not (eobp))
                   (let ((p (tabulated-list-get-id)))
                     (not (and p (equal (gnaw--series-id (cdr p)) sid)))))
         (forward-line 1)))))
+
+(defun gnaw-list--goto-mid (mid)
+  "Move point to the row whose report id is MID.
+Return non-nil when such a row exists, leaving point on it; otherwise
+leave point at the end of the buffer and return nil."
+  (goto-char (point-min))
+  (let (found)
+    (while (and (not found) (not (eobp)))
+      (let ((p (tabulated-list-get-id)))
+        (if (and p (equal (car p) mid))
+            (setq found t)
+          (forward-line 1))))
+    found))
 
 (defun gnaw-list--toggle (action)
   "Toggle local mark ACTION on the report at point, then refresh."
@@ -1714,18 +1746,127 @@ Sticky reports are shown in bold and exported to todo.org by the gnaw CLI."
   (interactive)
   (gnaw-list--toggle :sticky))
 
-(defun gnaw-list-toggle-skip ()
-  "Toggle the skip mark (hide) on the report at point."
+(defun gnaw-list-toggle-dismiss ()
+  "Toggle the dismiss mark (hide) on the report at point.
+Afterwards move to the following report, so a run of reports can be
+dismissed without chasing point: when dismissed rows are hidden the
+acted-on row is gone and the next one slides up; when they are shown
+point simply advances past it."
   (interactive)
-  (gnaw-list--toggle :skip))
+  (let* ((p (gnaw-list--current))
+         (next (save-excursion
+                 (forward-line 1)
+                 (car (tabulated-list-get-id)))))
+    (gnaw-toggle-mark (car p) (cdr p) :dismiss)
+    (gnaw-list-refresh)
+    ;; Land on the report that followed; if it is gone too, fall back to the
+    ;; acted-on row (still there when dismissed rows are shown).
+    (unless (and next (gnaw-list--goto-mid next))
+      (gnaw-list--goto-mid (car p)))))
 
-(defun gnaw-list-toggle-skipped ()
-  "Toggle whether skipped reports are shown."
+(defun gnaw-list-remove-marks ()
+  "Remove the sticky or dismiss mark from the report at point, then refresh."
   (interactive)
-  (setq-local gnaw-list--show-skipped (not gnaw-list--show-skipped))
+  (let ((p (gnaw-list--current)))
+    (if (gnaw-remove-marks (car p))
+        (gnaw-list-refresh)
+      (message "gnaw: no mark on this report"))))
+
+(defun gnaw-list-toggle-dismissed ()
+  "Toggle whether dismissed reports are shown."
+  (interactive)
+  (setq-local gnaw-list--show-dismissed (not gnaw-list--show-dismissed))
   (gnaw-list-refresh)
-  (message "gnaw: skipped reports %s"
-           (if gnaw-list--show-skipped "shown" "hidden")))
+  (message "gnaw: dismissed reports %s"
+           (if gnaw-list--show-dismissed "shown" "hidden")))
+
+(defun gnaw-list--sort (column default-descending flip)
+  "Sort the report list by COLUMN, a header string in `gnaw-list-columns'.
+DEFAULT-DESCENDING is the natural direction for that column; a non-nil
+FLIP (typically the raw prefix argument) reverses it.  Refresh after."
+  (unless (derived-mode-p 'gnaw-list-mode)
+    (user-error "Not in a gnaw report list"))
+  (unless (assoc column (gnaw--active-columns))
+    (user-error "The %s column is not currently shown" column))
+  (setq-local tabulated-list-sort-key
+              (cons column (if flip (not default-descending) default-descending)))
+  (gnaw-list-refresh)
+  (message "gnaw: sorted by %s (%s)" column
+           (if (cdr tabulated-list-sort-key) "descending" "ascending")))
+
+(defun gnaw-sort-by-date (&optional flip)
+  "Sort the report list by creation date, most recent first.
+With a prefix argument FLIP, sort oldest first."
+  (interactive "P")
+  (gnaw-list--sort "Created" t flip))
+
+(defun gnaw-sort-by-activity (&optional flip)
+  "Sort the report list by last activity, most recent first.
+With a prefix argument FLIP, reverse the order."
+  (interactive "P")
+  (gnaw-list--sort "Activity" t flip))
+
+(defun gnaw-sort-by-author (&optional flip)
+  "Sort the report list by author name, A to Z.
+With a prefix argument FLIP, reverse the order."
+  (interactive "P")
+  (gnaw-list--sort "From" nil flip))
+
+(defun gnaw-sort-by-subject (&optional flip)
+  "Sort the report list by subject, A to Z.
+With a prefix argument FLIP, reverse the order."
+  (interactive "P")
+  (gnaw-list--sort "Subject" nil flip))
+
+(defun gnaw-sort-by-type (&optional flip)
+  "Sort the report list by report type.
+With a prefix argument FLIP, reverse the order."
+  (interactive "P")
+  (gnaw-list--sort "Type" nil flip))
+
+(defun gnaw-sort-by-topic (&optional flip)
+  "Sort the report list by topic, A to Z.
+With a prefix argument FLIP, reverse the order."
+  (interactive "P")
+  (gnaw-list--sort "Topic" nil flip))
+
+(defun gnaw-sort-by-priority (&optional flip)
+  "Sort the report list by priority, highest first.
+With a prefix argument FLIP, reverse the order."
+  (interactive "P")
+  (gnaw-list--sort "Pri" t flip))
+
+(defun gnaw-sort-by-votes (&optional flip)
+  "Sort the report list by vote count, highest first.
+With a prefix argument FLIP, reverse the order."
+  (interactive "P")
+  (gnaw-list--sort "Votes" t flip))
+
+(defun gnaw-sort-by-mark (&optional flip)
+  "Sort the report list by local mark (sticky, then normal, then dismissed).
+With a prefix argument FLIP, reverse the order."
+  (interactive "P")
+  (gnaw-list--sort "Mark" nil flip))
+
+(defconst gnaw-sort-commands
+  '(("date"     . gnaw-sort-by-date)
+    ("activity" . gnaw-sort-by-activity)
+    ("author"   . gnaw-sort-by-author)
+    ("subject"  . gnaw-sort-by-subject)
+    ("type"     . gnaw-sort-by-type)
+    ("topic"    . gnaw-sort-by-topic)
+    ("priority" . gnaw-sort-by-priority)
+    ("votes"    . gnaw-sort-by-votes)
+    ("mark"     . gnaw-sort-by-mark))
+  "Alist of criterion names to `gnaw-sort-by-*' commands, used by `gnaw-sort'.")
+
+(defun gnaw-sort ()
+  "Sort the report list by a criterion chosen interactively.
+Dispatch to the matching `gnaw-sort-by-*' command; a prefix argument is
+forwarded to it to reverse the natural order."
+  (interactive)
+  (let ((name (completing-read "Sort by: " gnaw-sort-commands nil t)))
+    (call-interactively (cdr (assoc name gnaw-sort-commands)))))
 
 (defun gnaw-select-preset-filter ()
   "Apply a filter chosen from `gnaw-preset-filters'.
@@ -1798,23 +1939,23 @@ requested."
           (def (cond ((member "all-open.json" files) "all-open.json")
                      ((member "all.json" files) "all.json")
                      (t (car files))))
-	  (chosen (or (completing-read-multiple
-	               (format "Report file(s) (default %s): " def)
-	               files nil t nil nil def)
-	              (list def)))
-	  (sname (alist-get 'source meta))
-	  (name (read-string
-	         (format "Source name%s: " (if sname (format " (default %s)" sname) ""))
-	         nil nil sname))
-	  (repo (when (y-or-n-p "Link a local git repo (for patches)? ")
-	          (expand-file-name (read-directory-name "Git repo: ")))))
+          (chosen (or (completing-read-multiple
+                       (format "Report file(s) (default %s): " def)
+                       files nil t nil nil def)
+                      (list def)))
+          (sname (alist-get 'source meta))
+          (name (read-string
+                 (format "Source name%s: " (if sname (format " (default %s)" sname) ""))
+                 nil nil sname))
+          (repo (when (y-or-n-p "Link a local git repo (for patches)? ")
+                  (expand-file-name (read-directory-name "Git repo: ")))))
      (list (mapcar (lambda (f) (concat dir f)) chosen) name repo)))
   (let ((urls (if (listp urls) urls (list urls)))
         (name (and name (not (string-empty-p (string-trim name))) name)))
     (unless urls (user-error "No report file selected"))
     (gnaw--write-config (gnaw--config-add-source (gnaw--read-config-raw) urls name repo))
     (message "gnaw: added to config.edn: %s%s"
-	     (string-join urls ", ") (if name (format " (%s)" name) ""))
+             (string-join urls ", ") (if name (format " (%s)" name) ""))
     urls))
 
 (defun gnaw--source-name-for-urls (urls)
@@ -1859,10 +2000,6 @@ configure only the mail client."
     (when added-source
       (while (y-or-n-p "Add another source? ")
         (gnaw--configure-one-source)))))
-
-(defun gnaw--setup-sources ()
-  "Interactively run the full gnaw setup."
-  (gnaw-configure))
 
 ;;;###autoload
 (defun gnaw ()
