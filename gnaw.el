@@ -120,9 +120,13 @@ Front-ends can use this to re-apply their display."
     (intern (buffer-substring-no-properties start (point)))))
 
 (defun gnaw-edn--read-symbol ()
-  "Read an EDN symbol at point."
+  "Read an EDN symbol at point.
+Signal an error on a character that starts no known EDN value (such
+as dispatch forms like #inst), which would otherwise loop forever."
   (let ((start (point)))
     (skip-chars-forward "a-zA-Z0-9._/?!+*<>=&%$-")
+    (when (= (point) start)
+      (error "EDN: unexpected character %c" (char-after)))
     (pcase (buffer-substring-no-properties start (point))
       ("nil"   nil)
       ("true"  t)
@@ -190,6 +194,36 @@ Return nil on parse failure or when no map is present."
   (when (eq (char-after) ?\{)
     (gnaw-edn--read-map)))
 
+(defun gnaw--read-edn-file (file)
+  "Read FILE and return its top-level EDN map, or nil.
+Return nil when FILE is unreadable or does not parse, reporting parse
+errors as a message."
+  (when (file-readable-p file)
+    (condition-case err
+        (with-temp-buffer
+          (insert-file-contents file)
+          (gnaw-edn-read-buffer))
+      (error
+       (message "gnaw: cannot parse %s: %s" file (error-message-string err))
+       nil))))
+
+(defun gnaw--read-edn-map-or-signal (file)
+  "Return FILE's top-level EDN map, or nil when FILE is missing or empty.
+Unlike `gnaw--read-edn-file', signal a `user-error' when FILE exists
+but cannot be parsed: callers rewrite FILE, and a state derived from a
+misread file would silently drop its existing contents."
+  (when (file-readable-p file)
+    (condition-case err
+        (with-temp-buffer
+          (insert-file-contents file)
+          (goto-char (point-min))
+          (gnaw-edn--skip-ws)
+          (cond ((eobp) nil)
+                ((eq (char-after) ?\{) (gnaw-edn--read-map))
+                (t (error "Not an EDN map"))))
+      (error (user-error "Not updating unreadable %s (%s)"
+                         file (error-message-string err))))))
+
 ;;; Configuration and report sources
 
 (defun gnaw--uri-to-path (uri)
@@ -199,29 +233,18 @@ Return nil on parse failure or when no map is present."
     uri))
 
 (defvar gnaw--config-cache nil
-  "Cons (MTIME . PLIST) caching the last `gnaw-load-config' result.
-Invalidated when config.edn's modification time changes or when
-`gnaw--write-config' rewrites it.")
+  "Cons (MTIME . PLIST) caching the last `gnaw-load-config' result.")
 
 (defun gnaw-load-config ()
   "Load `config.edn' and return a plist.
 Keys: :addresses :skip-columns :source-configs (raw `:sources' maps)
-and :sources (their URLs).  The result is cached and reused while
-config.edn is unchanged, since a single list refresh queries it
-several times."
+and :sources (their URLs).  The result is cached until config.edn
+changes."
   (let* ((file (expand-file-name "config.edn" gnaw-config-dir))
          (mtime (file-attribute-modification-time (file-attributes file))))
     (if (and gnaw--config-cache (equal (car gnaw--config-cache) mtime))
         (cdr gnaw--config-cache)
-      (let* ((cfg (when (file-readable-p file)
-                    (condition-case err
-                        (with-temp-buffer
-                          (insert-file-contents file)
-                          (gnaw-edn-read-buffer))
-                      (error
-                       (message "gnaw: cannot parse %s: %s"
-                                file (error-message-string err))
-                       nil))))
+      (let* ((cfg (gnaw--read-edn-file file))
              (addresses (alist-get :my-addresses cfg))
              (skip      (alist-get :skip-columns cfg))
              (src-cfgs  (alist-get :sources cfg))
@@ -251,20 +274,23 @@ relative ones resolved against `gnaw-config-dir'."
     (expand-file-name (gnaw--uri-to-path source)
                       (expand-file-name gnaw-config-dir))))
 
+(defun gnaw--source-config-entry (info)
+  "Return the config.edn source entry matching report INFO, or nil.
+Matched by URL or by `:name'."
+  (let ((url  (plist-get info :source))
+        (name (plist-get info :source-name)))
+    (seq-find
+     (lambda (s)
+       (or (and url (member url (mapcar #'gnaw--resolve-source
+                                        (alist-get :urls s))))
+           (and name (equal name (alist-get :name s)))))
+     (plist-get (gnaw-load-config) :source-configs))))
+
 (defun gnaw--source-repo (info)
   "Return the local git repo for report INFO's source, or nil.
-Reads `:repo' from the matching config.edn `:sources' entry, matched by
-URL or by `:name'."
-  (let* ((url  (plist-get info :source))
-         (name (plist-get info :source-name))
-         (entry (seq-find
-                 (lambda (s)
-                   (or (and url (member url (mapcar #'gnaw--resolve-source
-                                                    (alist-get :urls s))))
-                       (and name (equal name (alist-get :name s)))))
-                 (plist-get (gnaw-load-config) :source-configs))))
-    (when-let* ((repo (alist-get :repo entry)))
-      (expand-file-name repo))))
+Reads `:repo' from the matching config.edn `:sources' entry."
+  (when-let* ((repo (alist-get :repo (gnaw--source-config-entry info))))
+    (expand-file-name repo)))
 
 (defun gnaw--java-hash (str)
   "Calculate Java String hashCode of STR as an unsigned 32-bit integer."
@@ -283,9 +309,9 @@ URL or by `:name'."
      (concat "cache/reports/" prefix "-" h ".json")
      gnaw-config-dir)))
 
-(defun gnaw--http-body (url &optional binary)
-  "Return the HTTP body of URL.  Read raw bytes when BINARY is non-nil."
-  (let* ((coding-system-for-read (if binary 'binary coding-system-for-read))
+(defun gnaw--http-body (url)
+  "Return the raw HTTP body bytes of URL."
+  (let* ((coding-system-for-read 'binary)
          (buf (url-retrieve-synchronously url t)))
     (unless buf (error "Failed to fetch %s" url))
     (unwind-protect
@@ -307,7 +333,7 @@ The body is read as raw bytes and decoded as UTF-8."
         (json-key-type 'symbol)
         (json-false nil))
     (json-read-from-string
-     (decode-coding-string (gnaw--http-body url t) 'utf-8))))
+     (decode-coding-string (gnaw--http-body url) 'utf-8))))
 
 (defun gnaw--write-json-to-file (data file)
   "Write JSON DATA to FILE as UTF-8."
@@ -338,7 +364,9 @@ The body is read as raw bytes and decoded as UTF-8."
     (concat "<" mid ">")))
 
 (defun gnaw--extract-open-reports (source)
-  "Extract open reports from SOURCE as (MID . INFO) pairs."
+  "Extract published reports from SOURCE as (MID . INFO) pairs.
+A report is kept when its status is at least 4, which includes closed
+reports (flags R, C, E or S) still present in reports.json."
   (let* ((data (gnaw--read-json source))
          (fv (alist-get 'bone-format data))
          (sname (alist-get 'source data))
@@ -441,31 +469,35 @@ Run `gnaw-after-update-hook' when finished."
 
 (defun gnaw-read-state ()
   "Read and return the gnaw state alist, or nil."
-  (let ((file (expand-file-name "state.edn" gnaw-config-dir)))
-    (when (file-readable-p file)
-      (condition-case err
-          (with-temp-buffer
-            (insert-file-contents file)
-            (gnaw-edn-read-buffer))
-        (error
-         (message "gnaw: cannot parse %s: %s"
-                  file (error-message-string err))
-         nil)))))
+  (gnaw--read-edn-file (expand-file-name "state.edn" gnaw-config-dir)))
+
+(defun gnaw--read-state-for-update ()
+  "Return the state alist for a read-modify-write cycle.
+Unlike `gnaw-read-state', signal a `user-error' when state.edn exists
+but cannot be parsed: writing a state derived from a misread file
+would silently drop every existing mark, including the gnaw CLI's."
+  (gnaw--read-edn-map-or-signal
+   (expand-file-name "state.edn" gnaw-config-dir)))
 
 (defun gnaw-write-state (state)
-  "Write STATE to the state file as UTF-8, one entry per line."
-  (let ((file (expand-file-name "state.edn" gnaw-config-dir))
-        (coding-system-for-write 'utf-8))
+  "Write STATE to the state file as UTF-8, one entry per line.
+Write to a temporary sibling then rename it, so the gnaw CLI, which
+shares the file, never reads a half-written state.edn."
+  (let* ((file (expand-file-name "state.edn" gnaw-config-dir))
+         (coding-system-for-write 'utf-8))
     (make-directory (file-name-directory file) t)
-    (with-temp-file file
-      (if (null state)
-          (insert "{}\n")
-        (insert "{"
-                (mapconcat (lambda (kv)
-                             (concat (gnaw--edn-write (car kv)) " "
-                                     (gnaw--edn-write (cdr kv))))
-                           state "\n ")
-                "}\n")))))
+    (let ((tmp (make-temp-file (concat file ".tmp"))))
+      (with-temp-file tmp
+        (if (null state)
+            (insert "{}\n")
+          (insert "{"
+                  (mapconcat (lambda (kv)
+                               (concat (gnaw--edn-write (car kv)) " "
+                                       (gnaw--edn-write (cdr kv))))
+                             state "\n ")
+                  "}\n")))
+      (set-file-modes tmp (or (file-modes file) #o644))
+      (rename-file tmp file t))))
 
 ;;; Local marks (sticky / dismiss)
 
@@ -474,13 +506,14 @@ Run `gnaw-after-update-hook' when finished."
   (format-time-string "%Y-%m-%dT%H:%M:%S.%6NZ" nil t))
 
 (defun gnaw--author-string (info)
-  "Build author string from INFO."
+  "Build author string from INFO, or nil when it has no usable field."
   (let ((n (plist-get info :from-name))
         (e (plist-get info :from)))
-    (cond
-     ((and n e (not (string= n ""))) (concat n " <" e ">"))
-     (e e)
-     (n n))))
+    (when (equal n "") (setq n nil))
+    (when (equal e "") (setq e nil))
+    (cond ((and n e) (concat n " <" e ">"))
+          (e e)
+          (n n))))
 
 (defun gnaw--enrich-entry (existing info)
   "Refresh metadata from INFO in EXISTING state entry."
@@ -517,20 +550,29 @@ Run `gnaw-after-update-hook' when finished."
     (setf (alist-get key e) value)
     e))
 
+(defconst gnaw--own-entry-keys '(:sticky :dismiss :subject :type :created :author)
+  "State entry keys written by gnaw.el; any other key belongs to the CLI.")
+
+(defun gnaw--entry-removable-p (entry)
+  "Non-nil when state ENTRY holds no mark and no key foreign to gnaw.el.
+Entries with foreign keys (such as the CLI's `:skip-since') must
+survive mark removal."
+  (and (null (alist-get :sticky entry))
+       (null (alist-get :dismiss entry))
+       (cl-every (lambda (kv) (memq (car kv) gnaw--own-entry-keys)) entry)))
+
 (defun gnaw--apply-transition (state action mid info)
   "Apply ACTION (:sticky or :dismiss) for MID in STATE using metadata INFO.
-The two marks are mutually exclusive: setting one clears the other, and
-re-applying the active mark returns to neutral.  Each mark is stored
-under its own key (`:sticky' or `:dismiss') holding the ISO timestamp at
-which it was set."
+The marks are mutually exclusive: setting one clears the other, and
+re-applying the active mark returns to neutral.  Each mark holds the
+ISO timestamp at which it was set."
   (let* ((base (gnaw--enrich-entry (cdr (assoc mid state)) info))
          (other (if (eq action :sticky) :dismiss :sticky))
          (new (if (alist-get action base)
                   (gnaw--alist-dissoc base action)
                 (gnaw--alist-assoc (gnaw--alist-dissoc base other)
                                    action (gnaw--iso-now)))))
-    (if (and (null (alist-get :sticky  new))
-             (null (alist-get :dismiss new)))
+    (if (gnaw--entry-removable-p new)
         (gnaw--state-delete state mid)
       (gnaw--state-put state mid new))))
 
@@ -544,7 +586,7 @@ which it was set."
 (defun gnaw-toggle-mark (mid info action)
   "Toggle ACTION (:sticky or :dismiss) for MID using metadata INFO.
 Persist the new state and return non-nil if ACTION is now on."
-  (let* ((state (gnaw-read-state))
+  (let* ((state (gnaw--read-state-for-update))
          (new   (gnaw--apply-transition state action mid info)))
     (gnaw-write-state new)
     (gnaw-action-on-p new mid action)))
@@ -552,7 +594,7 @@ Persist the new state and return non-nil if ACTION is now on."
 (defun gnaw-remove-marks (mid)
   "Remove any sticky or dismiss mark for MID, persisting the new state.
 Return non-nil if a mark was actually cleared."
-  (let* ((state (gnaw-read-state))
+  (let* ((state (gnaw--read-state-for-update))
          (entry (cdr (assoc mid state))))
     (when (and entry
                (or (alist-get :sticky entry)
@@ -560,8 +602,7 @@ Return non-nil if a mark was actually cleared."
       (let ((new (gnaw--alist-dissoc (gnaw--alist-dissoc entry :sticky)
                                      :dismiss)))
         (gnaw-write-state
-         (if (and (null (alist-get :sticky new))
-                  (null (alist-get :dismiss new)))
+         (if (gnaw--entry-removable-p new)
              (gnaw--state-delete state mid)
            (gnaw--state-put state mid new))))
       t)))
@@ -601,9 +642,7 @@ Return non-nil if a mark was actually cleared."
           (t       " "))))
 
 (defun gnaw-days-until (date)
-  "Days from now until YYYY-MM-DD DATE, or nil when DATE is nil or invalid.
-A malformed DATE returns nil rather than signaling, since this feeds the
-per-line annotation rendered by the MUA front-ends."
+  "Days from now until YYYY-MM-DD DATE, or nil when DATE is nil or invalid."
   (when date
     (ignore-errors
       (let* ((d (date-to-time (concat date " 00:00:00")))
@@ -648,7 +687,7 @@ Columns: local mark, type letter, flags, priority letter, deadline
 
 (defun gnaw--fetch-url-to-file (url file)
   "Fetch URL synchronously and write its raw body bytes to FILE."
-  (let ((body (gnaw--http-body url t)))
+  (let ((body (gnaw--http-body url)))
     (make-directory (file-name-directory file) t)
     (let ((coding-system-for-write 'no-conversion))
       (with-temp-file file
@@ -668,9 +707,8 @@ Columns: local mark, type letter, flags, priority letter, deadline
 
 (defun gnaw--sanitize-path-component (s)
   "Return S reduced to a single safe path component, or nil.
-Strips any directory part and rejects empty or `.'/`..' names, so an
-attacker-supplied value from a remote reports.json cannot escape the
-cache directory via path traversal."
+Strips any directory part and rejects empty, `.' and `..' names, so
+remote reports.json values cannot escape the cache via path traversal."
   (let ((base (and s (file-name-nondirectory s))))
     (and base (not (member base '("" "." ".."))) base)))
 
@@ -698,13 +736,12 @@ PATCH is an entry of the report `:patches' list."
 
 (defcustom gnaw-open-message-method '((t . auto))
   "How `gnaw-read-message' opens a report's email, per source.
-An alist mapping a source name to a method; the entry keyed by t is the
-default for sources not listed.  A source name is BONE's source, the
-`:name' of a `:sources' entry in config.edn.  Methods: `auto' uses
-`gnaw-open-message-function' if set, else the web archive; `mua' forces
-that function; `gnus', `notmuch' and `mu4e' open in that MUA by
-message-id (Gnus also reads `gnaw-gnus-group'); `web' forces the web
-archive."
+An alist mapping a source name (the `:name' of a config.edn `:sources'
+entry) to a method; the entry keyed by t is the default.  Methods:
+`auto' uses `gnaw-open-message-function' if set, else the web archive;
+`mua' forces that function; `gnus', `notmuch' and `mu4e' open in that
+MUA by message-id (Gnus also reads `gnaw-gnus-group'); `web' forces
+the web archive."
   :type '(alist :key-type (choice (const :tag "Default (any source)" t)
                                   (string :tag "Source name"))
                 :value-type (choice (const :tag "Auto" auto)
@@ -717,9 +754,8 @@ archive."
 
 (defcustom gnaw-gnus-group nil
   "Alist mapping a source name to the Gnus group holding its mails.
-Used by the `gnus' open method.  The key t stores the default group.  For
-a source not listed, the default group is used before falling back to the
-Gnus registry or asking with completion."
+Used by the `gnus' open method; the entry keyed by t is the default.
+Without a group, the Gnus registry is tried, then completion."
   :type '(alist :key-type (choice (const :tag "Default (any source)" t)
                                   (string :tag "Source name"))
                 :value-type (string :tag "Gnus group"))
@@ -732,17 +768,6 @@ Gnus registry or asking with completion."
   '("auto" "mua" "gnus" "notmuch" "mu4e" "web")
   "Open-message methods offered during interactive configuration.")
 
-(defun gnaw--source-config-entry (info)
-  "Return the config.edn source entry matching report INFO, or nil."
-  (let ((url  (plist-get info :source))
-        (name (plist-get info :source-name)))
-    (seq-find
-     (lambda (s)
-       (or (and url (member url (mapcar #'gnaw--resolve-source
-                                        (alist-get :urls s))))
-           (and name (equal name (alist-get :name s)))))
-     (plist-get (gnaw-load-config) :source-configs))))
-
 (defun gnaw--method-for (info)
   "Return the open method for report INFO's source."
   (let* ((m gnaw-open-message-method)
@@ -754,15 +779,14 @@ Gnus registry or asking with completion."
     (if entry (cdr entry) 'auto)))
 
 (defun gnaw--gnus-group-for (info)
-  "Return the configured Gnus group for report INFO's source, or nil.
-`gnaw-gnus-group' is an alist mapping a source name to its group."
+  "Return the `gnaw-gnus-group' entry for report INFO's source, or nil."
   (let* ((name (plist-get info :source-name))
          (cfg-name (alist-get :name (gnaw--source-config-entry info))))
     (or (and name (cdr (assoc name gnaw-gnus-group)))
         (and cfg-name (cdr (assoc cfg-name gnaw-gnus-group)))
         (cdr (assq t gnaw-gnus-group)))))
 
-(defvar gnaw--message-archive-url nil
+(defvar-local gnaw--message-archive-url nil
   "Web archive URL of the message shown in the current buffer.")
 
 (defun gnaw--strip-mid (mid)
@@ -830,7 +854,8 @@ and charset; multipart bodies are decoded as UTF-8."
   "Fetch and display the message for MID using INFO, decoded for reading."
   (let ((url (gnaw-message-archive-url mid info)))
     (unless url (error "No web archive URL for %s" mid))
-    (let ((raw (gnaw--http-body (concat url "/raw") t)))
+    (let ((raw (gnaw--http-body
+                (concat (replace-regexp-in-string "/+\\'" "" url) "/raw"))))
       (with-current-buffer (get-buffer-create "*gnaw-message*")
         (let ((inhibit-read-only t))
           (erase-buffer)
@@ -874,9 +899,8 @@ Start Gnus first when needed so the group list is populated."
 
 (defun gnaw--show-message-gnus (mid info)
   "Open MID in Gnus using INFO's source group, the registry, or a prompt.
-Enter the group reading a single article (avoiding a full fetch of a
-large group), then select MID by its message-id; return to the calling
-buffer on summary exit."
+Enter the group limited to one article, select MID by message-id, and
+return to the calling buffer on summary exit."
   (require 'gnus)
   (let ((origin (current-buffer)))
     (unless (gnus-alive-p) (gnus))
@@ -978,22 +1002,6 @@ one of `auto', `mua', `gnus', `notmuch', `mu4e' or `web'.  When METHOD is
              ""))
   method)
 
-;;;###autoload
-(defun gnaw-set-source-open-method (source method &optional group)
-  "Set the open METHOD for SOURCE (a source name, or t for the default).
-For Gnus, also store GROUP.  Interactively, complete SOURCE, METHOD and
-\(for Gnus) GROUP, then save with Customize."
-  (interactive
-   (let* ((src (gnaw--read-email-client-source))
-          (m (intern (completing-read
-                      "Open with: "
-                      gnaw--open-message-method-choices nil t)))
-          (g (when (eq m 'gnus)
-               (gnaw--read-gnus-group "Gnus group (empty = ask each time): "))))
-     (list src m g)))
-  (gnaw--save-source-open-method source method group)
-  method)
-
 (defun gnaw-read-message (mid info)
   "Open the email for MID using INFO per `gnaw-open-message-method'."
   (pcase (gnaw--method-for info)
@@ -1012,33 +1020,29 @@ For Gnus, also store GROUP.  Interactively, complete SOURCE, METHOD and
 
 (defcustom gnaw-apply-repo nil
   "Fallback git repository for `gnaw-apply-patches'.
-A source's `:repo' in config.edn takes precedence; this is used only
-when the source has none, before asking interactively."
+Used when the source has no `:repo' in config.edn, before asking."
   :type '(choice (const :tag "Ask each time" nil) directory)
   :group 'gnaw)
 
 (defcustom gnaw-git-apply-options '("--3way")
   "Extra arguments passed to `git apply' by `gnaw-apply-patches'.
-The default `--3way' falls back to a 3-way merge when a patch does not
-apply cleanly (which may leave conflict markers to resolve) instead of
-failing outright.  Another useful value is \"--whitespace=fix\"."
+The default `--3way' 3-way-merges patches that do not apply cleanly
+\(possibly leaving conflict markers) instead of failing outright."
   :type '(repeat string)
   :group 'gnaw)
 
 (defcustom gnaw-git-am-options '("--3way")
   "Extra arguments passed to `git am' by `gnaw-am-patches'.
-The default `--3way' falls back to a 3-way merge when a patch does not
-apply cleanly (leaving conflict markers to resolve) instead of failing
-outright.  Other useful values include \"--signoff\" or \"--whitespace=fix\"."
+The default `--3way' 3-way-merges patches that do not apply cleanly
+\(possibly leaving conflict markers) instead of failing outright."
   :type '(repeat string)
   :group 'gnaw)
 
 (defcustom gnaw-checkout-base 'ask
   "Whether to check out a patch's recorded base commit before applying.
-Patches made with `git format-patch --base' carry a `base-commit:'
-trailer.  When that commit exists in the target repo, gnaw can check it
-out first so the patch applies against its intended state.  Values: `ask'
-prompts, nil never checks out, t checks out without prompting."
+When a patch carries a `base-commit:' trailer (`git format-patch
+--base') that exists in the target repo, gnaw can check it out first.
+Values: `ask' prompts, nil never, t always."
   :type '(choice (const :tag "Ask" ask)
                  (const :tag "Never" nil)
                  (const :tag "Always" t))
@@ -1096,9 +1100,7 @@ Cover letters are excluded from the tally."
       (pop-to-buffer (current-buffer)))))
 
 (defun gnaw--patch-base-commit (files)
-  "Return the `base-commit' trailer found in patch FILES, or nil.
-Scans FILES in order and returns the first commit hash recorded by
-`git format-patch --base'."
+  "Return the first `base-commit:' trailer found in patch FILES, or nil."
   (with-temp-buffer
     (catch 'found
       (dolist (f files)
@@ -1111,10 +1113,9 @@ Scans FILES in order and returns the first commit hash recorded by
 
 (defun gnaw--maybe-checkout-base (files)
   "Offer to check out the base commit recorded in patch FILES.
-Runs in `default-directory' (the target repo).  Does nothing unless
-`gnaw-checkout-base' is set and the base commit exists locally.  Signals
-a `user-error' if the checkout fails.  Note that this leaves the repo on
-a detached HEAD."
+Runs in `default-directory' (the target repo) per `gnaw-checkout-base',
+when the commit exists locally.  Leaves the repo on a detached HEAD;
+signals a `user-error' if the checkout fails."
   (when gnaw-checkout-base
     (let ((base (gnaw--patch-base-commit files)))
       (when (and base
@@ -1124,11 +1125,15 @@ a detached HEAD."
                      (y-or-n-p
                       (format "Check out base commit %s (detached HEAD) first? "
                               (substring base 0 (min 12 (length base)))))))
-        (with-current-buffer (get-buffer-create "*gnaw-git*")
-          (let ((inhibit-read-only t)) (erase-buffer))
-          (unless (zerop (call-process "git" nil t nil "checkout" base))
-            (display-buffer (current-buffer))
-            (user-error "Git checkout %s failed" base)))))))
+        ;; An existing *gnaw-git* buffer keeps the default-directory of
+        ;; its first use; re-point it at the current repo.
+        (let ((dir default-directory))
+          (with-current-buffer (get-buffer-create "*gnaw-git*")
+            (setq default-directory dir)
+            (let ((inhibit-read-only t)) (erase-buffer))
+            (unless (zerop (call-process "git" nil t nil "checkout" base))
+              (display-buffer (current-buffer))
+              (user-error "Git checkout %s failed" base))))))))
 
 (defun gnaw--run-git-patches (info subcommand options hint)
   "Apply INFO's patches in its repo via git SUBCOMMAND (\"apply\" or \"am\").
@@ -1150,6 +1155,9 @@ HINT is shown on failure."
       (gnaw--maybe-checkout-base files)
       (let ((args (append (list subcommand) options (list "--") files)))
         (with-current-buffer (get-buffer-create "*gnaw-git*")
+          ;; An existing buffer keeps the default-directory of its first
+          ;; use; re-point it at the current repo.
+          (setq default-directory (file-name-as-directory repo))
           (let ((inhibit-read-only t)) (erase-buffer))
           (let ((status (apply #'call-process "git" nil t nil args)))
             (if (zerop status)
@@ -1180,9 +1188,8 @@ HINT is shown on failure."
   "When non-nil, show reports marked dismissed.  Buffer-local in `gnaw-list'.")
 
 (defvar gnaw-list--reports nil
-  "Cached (MID . INFO) report pairs for the current `gnaw-list' buffer.
-Set by `gnaw-list-reload'; re-rendering reuses it without re-reading
-the cache.  Buffer-local in use.")
+  "Cached (MID . INFO) pairs for the current `gnaw-list' buffer.
+Set by `gnaw-list-reload'.  Buffer-local in use.")
 
 (defvar gnaw-list--mark-index 0
   "Index of the Mark column among the active columns.
@@ -1263,11 +1270,16 @@ case-insensitive substring of an actor matches."
                        actors)
              t)))))
 
+(defun gnaw--query-flag-match (val set)
+  "Non-nil if boolean flag state SET satisfies query value VAL.
+Empty VAL, `*' and `true' require the flag; `false' requires its
+absence; any other VAL matches nothing."
+  (cond ((member val '(nil "" "*" "true")) set)
+        ((equal val "false") (not set))))
+
 (defun gnaw--query-val-any (val pred)
-  "Non-nil if PRED holds for any comma-separated value in VAL.
-Commas inside a field value are OR, as in the BONE web UI
-\(e.g. `acked:alice,bob').  An empty VAL is passed through unsplit so it
-keeps its \"match any\" meaning."
+  "Non-nil if PRED holds for any comma-separated (OR) value in VAL.
+An empty VAL is passed through unsplit, keeping its match-any meaning."
   (seq-some pred (if (or (null val) (string-empty-p val))
                      (list val)
                    (split-string val "," t))))
@@ -1313,8 +1325,10 @@ keeps its \"match any\" meaning."
         ((or "closed" "c")
          (gnaw--query-val-any
           val (lambda (v) (gnaw--query-actor-match v (plist-get info :closed)))))
-        ((or "urgent" "u") (= (logand prio 2) 2))
-        ((or "important" "i") (= (logand prio 1) 1))
+        ((or "urgent" "u")
+         (gnaw--query-flag-match val (= (logand prio 2) 2)))
+        ((or "important" "i")
+         (gnaw--query-flag-match val (= (logand prio 1) 1)))
         ((or "date" "d") (gnaw--query-date-match val (plist-get info :date) nil))
         ((or "deadline" "D") (gnaw--query-date-match val (plist-get info :deadline) t))
         ((or "expired" "e") (gnaw--query-date-match val (plist-get info :expiry) t))
@@ -1347,9 +1361,8 @@ the query (earlier tokens) is left untouched."
           `(boundaries ,beg . ,(or (string-match "[ \t|]" suffix) (length suffix))))
       (let ((res (complete-with-action
                   action gnaw--query-keys (substring string beg) pred)))
-        ;; For `try-completion' (ACTION nil) the table must return the
-        ;; whole completed string, prefix included; `all-completions'
-        ;; and `test-completion' operate on the last token alone.
+        ;; `try-completion' (ACTION nil) must return the whole string,
+        ;; prefix included; the other actions use the last token alone.
         (if (and (null action) (stringp res))
             (concat (substring string 0 beg) res)
           res)))))
@@ -1415,7 +1428,7 @@ query to `KEY:value'; an empty value clears the filter."
     ("Type"      8 t :type)
     ("Flags"     5 t :flags)
     ("Pri"       4 gnaw--priority-sort :priority)
-    ("Votes"     5 t :votes)
+    ("Votes"     5 gnaw--votes-sort :votes)
     ("From"     18 t :from-name)
     ("Att"       4 t :att)
     ("Subject"  50 t :subject)
@@ -1436,12 +1449,10 @@ width is recomputed to fill the window by `gnaw--list-format'."
   :group 'gnaw)
 
 (defcustom gnaw-list-sort-key '("Created" . t)
-  "Default sort key for `gnaw-list-mode'.
-A cons cell (COLUMN . FLIP) where COLUMN is the header name of a
-column in `gnaw-list-columns' and FLIP non-nil sorts in descending
-order.  The default sorts by creation date, most recent first.  Set
-to nil to keep reports in their natural order.  Within a buffer the
-key can still be changed interactively with \\<gnaw-list-mode-map>\\[tabulated-list-sort]."
+  "Default sort key for `gnaw-list-mode', nil for natural order.
+A cons (COLUMN . FLIP): a header name from `gnaw-list-columns', and
+whether to sort in descending order.  The default shows the most
+recently created reports first."
   :type '(choice (const :tag "Natural order" nil)
                  (cons (string  :tag "Column header")
                        (boolean :tag "Descending")))
@@ -1459,7 +1470,6 @@ are offered."
   "Return the display string for column KEY of a report.
 INFO is the report plist; ENTRY its state.edn alist (used for the mark)."
   (pcase key
-    ;; Local mark, one character: ! sticky, d dismissed (hidden).
     (:mark (gnaw-mark-prefix entry))
     (:att (if (plist-get info :patches) "+" ""))
     (:priority (gnaw-priority-letter (plist-get info :priority)))
@@ -1490,6 +1500,18 @@ normal < dismiss."
   "Sort tabulated-list entries A and B by numeric report priority."
   (< (or (plist-get (cdr (car a)) :priority) 0)
      (or (plist-get (cdr (car b)) :priority) 0)))
+
+(defun gnaw--votes-number (v)
+  "Return the numeric score of a report `:votes' field V, or 0.
+V may be a number or a \"score/total\" string."
+  (cond ((numberp v) v)
+        ((stringp v) (string-to-number v))
+        (t 0)))
+
+(defun gnaw--votes-sort (a b)
+  "Sort tabulated-list entries A and B by numeric vote score."
+  (< (gnaw--votes-number (plist-get (cdr (car a)) :votes))
+     (gnaw--votes-number (plist-get (cdr (car b)) :votes))))
 
 (defun gnaw--active-columns ()
   "Return `gnaw-list-columns' minus those named in config `:skip-columns'."
@@ -1529,11 +1551,10 @@ list each patch.  The query in `gnaw-list--query' filters the result."
       (let ((sid (gnaw--series-id (cdr p))))
         (when sid (push p (gethash sid groups)))))
     (cl-flet ((row (pair &optional match-pairs)
-                ;; Resolve the state entry once: it drives the dismiss filter,
-                ;; the Mark cell and the row face.  Dismiss is judged on the
-                ;; displayed PAIR, but the query may match any of MATCH-PAIRS
-                ;; (a folded series stays visible when any member matches, not
-                ;; just the row shown).
+                ;; Dismiss is judged on the displayed PAIR; the query may
+                ;; match any of MATCH-PAIRS, so a folded series stays
+                ;; visible when any member matches.  Unfolding it then
+                ;; filters each member individually.
                 (let* ((entry   (cdr (assoc (car pair) state)))
                        (sticky  (and (assq :sticky entry) t))
                        (dismiss (and (assq :dismiss entry) t)))
@@ -1616,10 +1637,13 @@ list each patch.  The query in `gnaw-list--query' filters the result."
   "Re-render the list from the in-memory reports and current state.
 Does not re-read the report cache; use `gnaw-list-reload' for that."
   (interactive)
-  ;; `tabulated-list-print' erases and reprints the whole buffer, losing the
-  ;; window's scroll position; restoring `window-start' avoids a C-l-like
-  ;; recenter on in-place refreshes (e.g. toggling a mark).  NOFORCE lets
-  ;; redisplay pick a new start should point fall off-screen.
+  ;; Guard every list command funneling through here: `tabulated-list-print'
+  ;; would erase whatever buffer is current.
+  (unless (derived-mode-p 'gnaw-list-mode)
+    (user-error "Not in a gnaw report list"))
+  ;; Restore `window-start': `tabulated-list-print' reprints the buffer,
+  ;; which would otherwise recenter the window on each refresh.  NOFORCE
+  ;; lets redisplay pick a new start if point falls off-screen.
   (let ((start (window-start)))
     (setq tabulated-list-format (gnaw--list-format))
     (tabulated-list-init-header)
@@ -1715,24 +1739,25 @@ With a prefix argument, clear the active filter without prompting."
     ;; Return to the same report; if it is gone (folded from a sub-patch),
     ;; fall back to the series' representative row.
     (unless (gnaw-list--goto-mid mid)
-      (goto-char (point-min))
-      (while (and (not (eobp))
-                  (let ((p (tabulated-list-get-id)))
-                    (not (and p (equal (gnaw--series-id (cdr p)) sid)))))
-        (forward-line 1)))))
+      (gnaw-list--goto
+       (lambda (p) (equal (gnaw--series-id (cdr p)) sid))))))
 
-(defun gnaw-list--goto-mid (mid)
-  "Move point to the row whose report id is MID.
-Return non-nil when such a row exists, leaving point on it; otherwise
-leave point at the end of the buffer and return nil."
+(defun gnaw-list--goto (pred)
+  "Move point to the first row whose (MID . INFO) pair satisfies PRED.
+Return non-nil if found, else return nil with point at end of buffer."
   (goto-char (point-min))
   (let (found)
     (while (and (not found) (not (eobp)))
       (let ((p (tabulated-list-get-id)))
-        (if (and p (equal (car p) mid))
+        (if (and p (funcall pred p))
             (setq found t)
           (forward-line 1))))
     found))
+
+(defun gnaw-list--goto-mid (mid)
+  "Move point to the row whose report id is MID.
+Return non-nil if found, else return nil with point at end of buffer."
+  (gnaw-list--goto (lambda (p) (equal (car p) mid))))
 
 (defun gnaw-list--toggle (action)
   "Toggle local mark ACTION on the report at point, then refresh."
@@ -1748,10 +1773,8 @@ Sticky reports are shown in bold and exported to todo.org by the gnaw CLI."
 
 (defun gnaw-list-toggle-dismiss ()
   "Toggle the dismiss mark (hide) on the report at point.
-Afterwards move to the following report, so a run of reports can be
-dismissed without chasing point: when dismissed rows are hidden the
-acted-on row is gone and the next one slides up; when they are shown
-point simply advances past it."
+Then move to the following report, so a run of reports can be
+dismissed without chasing point."
   (interactive)
   (let* ((p (gnaw-list--current))
          (next (save-excursion
@@ -1888,13 +1911,11 @@ appended."
           (t (concat u "/reports/")))))
 
 (defun gnaw--read-config-raw ()
-  "Read config.edn and return its raw alist, or nil."
-  (let ((file (expand-file-name "config.edn" gnaw-config-dir)))
-    (when (file-readable-p file)
-      (ignore-errors
-        (with-temp-buffer
-          (insert-file-contents file)
-          (gnaw-edn-read-buffer))))))
+  "Return config.edn's raw alist for a read-modify-write cycle, or nil.
+Signal a `user-error' when the file exists but cannot be parsed, since
+rewriting a misread config would drop its other settings."
+  (gnaw--read-edn-map-or-signal
+   (expand-file-name "config.edn" gnaw-config-dir)))
 
 (defun gnaw--config-add-source (config urls name repo)
   "Return CONFIG alist with a source (URLS, NAME, REPO) added or updated.
@@ -1926,10 +1947,8 @@ URL or the NAME is replaced."
 (defun gnaw-add-source (urls &optional name repo)
   "Add a source (URLS, NAME, REPO) to config.edn.
 URLS is a list of reports.json URLs.  Interactively, give a base,
-meta.json or reports.json URL; the report files listed in meta.json's
-`reports-files' are offered for selection (default all-open.json), the
-source NAME (from meta.json) and its local git REPO for patches are
-requested."
+meta.json or reports.json URL, then pick the report files listed in
+meta.json, the source NAME and its local git REPO for patches."
   (interactive
    (let* ((input (read-string "Report source URL (base, meta.json or .json): "))
           (_ (when (string-empty-p (string-trim input)) (user-error "No URL given")))
@@ -1984,9 +2003,9 @@ SOURCE may be a source name string or t for the global default."
 ;;;###autoload
 (defun gnaw-configure ()
   "Run interactive gnaw setup.
-This configures a report source, its local patch repository, and the mail
-client used to open report messages.  With existing sources, it can also
-configure only the mail client."
+Configure a report source, its local patch repository and the mail
+client used to open report messages; with existing sources, optionally
+only the mail client."
   (interactive)
   (let ((added-source nil))
     (if (gnaw-sources)
