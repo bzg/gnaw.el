@@ -1759,11 +1759,26 @@ Return non-nil if found, else return nil with point at end of buffer."
 Return non-nil if found, else return nil with point at end of buffer."
   (gnaw-list--goto (lambda (p) (equal (car p) mid))))
 
+(defun gnaw-list--restore-point (mid line)
+  "Move to MID's row, unless it moved away from LINE; then stay at LINE.
+Changing a mark can re-sort the list (e.g. under the Mark sort);
+following the acted-on row across the buffer would drag the cursor
+away from where the user is working."
+  (unless (and (gnaw-list--goto-mid mid)
+               (= (line-number-at-pos) line))
+    (goto-char (point-min))
+    (forward-line (1- line))
+    (when (and (eobp) (not (bobp)))
+      (forward-line -1))))
+
 (defun gnaw-list--toggle (action)
-  "Toggle local mark ACTION on the report at point, then refresh."
-  (let ((p (gnaw-list--current)))
+  "Toggle local mark ACTION on the report at point, then refresh.
+Keep the cursor in place (see `gnaw-list--restore-point')."
+  (let ((p (gnaw-list--current))
+        (line (line-number-at-pos)))
     (gnaw-toggle-mark (car p) (cdr p) action)
-    (gnaw-list-refresh)))
+    (gnaw-list-refresh)
+    (gnaw-list--restore-point (car p) line)))
 
 (defun gnaw-list-toggle-sticky ()
   "Toggle the sticky mark on the report at point.
@@ -1777,22 +1792,26 @@ Then move to the following report, so a run of reports can be
 dismissed without chasing point."
   (interactive)
   (let* ((p (gnaw-list--current))
+         (line (line-number-at-pos))
          (next (save-excursion
                  (forward-line 1)
                  (car (tabulated-list-get-id)))))
     (gnaw-toggle-mark (car p) (cdr p) :dismiss)
     (gnaw-list-refresh)
-    ;; Land on the report that followed; if it is gone too, fall back to the
-    ;; acted-on row (still there when dismissed rows are shown).
+    ;; Land on the report that followed; without one (last row), stay in
+    ;; place like the other mark commands.
     (unless (and next (gnaw-list--goto-mid next))
-      (gnaw-list--goto-mid (car p)))))
+      (gnaw-list--restore-point (car p) line))))
 
 (defun gnaw-list-remove-marks ()
-  "Remove the sticky or dismiss mark from the report at point, then refresh."
+  "Remove the sticky or dismiss mark from the report at point, then refresh.
+Keep the cursor in place (see `gnaw-list--restore-point')."
   (interactive)
-  (let ((p (gnaw-list--current)))
+  (let ((p (gnaw-list--current))
+        (line (line-number-at-pos)))
     (if (gnaw-remove-marks (car p))
-        (gnaw-list-refresh)
+        (progn (gnaw-list-refresh)
+               (gnaw-list--restore-point (car p) line))
       (message "gnaw: no mark on this report"))))
 
 (defun gnaw-list-toggle-dismissed ()
