@@ -42,8 +42,8 @@
 ;;
 ;; Front-ends provide the message metadata (an INFO plist with keys
 ;; :type :subject :date :from :from-name, plus display keys :flags
-;; :priority :votes :deadline :expiry :last-activity :topic) and the
-;; presentation; this library provides everything that is independent of
+;; :priority :votes :deadline :expiry :last-activity :replies :topic) and
+;; the presentation; this library provides everything independent of
 ;; the mail user agent.
 ;;
 ;; Entry points:
@@ -389,6 +389,7 @@ reports (flags R, C, E or S) still present in reports.json."
             (deadline     (alist-get 'deadline r))
             (expiry       (alist-get 'expiry r))
             (last-activity (alist-get 'last-activity r))
+            (replies      (alist-get 'replies r))
             (topic        (alist-get 'topic r))
             (subject      (alist-get 'subject r))
             (from         (alist-get 'from r))
@@ -415,6 +416,7 @@ reports (flags R, C, E or S) still present in reports.json."
                                        :deadline deadline
                                        :expiry expiry
                                        :last-activity last-activity
+                                       :replies replies
                                        :topic topic
                                        :subject subject
                                        :from from
@@ -1425,16 +1427,17 @@ query to `KEY:value'; an empty value clears the filter."
 
 (defcustom gnaw-list-columns
   '(("Mark"      5 gnaw--mark-sort :mark)
+    ("Type"      8 t :type)
     ("Pri"       4 gnaw--priority-sort :priority)
     ("Flags"     5 t :flags)
-    ("Type"      8 t :type)
     ("Att"       4 t :att)
+    ("Msgs"      5 gnaw--msgs-sort :msgs)
     ("From"     18 t :from-name)
     ("Subject"  50 t :subject)
     ("Created"  11 t :date))
   "Columns for `gnaw-list-mode' as (HEADER WIDTH SORT KEY) tuples.
 SORT is t (sort on the printed string), nil, or a predicate function;
-KEY is the INFO key (or :mark / :att) the cell displays.  The Subject
+KEY is the INFO key (or :mark / :att / :msgs) the cell displays.  The Subject
 width is recomputed to fill the window by `gnaw--list-format', so it
 flexes while the trailing Created column stays pinned to the right edge.
 
@@ -1480,6 +1483,8 @@ INFO is the report plist; ENTRY its state.edn alist (used for the mark)."
   (pcase key
     (:mark (gnaw-mark-prefix entry))
     (:att (if (plist-get info :patches) "+" ""))
+    (:msgs (let ((n (plist-get info :replies)))   ; thread size, initial mail included
+             (if n (number-to-string (1+ n)) "")))
     (:priority (gnaw-priority-letter (plist-get info :priority)))
     (:date (let ((d (plist-get info :date)))   ; keep the YYYY-MM-DD part only
              (if d (substring d 0 (min 10 (length d))) "")))
@@ -1520,6 +1525,11 @@ V may be a number or a \"score/total\" string."
   "Sort tabulated-list entries A and B by numeric vote score."
   (< (gnaw--votes-number (plist-get (cdr (car a)) :votes))
      (gnaw--votes-number (plist-get (cdr (car b)) :votes))))
+
+(defun gnaw--msgs-sort (a b)
+  "Sort tabulated-list entries A and B by thread message count."
+  (< (or (plist-get (cdr (car a)) :replies) 0)
+     (or (plist-get (cdr (car b)) :replies) 0)))
 
 (defun gnaw--active-columns ()
   "Return `gnaw-list-columns' minus those named in config `:skip-columns'."
