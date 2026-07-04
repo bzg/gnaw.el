@@ -1425,20 +1425,28 @@ query to `KEY:value'; an empty value clears the filter."
 
 (defcustom gnaw-list-columns
   '(("Mark"      5 gnaw--mark-sort :mark)
-    ("Type"      8 t :type)
-    ("Flags"     5 t :flags)
     ("Pri"       4 gnaw--priority-sort :priority)
-    ("Votes"     5 gnaw--votes-sort :votes)
-    ("From"     18 t :from-name)
+    ("Flags"     5 t :flags)
+    ("Type"      8 t :type)
     ("Att"       4 t :att)
+    ("From"     18 t :from-name)
     ("Subject"  50 t :subject)
-    ("Created"  11 t :date)
-    ("Activity" 11 t :last-activity)
-    ("Topic"    16 t :topic))
+    ("Created"  11 t :date))
   "Columns for `gnaw-list-mode' as (HEADER WIDTH SORT KEY) tuples.
 SORT is t (sort on the printed string), nil, or a predicate function;
 KEY is the INFO key (or :mark / :att) the cell displays.  The Subject
-width is recomputed to fill the window by `gnaw--list-format'."
+width is recomputed to fill the window by `gnaw--list-format', so it
+flexes while the trailing Created column stays pinned to the right edge.
+
+The default follows a left-to-right priority order: the mark you act on,
+the high-signal short codes (priority, flags, type), then identity, then
+the flexible subject, then the creation date as the rightmost time
+anchor.  The Votes, Activity (last activity) and Topic columns are left
+out by default to reduce noise; re-add their tuples here to show them —
+  (\"Votes\"    5 gnaw--votes-sort :votes)
+  (\"Activity\" 11 t :last-activity)
+  (\"Topic\"   16 t :topic)
+which also re-enables their `gnaw-sort-by-*' commands."
   :type '(repeat (list (string   :tag "Header")
                        (integer  :tag "Width")
                        (choice   :tag "Sort"
@@ -1521,7 +1529,7 @@ V may be a number or a \"score/total\" string."
 (defun gnaw--list-format ()
   "Return the `tabulated-list-format' vector for the active columns.
 Grow the Subject column to fill the window; other columns keep their
-width, so Topic stays at the right edge."
+width, so the trailing Created column stays at the right edge."
   (let* ((cols (gnaw--active-columns))
          (others (cl-remove-if (lambda (c) (eq (nth 3 c) :subject)) cols))
          (used (apply #'+ tabulated-list-padding 1
