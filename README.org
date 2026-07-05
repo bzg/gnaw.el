@@ -127,7 +127,8 @@ an alist mapping a source name to =auto=, =mua=, =gnus=, =notmuch=, =mu4e=
 or =web= (the entry keyed by =t= is the default).  =gnus= reads the group
 from =gnaw-gnus-group= (an alist; asked with completion otherwise);
 =notmuch= and =mu4e= open by message-id; =web= fetches the public-inbox
-archive.
+archive.  =C-RET= shows the mail in a window below the list, keeping
+point in the list.
 
 Front-ends set =gnaw-open-message-function= to handle =auto=/=mua=.
 =M-x gnaw-configure-email-client= configures this per source, including

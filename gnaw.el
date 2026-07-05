@@ -1626,6 +1626,7 @@ The query in `gnaw-list--query' filters the result."
 (defvar gnaw-list-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'gnaw-list-open)
+    (define-key map (kbd "<C-return>") #'gnaw-list-open-other-window)
     (define-key map (kbd "TAB") #'gnaw-list-toggle-fold)
     (define-key map "p" #'gnaw-list-view-patches)
     (define-key map "a" #'gnaw-list-apply-patches)
@@ -1732,6 +1733,23 @@ With a prefix argument, clear the active filter without prompting."
   (interactive)
   (let ((p (gnaw-list--current)))
     (gnaw-read-message (car p) (cdr p))))
+
+(defun gnaw-list-open-other-window ()
+  "Show the report's email below the list, keeping point in the list.
+Direct any buffer the mail client displays to a window in the bottom
+half of the frame and keep the list window selected.  Best effort with
+clients that manage their own windows (Gnus) or display asynchronously
+\(mu4e)."
+  (interactive)
+  (let* ((p (gnaw-list--current))
+         (list-win (selected-window))
+         (switch-to-buffer-obey-display-actions t)
+         (display-buffer-overriding-action
+          '((display-buffer-reuse-window display-buffer-below-selected)
+            (window-height . 0.5))))
+    (gnaw-read-message (car p) (cdr p))
+    (when (window-live-p list-win)
+      (select-window list-win))))
 
 (defun gnaw-list-view-patches ()
   "View the patches of the report at point."
