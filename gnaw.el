@@ -1489,9 +1489,10 @@ INFO is the report plist; ENTRY its state.edn alist (used for the mark)."
     (:date (let ((d (plist-get info :date)))   ; keep the YYYY-MM-DD part only
              (if d (substring d 0 (min 10 (length d))) "")))
     (:subject (let ((s (or (plist-get info :subject) "")))
-                (cond ((plist-get info :series-child) (concat "  " s))
+                (cond ((plist-get info :series-head) (concat "▾ " s))
+                      ((plist-get info :series-child) (concat "  " s))
                       ((plist-get info :series-summary)
-                       (format "%s  (%s)" s (plist-get info :series-summary)))
+                       (format "▸ %s  (%s)" s (plist-get info :series-summary)))
                       (t s))))
     (_ (let ((v (plist-get info key))) (if v (format "%s" v) "")))))
 
@@ -1556,8 +1557,9 @@ width, so the trailing Created column stays at the right edge."
 (defun gnaw--list-entries ()
   "Return `tabulated-list-entries', folding patch series unless expanded.
 A series is shown as one representative row (cover letter or first
-patch) with a status summary; unfolded series (in `gnaw-list--expanded')
-list each patch.  The query in `gnaw-list--query' filters the result."
+patch) prefixed with ▸ and a status summary; unfolded series (in
+`gnaw-list--expanded') list each patch, ▾ marking the first row.
+The query in `gnaw-list--query' filters the result."
   (let ((state (gnaw-read-state))
         (cols (gnaw--active-columns))
         (qgroups (and gnaw-list--query (gnaw--query-parse gnaw-list--query)))
@@ -1604,9 +1606,13 @@ list each patch.  The query in `gnaw-list--query' filters the result."
                                        (gnaw--patch-seq-n (cdr b))))))
                    (multi (cdr members)))
               (if (and multi (member sid gnaw-list--expanded))
-                  (dolist (m members)
-                    (row (cons (car m)
-                               (plist-put (copy-sequence (cdr m)) :series-child t))))
+                  (let ((head t))
+                    (dolist (m members)
+                      (row (cons (car m)
+                                 (plist-put (copy-sequence (cdr m))
+                                            (if head :series-head :series-child)
+                                            t)))
+                      (setq head nil)))
                 (let* ((cover (seq-find (lambda (m) (gnaw--cover-p (cdr m))) members))
                        (rep (or cover (car members))))
                   (row (cons (car rep)
@@ -1749,6 +1755,11 @@ With a prefix argument, clear the active filter without prompting."
          (sid (gnaw--series-id (cdr pair)))
          (mid (car pair)))
     (unless sid (user-error "Not part of a patch series"))
+    (when (< (cl-count sid gnaw-list--reports
+                       :key (lambda (p) (gnaw--series-id (cdr p)))
+                       :test #'equal)
+             2)
+      (user-error "This series has no other patch to unfold"))
     (setq-local gnaw-list--expanded
                 (if (member sid gnaw-list--expanded)
                     (remove sid gnaw-list--expanded)
