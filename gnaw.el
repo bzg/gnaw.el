@@ -81,9 +81,6 @@ Front-ends can use this to re-apply their display."
   :type 'hook
   :group 'gnaw)
 
-(defvar gnaw-addresses nil
-  "List of user email addresses loaded from config.")
-
 (defconst gnaw-supported-bone-format "0.9.2"
   "Minimum reports.json bone-format gnaw.el reads without warning.")
 
@@ -251,7 +248,6 @@ changes."
              (sources   (mapcan (lambda (s) (append (alist-get :urls s) nil)) src-cfgs))
              (plist (list :addresses addresses :skip-columns skip
                           :source-configs src-cfgs :sources sources)))
-        (setq gnaw-addresses addresses)
         (setq gnaw--config-cache (cons mtime plist))
         plist))))
 
@@ -714,10 +710,25 @@ remote reports.json values cannot escape the cache via path traversal."
   (let ((base (and s (file-name-nondirectory s))))
     (and base (not (member base '("" "." ".."))) base)))
 
+(defun gnaw--sanitize-patch-path (s)
+  "Return S when it is a safe relative patch path, else nil.
+A patch `file' has one or two components: an optional per-report hash
+directory, then the file name (BONE's patches/<mid-hash>/<file>
+layout).  Reject empty, `.', `..', absolute or backslashed
+components, so a remote reports.json cannot escape the cache."
+  (when (and s (not (string-prefix-p "/" s)) (not (string-prefix-p "~" s)))
+    (let ((parts (split-string s "/")))
+      (and (<= 1 (length parts) 2)
+           (cl-every (lambda (p)
+                       (and (not (member p '("" "." "..")))
+                            (not (string-match-p "\\\\" p))))
+                     parts)
+           s))))
+
 (defun gnaw-patch-file (info patch)
   "Return a local file for PATCH of report INFO, fetching it if absent.
 PATCH is an entry of the report `:patches' list."
-  (let* ((file   (gnaw--sanitize-path-component (alist-get 'file patch)))
+  (let* ((file   (gnaw--sanitize-patch-path (alist-get 'file patch)))
          (source (plist-get info :source))
          (sname  (or (gnaw--sanitize-path-component (plist-get info :source-name))
                      "unknown"))
@@ -973,14 +984,10 @@ SOURCE is a source name string, or t for the default entry."
                      (mapcar (lambda (s) (alist-get 'source (gnaw-source-meta s)))
                              (gnaw-sources))))))
 
-(defun gnaw--read-email-client-source (&optional default)
-  "Read a source name for message opening, or t for the default entry.
-When DEFAULT is non-nil, use it as the default source name."
-  (let* ((names (gnaw--known-source-names))
-         (prompt (if default
-                     (format "Source name (default %s, empty = global default): " default)
-                   "Source name (empty = global default): "))
-         (s (completing-read prompt names nil nil nil nil default)))
+(defun gnaw--read-email-client-source ()
+  "Read a source name for message opening, or t for the default entry."
+  (let ((s (completing-read "Source name (empty = global default): "
+                            (gnaw--known-source-names))))
     (if (string-empty-p s) t s)))
 
 ;;;###autoload
@@ -1199,9 +1206,9 @@ HINT is shown on failure."
   "Cached (MID . INFO) pairs for the current `gnaw-list' buffer.
 Set by `gnaw-list-reload'.  Buffer-local in use.")
 
-(defvar gnaw-list--mark-index 0
-  "Index of the Mark column among the active columns.
-Set by `gnaw--list-format'; used by `gnaw--mark-sort'.  Buffer-local in use.")
+(defvar gnaw-list--mark-index nil
+  "Index of the Mark column among the active columns, nil when hidden.
+Set by `gnaw--list-format'.  Buffer-local in use.")
 
 (defface gnaw-sticky '((t :weight bold))
   "Face for sticky reports in the report list."
@@ -1543,8 +1550,9 @@ normal < dismiss."
 
 (defun gnaw--mark-sort (a b)
   "Sort tabulated-list entries A and B by their Mark column."
-  (< (gnaw--mark-rank (aref (cadr a) gnaw-list--mark-index))
-     (gnaw--mark-rank (aref (cadr b) gnaw-list--mark-index))))
+  (let ((i (or gnaw-list--mark-index 0)))
+    (< (gnaw--mark-rank (aref (cadr a) i))
+       (gnaw--mark-rank (aref (cadr b) i)))))
 
 (defun gnaw--priority-sort (a b)
   "Sort tabulated-list entries A and B by numeric report priority."
@@ -1590,7 +1598,7 @@ width, so the trailing Created column stays at the right edge."
                       (mapcar (lambda (c) (1+ (nth 1 c))) others)))
          (subj (max 20 (- (window-body-width) used))))
     (setq-local gnaw-list--mark-index
-                (or (cl-position :mark cols :key (lambda (c) (nth 3 c))) 0))
+                (cl-position :mark cols :key (lambda (c) (nth 3 c))))
     (vconcat (mapcar (lambda (c)
                        (list (nth 0 c)
                              (if (eq (nth 3 c) :subject) subj (nth 1 c))
@@ -1673,6 +1681,7 @@ The query in `gnaw-list--query' filters the result."
     (define-key map (kbd "<C-return>") #'gnaw-list-open-other-window)
     (define-key map "f" #'gnaw-list-follow-mode)
     (define-key map (kbd "TAB") #'gnaw-list-toggle-fold)
+    (define-key map (kbd "<backtab>") #'gnaw-list-toggle-fold-all)
     (define-key map "p" #'gnaw-list-view-patches)
     (define-key map "a" #'gnaw-list-apply-patches)
     (define-key map "A" #'gnaw-list-am-patches)
@@ -1923,6 +1932,35 @@ the corresponding mail below the list, as
       (gnaw-list--goto
        (lambda (p) (equal (gnaw--series-id (cdr p)) sid))))))
 
+(defun gnaw-list--all-series-ids ()
+  "Return the ids of the multi-patch series in the current reports."
+  (let ((counts (make-hash-table :test 'equal))
+        (ids nil))
+    (dolist (p gnaw-list--reports)
+      (when-let* ((sid (gnaw--series-id (cdr p))))
+        (puthash sid (1+ (gethash sid counts 0)) counts)))
+    (maphash (lambda (sid n) (when (> n 1) (push sid ids))) counts)
+    ids))
+
+(defun gnaw-list-toggle-fold-all ()
+  "Unfold every patch series of the list, or fold them all back.
+Unfold when at least one multi-patch series is folded, fold all
+otherwise; keep the cursor on the same report."
+  (interactive)
+  (let ((ids (gnaw-list--all-series-ids))
+        (mid (car (tabulated-list-get-id)))
+        (line (line-number-at-pos)))
+    (unless ids (user-error "No patch series in the list"))
+    (setq-local gnaw-list--expanded
+                (and (seq-difference ids gnaw-list--expanded) ids))
+    (gnaw-list-refresh)
+    ;; Follow the report; if its row is gone (sub-patch folded away),
+    ;; fall back to the old line.
+    (unless (and mid (gnaw-list--goto-mid mid))
+      (gnaw-list--goto-line line))
+    (message "gnaw: %s all series"
+             (if gnaw-list--expanded "unfolded" "folded"))))
+
 (defun gnaw-list--goto (pred)
   "Move point to the first row whose (MID . INFO) pair satisfies PRED.
 Return non-nil if found, else return nil with point at end of buffer."
@@ -1947,10 +1985,14 @@ following the acted-on row across the buffer would drag the cursor
 away from where the user is working."
   (unless (and (gnaw-list--goto-mid mid)
                (= (line-number-at-pos) line))
-    (goto-char (point-min))
-    (forward-line (1- line))
-    (when (and (eobp) (not (bobp)))
-      (forward-line -1))))
+    (gnaw-list--goto-line line)))
+
+(defun gnaw-list--goto-line (line)
+  "Move to LINE, stepping back onto the last row when past the end."
+  (goto-char (point-min))
+  (forward-line (1- line))
+  (when (and (eobp) (not (bobp)))
+    (forward-line -1)))
 
 (defun gnaw-list--toggle (action)
   "Toggle local mark ACTION on the report at point, then refresh.
@@ -1986,20 +2028,32 @@ See `gnaw-list-flag-dismiss' for deferred dismissal."
     (unless (and next (gnaw-list--goto-mid next))
       (gnaw-list--restore-point (car p) line))))
 
+(defun gnaw-list--set-mark-cell (mid)
+  "Redraw MID's Mark cell on the current row, when the column is shown.
+Much cheaper than `gnaw-list-refresh', which rebuilds and reprints
+every row: a flag toggle only changes this one cell."
+  (when gnaw-list--mark-index
+    (tabulated-list-set-col
+     gnaw-list--mark-index
+     (if (member mid gnaw-list--flagged)
+         "D"
+       (gnaw-mark-prefix (cdr (assoc mid (gnaw-read-state)))))
+     t)))
+
 (defun gnaw-list-flag-dismiss ()
   "Flag the report at point for dismissal (or unflag it), then move down.
 Flagged reports show D in the Mark column and are dismissed all at
-once by \\<gnaw-list-mode-map>\\[gnaw-list-execute-flags]."
+once by \\<gnaw-list-mode-map>\\[gnaw-list-execute-flags].  Flags live
+in memory only; nothing is written until then."
   (interactive)
   (let ((mid (car (gnaw-list--current))))
     (setq-local gnaw-list--flagged
                 (if (member mid gnaw-list--flagged)
                     (delete mid gnaw-list--flagged)
                   (cons mid gnaw-list--flagged)))
-    (gnaw-list-refresh)
-    (when (gnaw-list--goto-mid mid)
-      (forward-line 1)
-      (unless (tabulated-list-get-id) (forward-line -1)))))
+    (gnaw-list--set-mark-cell mid)
+    (forward-line 1)
+    (unless (tabulated-list-get-id) (forward-line -1))))
 
 (defun gnaw-list-execute-flags ()
   "Dismiss the reports flagged by \\<gnaw-list-mode-map>\\[gnaw-list-flag-dismiss].
@@ -2032,8 +2086,7 @@ Keep the cursor in place (see `gnaw-list--restore-point')."
     (cond
      ((member (car p) gnaw-list--flagged)
       (setq-local gnaw-list--flagged (delete (car p) gnaw-list--flagged))
-      (gnaw-list-refresh)
-      (gnaw-list--restore-point (car p) line))
+      (gnaw-list--set-mark-cell (car p)))
      ((gnaw-remove-marks (car p))
       (gnaw-list-refresh)
       (gnaw-list--restore-point (car p) line))
@@ -2160,6 +2213,7 @@ order."
      (gnaw-list-toggle-dismissed "show / hide dismissed reports"))
     ("Patch series"
      (gnaw-list-toggle-fold "fold / unfold the series at point")
+     (gnaw-list-toggle-fold-all "unfold / fold all the series")
      (gnaw-list-view-patches "view the patches in diff-mode")
      (gnaw-list-apply-patches "apply with git apply")
      (gnaw-list-am-patches "apply with git am"))

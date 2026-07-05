@@ -64,31 +64,32 @@ source.
 
 * The =*gnaw*= browser
 
-| Key | Action                                                  |
-|-----+---------------------------------------------------------|
-| =RET= | open the report's email (see /Reading/ below)             |
-| =C-RET= | toggle the report's email in a window below the list  |
-| =f=   | follow mode: auto-show the email of the report at point |
-| =TAB= | fold / unfold the patch series at point                 |
-| =p=   | view the report's patch(es) in =diff-mode=                |
-| =a=   | =git apply= the patch(es) to the source repo tree         |
-| =A=   | =git am= the patch(es) as commits in the source repo      |
-| =/=   | filter the list by a query (see /Searching/)              |
-| =\vert=   | clear the active filter (=C-u /= also clears)             |
-| ===   | filter by one field (a =transient= menu)                  |
-| =t=   | limit to a report type (bug, patch, request…)           |
-| =S=   | sort by the column at point; on Mark, by sticky/dismiss |
-| =o=   | sort by a criterion chosen from a menu (=gnaw-sort=)      |
-| =!=   | mark sticky: bold + exported to todo.org, shown =!=       |
-| =d=   | flag the report for dismissal, shown =D=                  |
-| =x=   | dismiss all the flagged reports                         |
-| =D=   | dismiss immediately: hide the report, shown =d=           |
-| =u=   | remove the sticky/dismiss mark or the flag              |
-| =_=   | show / hide dismissed reports                           |
-| =h=   | list these bindings in a help window                    |
-| =\=   | apply a preset filter (see =gnaw-preset-filters=)         |
-| =g=   | reload from the local cache                             |
-| =G=   | refresh the remote cache, then reload                   |
+| Key   | Action                                                  |
+|-------+---------------------------------------------------------|
+| =RET=   | open the report's email (see /Reading/ below)             |
+| =C-RET= | toggle the report's email in a window below the list    |
+| =f=     | follow mode: auto-show the email of the report at point |
+| =TAB=   | fold / unfold the patch series at point                 |
+| =S-TAB= | unfold all the patch series, or fold them all back      |
+| =p=     | view the report's patch(es) in =diff-mode=                |
+| =a=     | =git apply= the patch(es) to the source repo tree         |
+| =A=     | =git am= the patch(es) as commits in the source repo      |
+| =/=     | filter the list by a query (see /Searching/)              |
+| =\vert=     | clear the active filter (=C-u /= also clears)             |
+| ===     | filter by one field (a =transient= menu)                  |
+| =t=     | limit to a report type (bug, patch, request...)         |
+| =S=     | sort by the column at point; on Mark, by sticky/dismiss |
+| =o=     | sort by a criterion chosen from a menu (=gnaw-sort=)      |
+| =!=     | mark sticky: bold + exported to todo.org, shown =!=       |
+| =d=     | flag the report for dismissal, shown =D=                  |
+| =x=     | dismiss all the flagged reports                         |
+| =D=     | dismiss immediately: hide the report, shown =d=           |
+| =u=     | remove the sticky/dismiss mark or the flag              |
+| =_=     | show / hide dismissed reports                           |
+| =h=     | list these bindings in a help window                    |
+| =\=     | apply a preset filter (see =gnaw-preset-filters=)         |
+| =g=     | reload from the local cache                             |
+| =G=     | refresh the remote cache, then reload                   |
 
 Patch series are folded into a single row (cover letter or first patch)
 with a status summary like =(2 acked, 1 open)=; =TAB= unfolds the series
