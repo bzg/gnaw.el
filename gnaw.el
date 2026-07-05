@@ -1189,6 +1189,12 @@ HINT is shown on failure."
 (defvar gnaw-list--show-dismissed nil
   "When non-nil, show reports marked dismissed.  Buffer-local in `gnaw-list'.")
 
+(defvar-local gnaw-list--flagged nil
+  "Message-ids flagged for dismissal (d), executed by x.")
+
+(defvar-local gnaw-list--below-mid nil
+  "Message-id of the mail currently shown below the list, or nil.")
+
 (defvar gnaw-list--reports nil
   "Cached (MID . INFO) pairs for the current `gnaw-list' buffer.
 Set by `gnaw-list-reload'.  Buffer-local in use.")
@@ -1353,25 +1359,52 @@ An empty VAL is passed through unsplit, keeping its match-any meaning."
     "owned:" "closed:" "urgent:" "important:" "date:" "deadline:" "expired:")
   "Long-form query keys completed in `gnaw-list-filter'.")
 
-(defun gnaw--filter-completion (string pred action)
-  "Completion table completing the query key of STRING's last token.
-PRED and ACTION are the usual `completing-read' arguments; the rest of
-the query (earlier tokens) is left untouched."
-  (let ((beg (progn (string-match "[^ \t|]*\\'" string) (match-beginning 0))))
-    (if (eq (car-safe action) 'boundaries)
-        (let ((suffix (cdr action)))
-          `(boundaries ,beg . ,(or (string-match "[ \t|]" suffix) (length suffix))))
-      (let ((res (complete-with-action
-                  action gnaw--query-keys (substring string beg) pred)))
-        ;; `try-completion' (ACTION nil) must return the whole string,
-        ;; prefix included; the other actions use the last token alone.
-        (if (and (null action) (stringp res))
-            (concat (substring string 0 beg) res)
-          res)))))
-
 (defconst gnaw-report-types
   '("bug" "patch" "request" "announcement" "change" "release")
   "BONE report types, offered when filtering by type.")
+
+(defun gnaw--filter-value-candidates (key)
+  "Return completion candidates for the value of filter KEY, or nil.
+Topics come from the reports of the list buffer the minibuffer was
+entered from."
+  (pcase key
+    ("type" gnaw-report-types)
+    ((or "topic" "t")
+     (gnaw-topics (buffer-local-value
+                   'gnaw-list--reports
+                   (window-buffer (minibuffer-selected-window)))))))
+
+(defun gnaw--filter-completion (string pred action)
+  "Completion table for the last token of filter query STRING.
+Complete the query key and, after keys like `type:' or `topic:', its
+value (starting after the last comma, commas being OR).  PRED and
+ACTION are the usual completion-table arguments; earlier tokens are
+left untouched."
+  (let* ((beg (progn (string-match "[^ \t|]*\\'" string) (match-beginning 0)))
+         (tok (substring string beg))
+         (colon (string-search ":" tok))
+         (cands (if colon
+                    (gnaw--filter-value-candidates (substring tok 0 colon))
+                  gnaw--query-keys))
+         (vbeg (if colon
+                   (+ beg colon 1
+                      (let ((val (substring tok (1+ colon))))
+                        (if (string-match ".*," val) (match-end 0) 0)))
+                 beg)))
+    (cond
+     ((eq (car-safe action) 'boundaries)
+      (let ((suffix (cdr action)))
+        `(boundaries ,vbeg . ,(or (string-match "[ \t|,]" suffix)
+                                  (length suffix)))))
+     ((null cands) nil)
+     (t
+      (let ((res (complete-with-action action cands
+                                       (substring string vbeg) pred)))
+        ;; `try-completion' (ACTION nil) must return the whole string,
+        ;; prefix included; the other actions use the last token alone.
+        (if (and (null action) (stringp res))
+            (concat (substring string 0 vbeg) res)
+          res))))))
 
 (defun gnaw-list-filter-by (key)
   "Limit the list to reports whose KEY field matches a read value.
@@ -1433,7 +1466,7 @@ query to `KEY:value'; an empty value clears the filter."
     ("Att"       4 t :att)
     ("Msgs"      5 gnaw--msgs-sort :msgs)
     ("From"     18 t :from-name)
-    ("Subject"  50 t :subject)
+    ("Subject"  50 gnaw--subject-sort :subject)
     ("Created"  11 t :date))
   "Columns for `gnaw-list-mode' as (HEADER WIDTH SORT KEY) tuples.
 SORT is t (sort on the printed string), nil, or a predicate function;
@@ -1477,11 +1510,14 @@ are offered."
   :type '(repeat string)
   :group 'gnaw)
 
-(defun gnaw--list-cell (key info entry)
+(defun gnaw--list-cell (key info entry &optional mid)
   "Return the display string for column KEY of a report.
-INFO is the report plist; ENTRY its state.edn alist (used for the mark)."
+INFO is the report plist; ENTRY its state.edn alist and MID its
+message-id (both used for the mark: D flags a pending dismissal)."
   (pcase key
-    (:mark (gnaw-mark-prefix entry))
+    (:mark (if (and mid (member mid gnaw-list--flagged))
+               "D"
+             (gnaw-mark-prefix entry)))
     (:att (if (plist-get info :patches) "+" ""))
     (:msgs (let ((n (plist-get info :replies)))   ; thread size, initial mail included
              (if n (number-to-string (1+ n)) "")))
@@ -1531,6 +1567,13 @@ V may be a number or a \"score/total\" string."
   "Sort tabulated-list entries A and B by thread message count."
   (< (or (plist-get (cdr (car a)) :replies) 0)
      (or (plist-get (cdr (car b)) :replies) 0)))
+
+(defun gnaw--subject-sort (a b)
+  "Sort tabulated-list entries A and B by raw subject.
+Sorting the printed cell instead would sort the ▸/▾ and indentation
+prefixes of series rows, not their subjects."
+  (string-lessp (or (plist-get (cdr (car a)) :subject) "")
+                (or (plist-get (cdr (car b)) :subject) "")))
 
 (defun gnaw--active-columns ()
   "Return `gnaw-list-columns' minus those named in config `:skip-columns'."
@@ -1585,7 +1628,8 @@ The query in `gnaw-list--query' filters the result."
                                     (gnaw--query-match-p qgroups (car mp) (cdr mp)))
                                   (or match-pairs (list pair)))))
                     (let ((cells (mapcar (lambda (c)
-                                           (gnaw--list-cell (nth 3 c) (cdr pair) entry))
+                                           (gnaw--list-cell (nth 3 c) (cdr pair)
+                                                            entry (car pair)))
                                          cols)))
                       (cond
                        (sticky  (setq cells (mapcar (lambda (s) (propertize s 'face 'gnaw-sticky))
@@ -1627,6 +1671,7 @@ The query in `gnaw-list--query' filters the result."
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'gnaw-list-open)
     (define-key map (kbd "<C-return>") #'gnaw-list-open-other-window)
+    (define-key map "f" #'gnaw-list-follow-mode)
     (define-key map (kbd "TAB") #'gnaw-list-toggle-fold)
     (define-key map "p" #'gnaw-list-view-patches)
     (define-key map "a" #'gnaw-list-apply-patches)
@@ -1638,8 +1683,11 @@ The query in `gnaw-list--query' filters the result."
     (define-key map "=" #'gnaw-list-filter-transient)
     (define-key map "t" #'gnaw-list-limit-type)
     (define-key map "!" #'gnaw-list-toggle-sticky)
-    (define-key map "d" #'gnaw-list-toggle-dismiss)
+    (define-key map "d" #'gnaw-list-flag-dismiss)
+    (define-key map "D" #'gnaw-list-toggle-dismiss)
+    (define-key map "x" #'gnaw-list-execute-flags)
     (define-key map "u" #'gnaw-list-remove-marks)
+    (define-key map "h" #'gnaw-show-help)
     (define-key map "o" #'gnaw-sort)
     (define-key map "_" #'gnaw-list-toggle-dismissed)
     (define-key map "\\" #'gnaw-select-preset-filter)
@@ -1734,22 +1782,108 @@ With a prefix argument, clear the active filter without prompting."
   (let ((p (gnaw-list--current)))
     (gnaw-read-message (car p) (cdr p))))
 
+(defun gnaw-list--open-below (pair)
+  "Open PAIR's mail and arrange it below the list, point staying there.
+Let the mail client display the message as usual, then rearrange the
+frame: list in the top half, message below, point back in the list.
+With Gnus the bottom window shows the article buffer.  Best effort
+with clients that display asynchronously (mu4e): when no buffer has
+appeared yet, the frame is left for the client to fill.  An existing
+two-window split is reused rather than rebuilt."
+  (let ((list-buf (current-buffer)))
+    (gnaw-read-message (car pair) (cdr pair))
+    (let* ((selected (window-buffer (selected-window)))
+           (mail-buf (or (and (provided-mode-derived-p
+                               (buffer-local-value 'major-mode selected)
+                               'gnus-summary-mode)
+                              (bound-and-true-p gnus-article-buffer)
+                              (get-buffer gnus-article-buffer))
+                         selected))
+           (list-win (get-buffer-window list-buf)))
+      (unless (eq mail-buf list-buf)
+        (if (and list-win (= (length (window-list)) 2))
+            (let ((other (seq-find (lambda (w) (not (eq w list-win)))
+                                   (window-list))))
+              (set-window-buffer other mail-buf)
+              (select-window list-win))
+          (delete-other-windows)
+          (switch-to-buffer list-buf)
+          (set-window-buffer (split-window-below) mail-buf))
+        (with-current-buffer list-buf
+          (setq gnaw-list--below-mid (car pair)))))))
+
 (defun gnaw-list-open-other-window ()
-  "Show the report's email below the list, keeping point in the list.
-Direct any buffer the mail client displays to a window in the bottom
-half of the frame and keep the list window selected.  Best effort with
-clients that manage their own windows (Gnus) or display asynchronously
-\(mu4e)."
+  "Toggle the report's email below the list, point staying in the list.
+Open it as `gnaw-list--open-below' does; when the report's mail is
+already the one shown, close the other windows instead."
   (interactive)
-  (let* ((p (gnaw-list--current))
-         (list-win (selected-window))
-         (switch-to-buffer-obey-display-actions t)
-         (display-buffer-overriding-action
-          '((display-buffer-reuse-window display-buffer-below-selected)
-            (window-height . 0.5))))
-    (gnaw-read-message (car p) (cdr p))
-    (when (window-live-p list-win)
-      (select-window list-win))))
+  (let ((p (gnaw-list--current)))
+    (if (and (equal (car p) gnaw-list--below-mid)
+             (cdr (window-list)))
+        (progn (delete-other-windows)
+               (setq gnaw-list--below-mid nil))
+      (gnaw-list--open-below p))))
+
+(defcustom gnaw-list-follow-delay 0.3
+  "Idle seconds before `gnaw-list-follow-mode' shows the report at point."
+  :type 'number
+  :group 'gnaw)
+
+(defvar-local gnaw-list--follow-last-mid nil
+  "Message-id last shown by `gnaw-list-follow-mode'.")
+
+(defvar-local gnaw-list--follow-timer nil
+  "Pending idle timer of `gnaw-list-follow-mode'.")
+
+(defun gnaw-list--follow-show (buffer)
+  "Show the mail of the report at point in BUFFER, as C-RET would.
+Do nothing unless BUFFER is still shown in the selected window."
+  (when (and (buffer-live-p buffer)
+             (eq (window-buffer (selected-window)) buffer))
+    (with-current-buffer buffer
+      (setq gnaw-list--follow-timer nil)
+      (let ((p (tabulated-list-get-id)))
+        (when (and p (not (equal (car p) gnaw-list--follow-last-mid)))
+          (setq gnaw-list--follow-last-mid (car p))
+          (condition-case err
+              (gnaw-list--open-below p)
+            (error (message "gnaw: %s" (error-message-string err)))))))))
+
+(defun gnaw-list--follow-schedule ()
+  "Debounce: show the report at point once Emacs has been idle."
+  (let ((mid (car (tabulated-list-get-id))))
+    (when (and mid (not (equal mid gnaw-list--follow-last-mid)))
+      (when gnaw-list--follow-timer (cancel-timer gnaw-list--follow-timer))
+      (setq gnaw-list--follow-timer
+            (run-with-idle-timer gnaw-list-follow-delay nil
+                                 #'gnaw-list--follow-show
+                                 (current-buffer))))))
+
+(define-minor-mode gnaw-list-follow-mode
+  "Show the mail of the report at point as point moves in the list.
+Moving point displays, after `gnaw-list-follow-delay' idle seconds,
+the corresponding mail below the list, as
+\\<gnaw-list-mode-map>\\[gnaw-list-open-other-window] would."
+  :lighter " Follow"
+  (unless (derived-mode-p 'gnaw-list-mode)
+    (setq gnaw-list-follow-mode nil)
+    (user-error "Not in a gnaw report list"))
+  (if gnaw-list-follow-mode
+      (add-hook 'post-command-hook #'gnaw-list--follow-schedule nil t)
+    (remove-hook 'post-command-hook #'gnaw-list--follow-schedule t)
+    (when gnaw-list--follow-timer
+      (cancel-timer gnaw-list--follow-timer)
+      (setq gnaw-list--follow-timer nil))
+    (setq gnaw-list--follow-last-mid nil)
+    ;; Close the mail preview: back to the list alone.
+    (when-let* ((w (get-buffer-window (current-buffer))))
+      (with-selected-window w (delete-other-windows)))
+    (setq gnaw-list--below-mid nil)))
+
+(defun gnaw-list--follow-off ()
+  "Turn off `gnaw-list-follow-mode' when it is on."
+  (when gnaw-list-follow-mode
+    (gnaw-list-follow-mode -1)))
 
 (defun gnaw-list-view-patches ()
   "View the patches of the report at point."
@@ -1834,10 +1968,12 @@ Sticky reports are shown in bold and exported to todo.org by the gnaw CLI."
   (gnaw-list--toggle :sticky))
 
 (defun gnaw-list-toggle-dismiss ()
-  "Toggle the dismiss mark (hide) on the report at point.
-Then move to the following report, so a run of reports can be
-dismissed without chasing point."
+  "Toggle the dismiss mark (hide) on the report at point, immediately.
+Turn off `gnaw-list-follow-mode' first.  Then move to the following
+report, so a run of reports can be dismissed without chasing point.
+See `gnaw-list-flag-dismiss' for deferred dismissal."
   (interactive)
+  (gnaw-list--follow-off)
   (let* ((p (gnaw-list--current))
          (line (line-number-at-pos))
          (next (save-excursion
@@ -1850,16 +1986,58 @@ dismissed without chasing point."
     (unless (and next (gnaw-list--goto-mid next))
       (gnaw-list--restore-point (car p) line))))
 
+(defun gnaw-list-flag-dismiss ()
+  "Flag the report at point for dismissal (or unflag it), then move down.
+Flagged reports show D in the Mark column and are dismissed all at
+once by \\<gnaw-list-mode-map>\\[gnaw-list-execute-flags]."
+  (interactive)
+  (let ((mid (car (gnaw-list--current))))
+    (setq-local gnaw-list--flagged
+                (if (member mid gnaw-list--flagged)
+                    (delete mid gnaw-list--flagged)
+                  (cons mid gnaw-list--flagged)))
+    (gnaw-list-refresh)
+    (when (gnaw-list--goto-mid mid)
+      (forward-line 1)
+      (unless (tabulated-list-get-id) (forward-line -1)))))
+
+(defun gnaw-list-execute-flags ()
+  "Dismiss the reports flagged by \\<gnaw-list-mode-map>\\[gnaw-list-flag-dismiss].
+Turn off `gnaw-list-follow-mode' first; write state.edn only once."
+  (interactive)
+  (unless gnaw-list--flagged
+    (user-error "No report flagged for dismissal"))
+  (gnaw-list--follow-off)
+  (let ((mid (car (tabulated-list-get-id)))
+        (line (line-number-at-pos))
+        (state (gnaw--read-state-for-update))
+        (count 0))
+    (dolist (fmid gnaw-list--flagged)
+      (let ((pair (assoc fmid gnaw-list--reports)))
+        (when (and pair (not (gnaw-action-on-p state fmid :dismiss)))
+          (setq state (gnaw--apply-transition state :dismiss fmid (cdr pair)))
+          (setq count (1+ count)))))
+    (gnaw-write-state state)
+    (setq-local gnaw-list--flagged nil)
+    (gnaw-list-refresh)
+    (gnaw-list--restore-point mid line)
+    (message "gnaw: dismissed %d report(s)" count)))
+
 (defun gnaw-list-remove-marks ()
-  "Remove the sticky or dismiss mark from the report at point, then refresh.
+  "Remove the mark or dismissal flag from the report at point, then refresh.
 Keep the cursor in place (see `gnaw-list--restore-point')."
   (interactive)
   (let ((p (gnaw-list--current))
         (line (line-number-at-pos)))
-    (if (gnaw-remove-marks (car p))
-        (progn (gnaw-list-refresh)
-               (gnaw-list--restore-point (car p) line))
-      (message "gnaw: no mark on this report"))))
+    (cond
+     ((member (car p) gnaw-list--flagged)
+      (setq-local gnaw-list--flagged (delete (car p) gnaw-list--flagged))
+      (gnaw-list-refresh)
+      (gnaw-list--restore-point (car p) line))
+     ((gnaw-remove-marks (car p))
+      (gnaw-list-refresh)
+      (gnaw-list--restore-point (car p) line))
+     (t (message "gnaw: no mark on this report")))))
 
 (defun gnaw-list-toggle-dismissed ()
   "Toggle whether dismissed reports are shown."
@@ -1931,6 +2109,12 @@ With a prefix argument FLIP, reverse the order."
   (interactive "P")
   (gnaw-list--sort "Votes" t flip))
 
+(defun gnaw-sort-by-msgs (&optional flip)
+  "Sort the report list by thread size, largest first.
+With a prefix argument FLIP, reverse the order."
+  (interactive "P")
+  (gnaw-list--sort "Msgs" t flip))
+
 (defun gnaw-sort-by-mark (&optional flip)
   "Sort the report list by local mark (sticky, then normal, then dismissed).
 With a prefix argument FLIP, reverse the order."
@@ -1938,24 +2122,76 @@ With a prefix argument FLIP, reverse the order."
   (gnaw-list--sort "Mark" nil flip))
 
 (defconst gnaw-sort-commands
-  '(("date"     . gnaw-sort-by-date)
-    ("activity" . gnaw-sort-by-activity)
-    ("author"   . gnaw-sort-by-author)
-    ("subject"  . gnaw-sort-by-subject)
-    ("type"     . gnaw-sort-by-type)
-    ("topic"    . gnaw-sort-by-topic)
-    ("priority" . gnaw-sort-by-priority)
-    ("votes"    . gnaw-sort-by-votes)
-    ("mark"     . gnaw-sort-by-mark))
-  "Alist of criterion names to `gnaw-sort-by-*' commands, used by `gnaw-sort'.")
+  '(("date"     "Created"  gnaw-sort-by-date)
+    ("activity" "Activity" gnaw-sort-by-activity)
+    ("author"   "From"     gnaw-sort-by-author)
+    ("subject"  "Subject"  gnaw-sort-by-subject)
+    ("type"     "Type"     gnaw-sort-by-type)
+    ("topic"    "Topic"    gnaw-sort-by-topic)
+    ("priority" "Pri"      gnaw-sort-by-priority)
+    ("votes"    "Votes"    gnaw-sort-by-votes)
+    ("msgs"     "Msgs"     gnaw-sort-by-msgs)
+    ("mark"     "Mark"     gnaw-sort-by-mark))
+  "(NAME COLUMN COMMAND) entries for `gnaw-sort', COLUMN a header name.")
 
 (defun gnaw-sort ()
   "Sort the report list by a criterion chosen interactively.
-Dispatch to the matching `gnaw-sort-by-*' command; a prefix argument is
-forwarded to it to reverse the natural order."
+Only criteria whose column is currently shown are offered; a prefix
+argument is forwarded to the sort command to reverse its natural
+order."
   (interactive)
-  (let ((name (completing-read "Sort by: " gnaw-sort-commands nil t)))
-    (call-interactively (cdr (assoc name gnaw-sort-commands)))))
+  (let* ((cols (mapcar #'car (gnaw--active-columns)))
+         (cands (cl-remove-if-not (lambda (e) (member (nth 1 e) cols))
+                                  gnaw-sort-commands))
+         (name (completing-read "Sort by: " cands nil t)))
+    (call-interactively (nth 2 (assoc name cands)))))
+
+(defconst gnaw-list--help-sections
+  '(("Read"
+     (gnaw-list-open "open the report's mail")
+     (gnaw-list-open-other-window "toggle the mail below the list")
+     (gnaw-list-follow-mode "toggle follow mode (auto-show the mail at point)"))
+    ("Marks"
+     (gnaw-list-toggle-sticky "toggle the sticky mark (bold, exported to todo.org)")
+     (gnaw-list-flag-dismiss "flag for dismissal (D in the Mark column)")
+     (gnaw-list-execute-flags "dismiss the flagged reports")
+     (gnaw-list-toggle-dismiss "dismiss immediately (toggle)")
+     (gnaw-list-remove-marks "remove the mark or flag at point")
+     (gnaw-list-toggle-dismissed "show / hide dismissed reports"))
+    ("Patch series"
+     (gnaw-list-toggle-fold "fold / unfold the series at point")
+     (gnaw-list-view-patches "view the patches in diff-mode")
+     (gnaw-list-apply-patches "apply with git apply")
+     (gnaw-list-am-patches "apply with git am"))
+    ("Filter and sort"
+     (gnaw-list-filter "filter with key:value tokens")
+     (gnaw-list-filter-transient "filter by one field (menu)")
+     (gnaw-select-preset-filter "apply a preset filter")
+     (gnaw-list-filter-clear "clear the filter")
+     (gnaw-list-limit-type "limit to a report type")
+     (gnaw-sort "sort by a criterion"))
+    ("Refresh"
+     (gnaw-list-reload "re-read the local cache")
+     (gnaw-list-update "refresh the remote cache, then reload"))
+    ("Help"
+     (gnaw-show-help "this help")
+     (describe-mode "full mode description")))
+  "Sections shown by `gnaw-show-help': (TITLE (COMMAND DESCRIPTION)...).")
+
+(defun gnaw-show-help ()
+  "List the report list's key bindings, grouped by theme."
+  (interactive)
+  (with-help-window "*gnaw help*"
+    (princ "gnaw report list\n")
+    (dolist (section gnaw-list--help-sections)
+      (princ (format "\n%s\n" (car section)))
+      (dolist (cmd (cdr section))
+        (let ((keys (mapconcat #'key-description
+                               (where-is-internal (car cmd) gnaw-list-mode-map)
+                               ", ")))
+          (princ (format "  %-12s %s\n"
+                         (if (string-empty-p keys) "M-x" keys)
+                         (cadr cmd))))))))
 
 (defun gnaw-select-preset-filter ()
   "Apply a filter chosen from `gnaw-preset-filters'.
@@ -2097,7 +2333,8 @@ Prompt for full interactive configuration when no source is configured."
     (switch-to-buffer buf)
     (delete-other-windows)
     (gnaw-list-mode)
-    (gnaw-list-reload)))
+    (gnaw-list-reload)
+    (message "gnaw some bone! \"f\" to toggle the follow mode and \"h\" to get help")))
 
 (provide 'gnaw)
 ;;; gnaw.el ends here
