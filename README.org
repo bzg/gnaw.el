@@ -1,20 +1,21 @@
-#+title: gnaw.el --- Manage BONE reports from Emacs
+#+title: gnaw.el --- GNAW is Not Another Workflow
 
-: 3==3  GNAW -- GNAW is Not Another Workflow
+: 3==3
 
+[[https://www.repostatus.org/#active][https://img.shields.io/badge/status-active-brightgreen.svg?style=for-the-badge]]
 [[https://intver.org/][https://img.shields.io/badge/versioning-intver.org-blue.svg?style=for-the-badge]]
 
 =gnaw.el= is an Emacs tool for [[https://codeberg.org/bzg/gnaw][gnaw]] and [[https://codeberg.org/bzg/bone][BONE]] with two faces:
 
-- a *standalone browser* of BONE reports (=M-x gnaw=): list reports,
-  read the email, view and apply patches, mark and filter -- no [[https://codeberg.org/bzg/gnaw][gnaw]]
-  CLI required;
-- the shared *data layer* of the mail front-ends [[https://codeberg.org/bzg/gnus-gnaw][gnus-gnaw]],
-  [[https://codeberg.org/bzg/notmuch-gnaw][notmuch-gnaw]] and [[https://codeberg.org/bzg/mu4e-gnaw][mu4e-gnaw]].
+- a *standalone browser* of BONE reports (=M-x gnaw=): list reports, read
+  the email, view and apply patches, mark and filter -- no [[https://codeberg.org/bzg/gnaw][gnaw]] CLI
+  required;
+- the shared *data layer* of the mail front-ends [[https://codeberg.org/bzg/gnus-gnaw][gnus-gnaw]], [[https://codeberg.org/bzg/notmuch-gnaw][notmuch-gnaw]]
+  and [[https://codeberg.org/bzg/mu4e-gnaw][mu4e-gnaw]].
 
-It reads =config.edn= and =reports.json= directly, caches remote
-reports and patches, and reads/writes =config.edn= and the =state.edn=
-shared with the CLI, so state stays consistent across clients.
+It reads =config.edn= and =reports.json= directly, caches remote reports
+and patches, and reads/writes =config.edn= and the =state.edn= shared with
+the CLI, so state stays consistent across clients.
 
 * Requirements
 
@@ -26,8 +27,8 @@ shared with the CLI, so state stays consistent across clients.
 
 * Installation
 
-=gnaw.el= is not on MELPA yet.  On Emacs 30 or later, install it
-straight from its git repository with the built-in =package-vc=:
+=gnaw.el= is not on MELPA yet. On Emacs 30 or later, install it straight
+from its git repository with the built-in =package-vc=:
 
 #+begin_src emacs-lisp
 (use-package gnaw
@@ -43,22 +44,21 @@ Update later with =M-x package-vc-upgrade RET gnaw RET=.
 
 * Getting started
 
-=M-x gnaw= opens the =*gnaw*= report browser, filling the frame.  With
-no source configured, it runs the full interactive setup (and repeats for
+=M-x gnaw= opens the =*gnaw*= report browser, filling the frame. With no
+source configured, it runs the full interactive setup (and repeats for
 additional sources until you decline):
 
 1. a source URL -- a base URL, a =reports/meta.json=, or a
    =reports/...json= file (all resolve to the =reports/= directory);
-2. which report files to track, chosen from =meta.json='s
-   =reports-files= (default =all-open.json=; several may be picked);
+2. which report files to track, chosen from =meta.json='s =reports-files=
+   (default =all-open.json=; several may be picked);
 3. a source name (defaults to =meta.json='s =:source=);
 4. a local git repository for that source, used to apply patches;
-5. how to open report mail (=auto=, =mua=, =gnus=, =notmuch=, =mu4e= or
-   =web=);
+5. how to open report mail (=auto=, =mua=, =gnus=, =notmuch=, =mu4e= or =web=);
 6. when =gnus= is chosen, the Gnus group where the mails are stored.
 
-The source and patch repository are written to =config.edn=.  The mail
-client settings are saved through Customize.  =M-x gnaw-configure= reruns
+The source and patch repository are written to =config.edn=. The mail
+client settings are saved through Customize. =M-x gnaw-configure= reruns
 the full setup later on; =M-x gnaw-add-source= only adds or updates a
 source.
 
@@ -91,25 +91,25 @@ source.
 | =g=     | reload from the local cache                             |
 | =G=     | refresh the remote cache, then reload                   |
 
-Patch series are folded into a single row (cover letter or first patch)
-with a status summary like =(2 acked, 1 open)=; =TAB= unfolds the series
-to list each patch, =TAB= again folds it back.
+Patch series are folded into a single row (cover letter or first
+patch) with a status summary like =(2 acked, 1 open)=; =TAB= unfolds the
+series to list each patch, =TAB= again folds it back.
 
 Two mutually exclusive local marks drive the view: *sticky* promotes a
 report (shown =!= in bold in the Mark column, and exported to =todo.org=
-by the gnaw CLI), *dismiss* hides it.  Dismissed reports are hidden by
-default; =_= reveals them (shown =d= in italics).  =d= only *flags* a
-report (shown =D=) and =x= dismisses all the flagged ones at once, like
-in dired; =D= dismisses right away.  =u= clears the mark or flag.
-=D= and =x= turn off the follow mode first.  Marks live in =state.edn=,
-shared with the gnaw CLI and the front-ends.
+by the gnaw CLI), *dismiss* hides it. Dismissed reports are hidden by
+default; =_= reveals them (shown =d= in italics). =d= only *flags* a report
+(shown =D=) and =x= dismisses all the flagged ones at once, like in dired;
+=D= dismisses right away. =u= clears the mark or flag. =D= and =x= turn off
+the follow mode first. Marks live in =state.edn=, shared with the gnaw
+CLI and the front-ends.
 
 * Searching
 
 =s= (or =/=) filters the list with a subset of the BONE web query syntax:
-=key:value= tokens.  Operators, loosest to tightest binding: =|= is OR
-between clauses, space is AND between tokens, and a comma inside a value
-is OR (=acked:alice,bob=).  So =a b c | d= reads as =(a b c) | d=.
+=key:value= tokens. Operators, loosest to tightest binding: =|= is OR
+between clauses, space is AND between tokens, and a comma inside a
+value is OR (=acked:alice,bob=). So =a b c | d= reads as =(a b c) | d=.
 
 | Long                     | Short    | Matches                               |
 |--------------------------+----------+---------------------------------------|
@@ -131,25 +131,24 @@ clears it.
 * Reading messages
 
 =gnaw-open-message-method= selects how =RET= opens a report, per source:
-an alist mapping a source name to =auto=, =mua=, =gnus=, =notmuch=, =mu4e=
-or =web= (the entry keyed by =t= is the default).  =gnus= reads the group
-from =gnaw-gnus-group= (an alist; asked with completion otherwise);
-=notmuch= and =mu4e= open by message-id; =web= fetches the public-inbox
-archive.  =SPC= toggles the mail in a window below the list, keeping
-point in the list; =f= (=gnaw-list-follow-mode=) does this
-automatically as point moves.
+an alist mapping a source name to =auto=, =mua=, =gnus=, =notmuch=, =mu4e= or
+=web= (the entry keyed by =t= is the default). =gnus= reads the group from
+=gnaw-gnus-group= (an alist; asked with completion otherwise); =notmuch=
+and =mu4e= open by message-id; =web= fetches the public-inbox archive. =SPC=
+toggles the mail in a window below the list, keeping point in the
+list; =f= (=gnaw-list-follow-mode=) does this automatically as point
+moves.
 
-Front-ends set =gnaw-open-message-function= to handle =auto=/=mua=.
-=M-x gnaw-configure-email-client= configures this per source, including
-the Gnus group when =gnus= is selected.
+Front-ends set =gnaw-open-message-function= to handle =auto=/=mua=. =M-x
+gnaw-configure-email-client= configures this per source, including the
+Gnus group when =gnus= is selected.
 
 * Applying patches
 
-=a= runs =git apply= (patch the working tree) and =A= runs =git am=
-(apply as commits) in the source's =:repo= (falling back to
-=gnaw-apply-repo= or a prompt), warning when a patch series looks
-incomplete.  See =*gnaw-git*= for the output; on a failed =git am=, run
-=git am --abort=.
+=a= runs =git apply= (patch the working tree) and =A= runs =git am= (apply as
+commits) in the source's =:repo= (falling back to =gnaw-apply-repo= or a
+prompt), warning when a patch series looks incomplete. See =*gnaw-git*=
+for the output; on a failed =git am=, run =git am --abort=.
 
 * =config.edn=
 
