@@ -1415,11 +1415,13 @@ left untouched."
 
 (defun gnaw-list-filter-by (key)
   "Limit the list to reports whose KEY field matches a read value.
-Read the value (completing types, `*' for flag fields), then set the
-query to `KEY:value'; an empty value clears the filter."
+Read the value (completing types and topics, `*' for flag fields),
+then set the query to `KEY:value'; an empty value clears the filter."
   (let* ((flag (member key '("acked" "owned" "closed" "urgent" "important")))
          (val (cond (flag "*")
                     ((equal key "type") (completing-read "Type: " gnaw-report-types))
+                    ((equal key "topic")
+                     (completing-read "Topic: " (gnaw-topics gnaw-list--reports)))
                     (t (read-string (format "%s: " key))))))
     (setq-local gnaw-list--query
                 (and val (not (string-empty-p val)) (format "%s:%s" key val)))
