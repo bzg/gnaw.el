@@ -1,6 +1,6 @@
 #+title: gnaw.el --- GNAW is Not Another Workflow
 
-: 3==3
+: 3==3      <= A gnawed bone.
 
 [[https://www.repostatus.org/#active][https://img.shields.io/badge/status-active-brightgreen.svg?style=for-the-badge]]
 [[https://intver.org/][https://img.shields.io/badge/versioning-intver.org-blue.svg?style=for-the-badge]]
