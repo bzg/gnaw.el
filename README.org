@@ -67,15 +67,15 @@ source.
 | Key   | Action                                                  |
 |-------+---------------------------------------------------------|
 | =RET=   | open the report's email (see /Reading/ below)             |
-| =C-RET= | toggle the report's email in a window below the list    |
+| =SPC=   | toggle the report's email in a window below the list    |
 | =f=     | follow mode: auto-show the email of the report at point |
 | =TAB=   | fold / unfold the patch series at point                 |
 | =S-TAB= | unfold all the patch series, or fold them all back      |
 | =p=     | view the report's patch(es) in =diff-mode=                |
 | =a=     | =git apply= the patch(es) to the source repo tree         |
 | =A=     | =git am= the patch(es) as commits in the source repo      |
-| =/=     | filter the list by a query (see /Searching/)              |
-| =\vert=     | clear the active filter (=C-u /= also clears)             |
+| =s=     | filter the list by a query (=/= works too, see /Searching/) |
+| =\vert=     | clear the active filter (=C-u s= also clears)             |
 | ===     | filter by one field (a =transient= menu)                  |
 | =t=     | limit to a report type (bug, patch, request...)         |
 | =S=     | sort by the column at point; on Mark, by sticky/dismiss |
@@ -106,7 +106,7 @@ shared with the gnaw CLI and the front-ends.
 
 * Searching
 
-=/= filters the list with a subset of the BONE web query syntax:
+=s= (or =/=) filters the list with a subset of the BONE web query syntax:
 =key:value= tokens.  Operators, loosest to tightest binding: =|= is OR
 between clauses, space is AND between tokens, and a comma inside a value
 is OR (=acked:alice,bob=).  So =a b c | d= reads as =(a b c) | d=.
@@ -125,7 +125,7 @@ is OR (=acked:alice,bob=).  So =a b c | d= reads as =(a b c) | d=.
 | =deadline:2m=              | =D:=       | due within / on (forward)             |
 | =expired:10d=              | =e:=       | expiring within (forward)             |
 
-The active query shows in the mode line; =|= (or =C-u /=, or =/= then =RET=)
+The active query shows in the mode line; =|= (or =C-u s=, or =s= then =RET=)
 clears it.
 
 * Reading messages
@@ -135,7 +135,7 @@ an alist mapping a source name to =auto=, =mua=, =gnus=, =notmuch=, =mu4e=
 or =web= (the entry keyed by =t= is the default).  =gnus= reads the group
 from =gnaw-gnus-group= (an alist; asked with completion otherwise);
 =notmuch= and =mu4e= open by message-id; =web= fetches the public-inbox
-archive.  =C-RET= shows the mail in a window below the list, keeping
+archive.  =SPC= toggles the mail in a window below the list, keeping
 point in the list; =f= (=gnaw-list-follow-mode=) does this
 automatically as point moves.
 

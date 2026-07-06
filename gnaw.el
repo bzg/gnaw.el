@@ -1678,7 +1678,7 @@ The query in `gnaw-list--query' filters the result."
 (defvar gnaw-list-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'gnaw-list-open)
-    (define-key map (kbd "<C-return>") #'gnaw-list-open-other-window)
+    (define-key map (kbd "SPC") #'gnaw-list-open-other-window)
     (define-key map "f" #'gnaw-list-follow-mode)
     (define-key map (kbd "TAB") #'gnaw-list-toggle-fold)
     (define-key map (kbd "<backtab>") #'gnaw-list-toggle-fold-all)
@@ -1687,6 +1687,7 @@ The query in `gnaw-list--query' filters the result."
     (define-key map "A" #'gnaw-list-am-patches)
     (define-key map "g" #'gnaw-list-reload)
     (define-key map "G" #'gnaw-list-update)
+    (define-key map "s" #'gnaw-list-filter)
     (define-key map "/" #'gnaw-list-filter)
     (define-key map "|" #'gnaw-list-filter-clear)
     (define-key map "=" #'gnaw-list-filter-transient)
@@ -1845,7 +1846,7 @@ already the one shown, close the other windows instead."
   "Pending idle timer of `gnaw-list-follow-mode'.")
 
 (defun gnaw-list--follow-show (buffer)
-  "Show the mail of the report at point in BUFFER, as C-RET would.
+  "Show the mail of the report at point in BUFFER, as SPC would.
 Do nothing unless BUFFER is still shown in the selected window."
   (when (and (buffer-live-p buffer)
              (eq (window-buffer (selected-window)) buffer))
