@@ -668,18 +668,19 @@ Columns: local mark, type letter, flags, priority letter, deadline
     (concat mark " " type " " flags " " pri-str " " dl-pad ex-pad votes-pad)))
 
 (defun gnaw-topics (reports)
-  "Return the sorted list of topics in REPORTS ((MID . INFO) pairs)."
+  "Return the sorted list of topics in REPORTS ((MID . INFO) pairs).
+A report's :topic may hold several space-separated topics."
   (let ((topics nil))
     (dolist (r reports)
-      (let ((topic (plist-get (cdr r) :topic)))
-        (when topic
-          (cl-pushnew topic topics :test #'equal))))
+      (dolist (topic (split-string (or (plist-get (cdr r) :topic) "")))
+        (cl-pushnew topic topics :test #'equal)))
     (sort topics #'string<)))
 
 (defun gnaw-filter-by-topic (reports topic)
-  "Return the REPORTS pairs whose info matches TOPIC."
-  (cl-remove-if-not (lambda (r) (equal (plist-get (cdr r) :topic) topic))
-                    reports))
+  "Return the REPORTS pairs one of whose :topic tokens equals TOPIC."
+  (cl-remove-if-not
+   (lambda (r) (member topic (split-string (or (plist-get (cdr r) :topic) ""))))
+   reports))
 
 ;;; Source metadata (meta.json) and patch files
 
