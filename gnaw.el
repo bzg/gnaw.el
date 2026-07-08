@@ -1422,21 +1422,51 @@ absence; any other VAL matches nothing."
   (cond ((member val '(nil "" "*" "true")) set)
         ((equal val "false") (not set))))
 
+(defvar gnaw--subject-words-cache (make-hash-table :test 'equal)
+  "Memoized `gnaw--subject-words' results, keyed by subject.
+Tokenizing every subject anew dominates the cost of a similar:
+filter pass; the words only change when the reports do, so
+`gnaw-list-reload' resets the table and re-warms it when idle.")
+
+(defvar gnaw--subject-words-timer nil
+  "Idle timer re-warming `gnaw--subject-words-cache', or nil.")
+
 (defun gnaw--subject-words (subject)
   "Return the significant words of SUBJECT for similarity matching.
 Downcased words of four letters or more, without duplicates;
-bracketed tags like [PATCH v2 1/3] are dropped first."
-  (let ((s (replace-regexp-in-string "\\[[^]]*\\]" " "
-                                     (downcase (or subject "")))))
-    (seq-filter (lambda (w) (>= (length w) 4))
-                (delete-dups (split-string s "[^[:alnum:]]+" t)))))
+bracketed tags like [PATCH v2 1/3] are dropped first.  A hyphenated
+name such as org-element--cache counts as one word, which singles
+out such identifiers instead of scattering them into fragments.
+The result is memoized in `gnaw--subject-words-cache'."
+  (let ((cached (gethash subject gnaw--subject-words-cache 'miss)))
+    (if (not (eq cached 'miss))
+        cached
+      (puthash
+       subject
+       (let ((s (replace-regexp-in-string "\\[[^]]*\\]" " "
+                                          (downcase (or subject "")))))
+         (seq-filter (lambda (w) (>= (length w) 4))
+                     (delete-dups
+                      (mapcar (lambda (w) (string-trim w "-+" "-+"))
+                              (split-string s "[^[:alnum:]-]+" t)))))
+       gnaw--subject-words-cache))))
+
+(defvar gnaw--query-similar-parsed nil
+  "Cons (VAL . WORDS) memoizing the last similar: value parsed.
+A filter pass calls `gnaw--query-similar-match' once per report
+with the same VAL; parsing it once per pass is enough.")
 
 (defun gnaw--query-similar-match (val subject)
   "Non-nil if SUBJECT shares enough words with query value VAL.
 VAL is words joined by `+' (as built by `gnaw-list-filter-cell');
 SUBJECT matches when it contains at least three of them -- all of
 them when VAL has fewer than three."
-  (let* ((words (mapcar #'downcase (split-string (or val "") "\\+" t)))
+  (let* ((words (if (equal val (car gnaw--query-similar-parsed))
+                    (cdr gnaw--query-similar-parsed)
+                  (cdr (setq gnaw--query-similar-parsed
+                             (cons val (mapcar #'downcase
+                                               (split-string (or val "")
+                                                             "\\+" t)))))))
          (need (min 3 (length words)))
          (mine (gnaw--subject-words subject)))
     (and (> need 0)
@@ -2002,6 +2032,7 @@ is narrowed to related reports, delegate to
     (define-key map "/" #'gnaw-list-filter)
     (define-key map "=" #'gnaw-list-filter-transient)
     (define-key map "t" #'gnaw-list-limit-type)
+    (define-key map "T" #'gnaw-list-filter-topic)
     (define-key map "a" #'gnaw-list-filter-acked)
     (define-key map "o" #'gnaw-list-filter-owned)
     (define-key map "c" #'gnaw-list-limit-closed)
@@ -2056,9 +2087,22 @@ Does not re-read the report cache; use `gnaw-list-reload' for that."
     (set-window-start (selected-window) start t)))
 
 (defun gnaw-list-reload ()
-  "Re-read reports from the local cache, then re-render."
+  "Re-read reports from the local cache, then re-render.
+Reset the subject-words cache, then re-warm it once Emacs has been
+idle for a second, so the first similar: filter finds it filled."
   (interactive)
   (setq-local gnaw-list--reports (gnaw-reports))
+  (clrhash gnaw--subject-words-cache)
+  (when (timerp gnaw--subject-words-timer)
+    (cancel-timer gnaw--subject-words-timer))
+  (setq gnaw--subject-words-timer
+        (run-with-idle-timer
+         1 nil
+         (lambda (reports)
+           (setq gnaw--subject-words-timer nil)
+           (dolist (p reports)
+             (gnaw--subject-words (plist-get (cdr p) :subject))))
+         gnaw-list--reports))
   (gnaw-list-refresh))
 
 (defun gnaw-list-filter-clear ()
@@ -2843,6 +2887,7 @@ order."
      (gnaw-list-filter-transient "filter by one field (menu)")
      (gnaw-select-preset-filter "apply a preset filter")
      (gnaw-list-limit-type "limit to a report type")
+     (gnaw-list-filter-topic "filter by a topic, with completion")
      (gnaw-list-filter-acked "only the acked reports")
      (gnaw-list-filter-owned "only the owned reports")
      (gnaw-list-limit-closed "only the closed reports (canceled, resolved...)")
