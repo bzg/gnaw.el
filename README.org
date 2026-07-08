@@ -109,8 +109,11 @@ and its relations, showing closed reports in italic like the BONE web
 interface; =TAB= (or =q=) restores the full list. Related reports absent
 from the loaded sources -- for instance closed reports when the
 source is an open-reports JSON -- are shown as greyed-out placeholder
-rows built from the relation metadata (type, subject); =RET= on such a
-row still works when the mail client can look the message up. Series
+rows built from the relation metadata: type, subject, and the date
+the relation was posed in the Date column; the help echo (=C-h .=, or
+hovering) adds the relation kind, who posed it and the message-id.
+=RET= on such a row still works when the mail client can look the
+message up. Series
 folding takes precedence: on a series member that also has related
 reports, use =C-u TAB= to narrow. Setting or clearing a filter leaves
 the related view.
@@ -131,19 +134,21 @@ CLI and the front-ends.
 between clauses, space is AND between tokens, and a comma inside a
 value is OR (=acked:alice,bob=). So =a b c | d= reads as =(a b c) | d=.
 
-| Long                     | Short    | Matches                               |
-|--------------------------+----------+---------------------------------------|
-| =from:bzg=                 | =f:=       | from address or name                  |
-| =subject:crash=            | =s:=       | subject (a bare word matches subject) |
-| =topic:agenda=             | =t:=       | topic                                 |
-| =type:patch=               |          | report type                           |
-| =priority:2=               | =p:=       | exact priority (0-3, shown A/B/C)     |
-| =mid:<...>=                | =m:=       | message-id                            |
-| =acked:bzg= =owned:= =closed:= | =a: o: c:= | by person (or =*= for any)              |
-| =urgent:= =important:=       | =u: i:=    | priority bits (set or not)            |
-| =date:3d= =date:A..B=        | =d:=       | created (durations =Nd/Nw/Nm=, ranges)  |
-| =deadline:2m=              | =D:=       | due within / on (forward)             |
-| =expired:10d=              | =e:=       | expiring within (forward)             |
+| Long                     | Short    | Matches                                   |
+|--------------------------+----------+-------------------------------------------|
+| =from:bzg=                 | =f:=       | from address or name                      |
+| =subject:crash=            | =s:=       | subject (a bare word matches subject)     |
+| =topic:agenda=             | =t:=       | topic                                     |
+| =type:patch=               |          | report type                               |
+| =priority:2=               | =p:=       | exact priority (0-3, shown A/B/C)         |
+| =mid:<...>=                | =m:=       | message-id                                |
+| =acked:bzg= =owned:= =closed:= | =a: o: c:= | by person (or =*= for any)                  |
+| =urgent:= =important:=       | =u: i:=    | priority bits (set or not)                |
+| =flags:AO=                 |          | Flags letters, all required (A O C R E S) |
+| =att:~+=                   |          | Att glyphs, all required (? ~ + x @ #)    |
+| =date:3d= =date:A..B=        | =d:=       | created (durations =Nd/Nw/Nm=, ranges)      |
+| =deadline:2m=              | =D:=       | due within / on (forward)                 |
+| =expired:10d=              | =e:=       | expiring within (forward)                 |
 
 The active query shows in the mode line; =|= (or =C-u /=, or =/= then =RET=)
 clears it.

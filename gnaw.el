@@ -360,20 +360,42 @@ The body is read as raw bytes and decoded as UTF-8."
     (concat "<" mid ">")))
 
 (defconst gnaw--relation-keys
-  '(related-to resolves resolved-by
+  '(resolves resolved-by
     supersedes superseded-by
-    duplicates duplicated-by)
-  "Per-kind relation fields of a report, as emitted by BONE.")
+    duplicates duplicated-by
+    related-to)
+  "Per-kind relation fields of a report, as emitted by BONE.
+`related-to' comes last: BONE poses a `related-to' companion edge
+next to each closure relation, and `gnaw--report-related' dedups
+by message-id keeping the first entry seen -- the specific kind
+must win over the companion.")
 
 (defun gnaw--report-related (r)
-  "Merge report R's per-kind relation entries, deduped by message-id."
+  "Merge report R's per-kind relation entries, deduped by message-id.
+Each entry is annotated with a `kind' key naming the relation field
+it came from."
   (let (mids entries)
     (dolist (k gnaw--relation-keys (nreverse entries))
       (dolist (e (alist-get k r))
         (when-let* ((mid (alist-get 'message-id e)))
           (unless (member mid mids)
             (push mid mids)
-            (push e entries)))))))
+            (push (cons (cons 'kind k) e) entries)))))))
+
+(defun gnaw--relation-kind-label (kind)
+  "Describe a related report of relation KIND, seen from the origin.
+The phrasing follows the BONE JSON: under a report, the `supersedes'
+field lists the reports superseding it, `resolved-by' the patches
+resolving it, and so on."
+  (pcase kind
+    ('related-to    "related to it")
+    ('supersedes    "supersedes it")
+    ('superseded-by "superseded by it")
+    ('resolves      "resolved by it")
+    ('resolved-by   "resolves it")
+    ('duplicates    "duplicated by it")
+    ('duplicated-by "duplicates it")
+    (_ (and kind (format "%s" kind)))))
 
 (defun gnaw--extract-open-reports (source)
   "Extract published reports from SOURCE as (MID . INFO) pairs.
@@ -1445,6 +1467,26 @@ An empty VAL is passed through unsplit, keeping its match-any meaning."
          (gnaw--query-flag-match val (= (logand prio 2) 2)))
         ((or "important" "i")
          (gnaw--query-flag-match val (= (logand prio 1) 1)))
+        ;; Glyph matches, mirroring the Flags and Att columns: every
+        ;; letter of the value must be present (a comma is OR, as
+        ;; elsewhere).  flags:AO = acked and owned; flags:S =
+        ;; superseded; att:~+ = related and a single patch.
+        ("flags"
+         (gnaw--query-val-any
+          val (lambda (v)
+                (and v (not (string-empty-p v))
+                     (let ((f (or (plist-get info :flags) "")))
+                       (seq-every-p (lambda (ch) (seq-contains-p f ch))
+                                    (upcase v)))))))
+        ((or "att" "attributes")
+         (gnaw--query-val-any
+          val (lambda (v)
+                (and v (not (string-empty-p v))
+                     (let ((s (gnaw--att-string info)))
+                       ;; downcase: x is the only cased glyph, and the
+                       ;; neighbor flags: alphabet is uppercase.
+                       (seq-every-p (lambda (ch) (seq-contains-p s ch))
+                                    (downcase v)))))))
         ((or "date" "d") (gnaw--query-date-match val (plist-get info :date) nil))
         ((or "deadline" "D") (gnaw--query-date-match val (plist-get info :deadline) t))
         ((or "expired" "e") (gnaw--query-date-match val (plist-get info :expiry) t))
@@ -1464,7 +1506,8 @@ An empty VAL is passed through unsplit, keeping its match-any meaning."
 
 (defconst gnaw--query-keys
   '("from:" "subject:" "topic:" "type:" "priority:" "mid:" "acked:"
-    "owned:" "closed:" "urgent:" "important:" "date:" "deadline:" "expired:")
+    "owned:" "closed:" "urgent:" "important:" "flags:" "att:"
+    "date:" "deadline:" "expired:")
   "Long-form query keys completed in `gnaw-list-filter'.")
 
 (defconst gnaw-report-types
@@ -1523,6 +1566,10 @@ then set the query to `KEY:value'; an empty value clears the filter."
                     ((equal key "type") (completing-read "Type: " gnaw-report-types))
                     ((equal key "topic")
                      (completing-read "Topic: " (gnaw-topics gnaw-list--reports)))
+                    ((equal key "flags")
+                     (read-string "Flags letters, all required (A O C R E S): "))
+                    ((equal key "att")
+                     (read-string "Att glyphs, all required (? ~ + x @ #): "))
                     (t (read-string (format "%s: " key))))))
     (setq-local gnaw-list--related-mids nil) ; filtering leaves the related view
     (setq-local gnaw-list--query
@@ -1545,7 +1592,8 @@ then set the query to `KEY:value'; an empty value clears the filter."
 (gnaw--define-filter-commands
  "from" "subject" "topic" "priority" "mid"
  "date" "deadline" "expired"
- "acked" "owned" "closed" "urgent" "important")
+ "acked" "owned" "closed" "urgent" "important"
+ "flags" "att")
 
 (transient-define-prefix gnaw-list-filter-transient ()
   "Filter the report list by one field."
@@ -1565,7 +1613,10 @@ then set the query to `KEY:value'; an empty value clears the filter."
     ("o" "Owned"      gnaw-list-filter-owned)
     ("c" "Closed"     gnaw-list-filter-closed)
     ("u" "Urgent"     gnaw-list-filter-urgent)
-    ("i" "Important"  gnaw-list-filter-important)]])
+    ("i" "Important"  gnaw-list-filter-important)]
+   ["Glyphs"
+    ("F" "Flags letters" gnaw-list-filter-flags)
+    ("A" "Att glyphs"    gnaw-list-filter-att)]])
 
 ;;; Report browser (gnaw-list)
 
@@ -1638,6 +1689,20 @@ are offered."
                                           (?- nil) (_ "closed")))))))
       (string-join parts ", "))))
 
+(defun gnaw--att-string (info)
+  "Return the three-position Att column string for report INFO.
+Positions: awaiting (?), related (~), then one attachment glyph --
++ one patch, x several, @ calendar events, # plain-text files.
+Also matched, sans spaces, by the att: query key."
+  (let ((patches (plist-get info :patches)))
+    (concat (if (plist-get info :awaiting) "?" " ")
+            (if (plist-get info :related) "~" " ")
+            (cond ((cdr patches)            "x")
+                  (patches                  "+")
+                  ((plist-get info :events) "@")
+                  ((plist-get info :texts)  "#")
+                  (t " ")))))
+
 (defun gnaw--att-help (info)
   "Spell out INFO's Att column for its help echo, or nil."
   (cl-flet ((tally (key one many)
@@ -1663,16 +1728,7 @@ The Flags and Att cells carry a help echo spelling them out, which
     (:mark (if (and mid (member mid gnaw-list--flagged))
                "D"
              (gnaw-mark-prefix entry)))
-    ;; Three dedicated positions: awaiting, related, then a single
-    ;; attachment glyph, patches taking precedence over ics over text.
-    (:att (let* ((patches (plist-get info :patches))
-                 (s (concat (if (plist-get info :awaiting) "?" " ")
-                            (if (plist-get info :related) "~" " ")
-                            (cond ((cdr patches)              "x")
-                                  (patches                    "+")
-                                  ((plist-get info :events)   "@")
-                                  ((plist-get info :texts)    "#")
-                                  (t " ")))))
+    (:att (let ((s (gnaw--att-string info)))
             (if-let* ((help (gnaw--att-help info)))
                 (propertize s 'help-echo (concat "Att: " help))
               s)))
@@ -1788,22 +1844,38 @@ relation metadata, shown in `gnaw-missing' face."
     ;; Placeholder rows for the related mids the sources do not carry.
     ;; RET still works when the mail client can look the mid up (local
     ;; mailbox) or through the archive URL carried by the relation.
+    ;; The Date column shows when the relation was posed; the help echo
+    ;; spells out the relation kind, its setter and the message-id.
     (let ((origin (cdr (assoc (car gnaw-list--related-mids)
                               gnaw-list--reports))))
       (dolist (mid (cdr gnaw-list--related-mids))
         (unless (member mid found)
           (let* ((e (cdr (assoc mid gnaw-list--related-entries)))
+                 (setter   (alist-get 'setter e))
+                 (posed-at (alist-get 'posed-at e))
                  (info (list :type (or (alist-get 'type e) "?")
                              :subject (or (alist-get 'subject e) mid)
                              :priority 0
+                             :date posed-at
                              :source (plist-get origin :source)
                              :source-name (plist-get origin :source-name)
                              :archived-at (alist-get 'archived-at e)
                              :missing t))
+                 (help (mapconcat
+                        #'identity
+                        (delq nil
+                              (list (gnaw--relation-kind-label
+                                     (alist-get 'kind e))
+                                    (when setter (format "set by %s" setter))
+                                    (when posed-at (format "on %s" posed-at))
+                                    mid
+                                    "not in the loaded sources"))
+                        "; "))
                  (cells (mapcar (lambda (c)
                                   (propertize
                                    (gnaw--list-cell (nth 3 c) info nil mid)
-                                   'face 'gnaw-missing))
+                                   'face 'gnaw-missing
+                                   'help-echo help))
                                 cols)))
             (push (list (cons mid info) (vconcat cells)) rows)))))
     (nreverse rows)))
@@ -2394,7 +2466,8 @@ member.  When the list is already narrowed, restore it."
                           2))
              (gnaw-list-patch-series-fold))
             ((plist-get info :related) (gnaw-list-related-narrow))
-            (t (user-error "No patch series or related reports at point"))))))
+            (t (user-error
+                "This report has no related reports or no series to unfold"))))))
 
 (defun gnaw-list--goto (pred)
   "Move point to the first row whose (MID . INFO) pair satisfies PRED.
