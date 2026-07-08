@@ -1281,6 +1281,13 @@ entries."
   "Message-ids the list is narrowed to, the origin report first, or nil.
 Set by `gnaw-list-related-narrow'.  Buffer-local in use.")
 
+(defvar gnaw-list--related-entries nil
+  "Alist of (MID . RELATION-ENTRY) for the related-reports view.
+RELATION-ENTRY is the relation alist exported by BONE (type,
+subject, archived-at...), used to build placeholder rows for
+related reports absent from the loaded sources.  Set by
+`gnaw-list-related-narrow'.  Buffer-local in use.")
+
 (defvar-local gnaw-list--flagged nil
   "Message-ids flagged for dismissal (d), executed by x.")
 
@@ -1305,6 +1312,11 @@ Set by `gnaw--list-format'.  Buffer-local in use.")
 
 (defface gnaw-closed '((t :slant italic))
   "Face for closed reports in the related-reports view."
+  :group 'gnaw)
+
+(defface gnaw-missing '((t :inherit shadow :slant italic))
+  "Face for related reports absent from the loaded sources.
+Their placeholder rows are built from the relation metadata only."
   :group 'gnaw)
 
 (defun gnaw--query-text-match (needle hay)
@@ -1653,12 +1665,14 @@ The Flags and Att cells carry a help echo spelling them out, which
              (gnaw-mark-prefix entry)))
     ;; Three dedicated positions: awaiting, related, then a single
     ;; attachment glyph, patches taking precedence over ics over text.
-    (:att (let ((s (concat (if (plist-get info :awaiting) "?" " ")
-                           (if (plist-get info :related) "~" " ")
-                           (cond ((plist-get info :patches) "+")
-                                 ((plist-get info :events)  "@")
-                                 ((plist-get info :texts)   "#")
-                                 (t " ")))))
+    (:att (let* ((patches (plist-get info :patches))
+                 (s (concat (if (plist-get info :awaiting) "?" " ")
+                            (if (plist-get info :related) "~" " ")
+                            (cond ((cdr patches)              "x")
+                                  (patches                    "+")
+                                  ((plist-get info :events)   "@")
+                                  ((plist-get info :texts)    "#")
+                                  (t " ")))))
             (if-let* ((help (gnaw--att-help info)))
                 (propertize s 'help-echo (concat "Att: " help))
               s)))
@@ -1748,12 +1762,16 @@ width, so the trailing Created column stays at the right edge."
 (defun gnaw--list-entries-related ()
   "Return `tabulated-list-entries' for the related-reports view.
 Show the reports of `gnaw-list--related-mids' only, closed ones in
-italic, ignoring the filter query and the dismissed filter."
+italic, ignoring the filter query and the dismissed filter.  Related
+reports absent from the loaded sources (e.g. closed ones when the
+source is an open-reports JSON) get a placeholder row built from the
+relation metadata, shown in `gnaw-missing' face."
   (let ((state (gnaw-read-state))
         (cols (gnaw--active-columns))
-        rows)
-    (dolist (p gnaw-list--reports (nreverse rows))
+        found rows)
+    (dolist (p gnaw-list--reports)
       (when (member (car p) gnaw-list--related-mids)
+        (push (car p) found)
         (let* ((entry (cdr (assoc (car p) state)))
                (faces (delq nil
                             (list (cond ((assq :sticky entry) 'gnaw-sticky)
@@ -1766,7 +1784,29 @@ italic, ignoring the filter query and the dismissed filter."
           (when faces
             (setq cells (mapcar (lambda (s) (propertize s 'face faces))
                                 cells)))
-          (push (list p (vconcat cells)) rows))))))
+          (push (list p (vconcat cells)) rows))))
+    ;; Placeholder rows for the related mids the sources do not carry.
+    ;; RET still works when the mail client can look the mid up (local
+    ;; mailbox) or through the archive URL carried by the relation.
+    (let ((origin (cdr (assoc (car gnaw-list--related-mids)
+                              gnaw-list--reports))))
+      (dolist (mid (cdr gnaw-list--related-mids))
+        (unless (member mid found)
+          (let* ((e (cdr (assoc mid gnaw-list--related-entries)))
+                 (info (list :type (or (alist-get 'type e) "?")
+                             :subject (or (alist-get 'subject e) mid)
+                             :priority 0
+                             :source (plist-get origin :source)
+                             :source-name (plist-get origin :source-name)
+                             :archived-at (alist-get 'archived-at e)
+                             :missing t))
+                 (cells (mapcar (lambda (c)
+                                  (propertize
+                                   (gnaw--list-cell (nth 3 c) info nil mid)
+                                   'face 'gnaw-missing))
+                                cols)))
+            (push (list (cons mid info) (vconcat cells)) rows)))))
+    (nreverse rows)))
 
 (defun gnaw--list-entries ()
   "Return `tabulated-list-entries', folding patch series unless expanded.
@@ -1852,10 +1892,13 @@ is narrowed to related reports, delegate to
     (define-key map (kbd "SPC") #'gnaw-list-open-other-window)
     (define-key map "f" #'gnaw-list-follow-mode)
     (define-key map (kbd "TAB") #'gnaw-list-tab)
-    (define-key map "p" #'gnaw-list-attachments)
+    (define-key map "v" #'gnaw-list-attachment-view)
+    (define-key map "s" #'gnaw-list-attachment-save)
+    (define-key map "a" #'gnaw-list-patch-apply)
+    (define-key map "A" #'gnaw-list-patch-am)
+    (define-key map "+" #'gnaw-list-attachments)
     (define-key map "g" #'gnaw-list-reload)
     (define-key map "G" #'gnaw-list-update)
-    (define-key map "s" #'gnaw-list-filter)
     (define-key map "/" #'gnaw-list-filter)
     (define-key map "|" #'gnaw-list-filter-clear)
     (define-key map "=" #'gnaw-list-filter-transient)
@@ -1870,6 +1913,7 @@ is narrowed to related reports, delegate to
     (define-key map "_" #'gnaw-list-toggle-dismissed)
     (define-key map "\\" #'gnaw-select-preset-filter)
     (define-key map "?" #'describe-mode)
+    (define-key map "q" #'gnaw-list-quit)
     map)
   "Keymap for `gnaw-list-mode'.")
 
@@ -2136,11 +2180,73 @@ patch of the report; other files are displayed."
       (pop-to-buffer (current-buffer))
       (goto-char (point-min)))))
 
+(defun gnaw--choose-attachment (info prompt)
+  "Choose one attachment of report INFO, prompting with PROMPT.
+Return a (TYPE . ENTRY) pair; a single attachment is returned
+without prompting.  On a multi-patch report, an extra candidate
+returns (all-patches) to act on every patch at once."
+  (let* ((atts (gnaw--attachments info))
+         (patches (plist-get info :patches))
+         (cands (append
+                 (when (cdr patches)
+                   (list (cons (format "all patches (%d)" (length patches))
+                               '(all-patches))))
+                 (mapcar (lambda (att)
+                           (cons (format "%s: %s"
+                                         (pcase (car att)
+                                           ('patch "patch")
+                                           ('event "ics")
+                                           ('text  "text"))
+                                         (file-name-nondirectory
+                                          (or (alist-get 'file (cdr att)) "")))
+                                 att))
+                         atts))))
+    (pcase atts
+      ('() (user-error "This report has no attachments"))
+      (`(,att) att)
+      (_ (cdr (assoc (completing-read prompt cands nil t) cands))))))
+
+(defun gnaw-list-attachment-view ()
+  "View an attachment of the report at point, asking which when several.
+Patches are shown in `diff-mode', other files in a read-only buffer."
+  (interactive)
+  (let* ((info (cdr (gnaw-list--current)))
+         (att (gnaw--choose-attachment info "View attachment: ")))
+    (pcase (car att)
+      ('patch       (gnaw-view-patches info (list (cdr att))))
+      ('all-patches (gnaw-view-patches info nil))
+      (_            (gnaw--show-attachment info att)))))
+
+(defun gnaw-list-attachment-save (&optional no-confirm)
+  "Save an attachment of the report at point, asking which when several.
+The target directory prompt proposes the source's configured `:repo'
+\(or `gnaw-apply-repo').  With a prefix argument NO-CONFIRM, save
+there without asking and overwrite silently.  Patches go through
+`gnaw-save-patches'."
+  (interactive "P")
+  (let* ((info (cdr (gnaw-list--current)))
+         (att (gnaw--choose-attachment info "Save attachment: ")))
+    (pcase (car att)
+      ('patch       (gnaw-save-patches info no-confirm (list (cdr att))))
+      ('all-patches (gnaw-save-patches info no-confirm nil))
+      (_ (let* ((entry (cdr att))
+                (file (or (gnaw-attachment-file info entry (car att))
+                          (user-error "Cannot fetch attachment %s"
+                                      (alist-get 'file entry))))
+                (repo (or (gnaw--source-repo info) gnaw-apply-repo))
+                (dir (if (and repo no-confirm)
+                         (file-name-as-directory repo)
+                       (read-directory-name "Save attachment in: " repo))))
+           (copy-file file (expand-file-name (file-name-nondirectory file) dir)
+                      (if no-confirm t 1))
+           (message "gnaw: saved %s in %s"
+                    (file-name-nondirectory file) dir))))))
+
 (defun gnaw-list-attachments ()
   "Act on the attachments of the report at point.
 A single patch opens the patch menu; a single calendar or text
 attachment is displayed right away; several attachments are listed
-in a buffer where p acts again on the attachment at point."
+in a buffer where + acts again on the attachment at point."
   (interactive)
   (let* ((info (cdr (gnaw-list--current)))
          (atts (gnaw--attachments info)))
@@ -2156,7 +2262,7 @@ the report list is updated.")
 
 (defvar gnaw-attachments-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map "p" #'gnaw-attachments-act)
+    (define-key map "+" #'gnaw-attachments-act)
     (define-key map (kbd "RET") #'gnaw-attachments-act)
     map)
   "Keymap for `gnaw-attachments-mode'.")
@@ -2190,7 +2296,7 @@ at once."
     (tabulated-list-print)
     (pop-to-buffer (current-buffer))
     (goto-char (point-min))
-    (message "gnaw: type p to act on the attachment at point")))
+    (message "gnaw: type + or RET to act on the attachment at point")))
 
 (defun gnaw-attachments-act ()
   "Act on the attachment at point: patch menu, or display the file."
@@ -2237,12 +2343,17 @@ Closed related reports are shown in italic.  \\<gnaw-list-mode-map>\
          (missing (cl-count-if-not (lambda (mid) (assoc mid gnaw-list--reports))
                                    (cdr mids))))
     (setq-local gnaw-list--related-mids mids)
+    (setq-local gnaw-list--related-entries
+                (mapcar (lambda (e)
+                          (cons (gnaw-normalize-mid (alist-get 'message-id e))
+                                e))
+                        related))
     (gnaw-list-refresh)
     (gnaw-list--goto-mid (car mids))
-    (message "gnaw: %d related report(s)%s; TAB to come back"
-             (- (length mids) 1 missing)
+    (message "gnaw: %d related report(s)%s; TAB or q to come back"
+             (1- (length mids))
              (if (> missing 0)
-                 (format " (%d not in the current sources)" missing)
+                 (format " (%d not in the sources, greyed out)" missing)
                ""))))
 
 (defun gnaw-list-related-restore ()
@@ -2250,8 +2361,19 @@ Closed related reports are shown in italic.  \\<gnaw-list-mode-map>\
   (interactive)
   (let ((mid (car gnaw-list--related-mids)))
     (setq-local gnaw-list--related-mids nil)
+    (setq-local gnaw-list--related-entries nil)
     (gnaw-list-refresh)
     (when mid (gnaw-list--goto-mid mid))))
+
+(defun gnaw-list-quit ()
+  "Leave the related-reports view, or quit the window.
+When the list is narrowed to related reports, restore the full
+list (like \\<gnaw-list-mode-map>\\[gnaw-list-tab]); otherwise
+quit the window as `quit-window' does."
+  (interactive)
+  (if gnaw-list--related-mids
+      (gnaw-list-related-restore)
+    (quit-window)))
 
 (defun gnaw-list-tab (&optional related)
   "Fold or unfold the series at point, or narrow to related reports.
@@ -2527,7 +2649,12 @@ order."
      (gnaw-list-toggle-dismissed "show / hide dismissed reports"))
     ("Patches and attachments"
      (gnaw-list-tab "fold / unfold the series, or narrow to related reports")
-     (gnaw-list-attachments "act on attachments: patch menu, or view the file"))
+     (gnaw-list-quit "leave the related view, or quit the window")
+     (gnaw-list-attachment-view "view an attachment (patches in diff-mode)")
+     (gnaw-list-attachment-save "save an attachment (proposes the configured repo)")
+     (gnaw-list-patch-apply "apply the patches with git apply")
+     (gnaw-list-patch-am "apply the patches as commits with git am")
+     (gnaw-list-attachments "menu acting on patches and attachments"))
     ("Filter and sort"
      (gnaw-list-filter "filter with key:value tokens")
      (gnaw-list-filter-transient "filter by one field (menu)")
