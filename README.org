@@ -64,30 +64,29 @@ source.
 
 * The =*gnaw*= browser
 
-| Key   | Action                                                  |
-|-------+---------------------------------------------------------|
-| =RET=   | open the report's email (see /Reading/ below)             |
-| =SPC=   | toggle the report's email in a window below the list    |
-| =f=     | follow mode: auto-show the email of the report at point |
-| =TAB=   | fold / unfold the patch series at point                 |
-| =S-TAB= | unfold all the patch series, or fold them all back      |
-| =p=     | patch menu: view, =git apply=, =git am=, save               |
-| =s=     | filter the list by a query (=/= works too, see /Searching/) |
-| =\vert=     | clear the active filter (=C-u s= also clears)             |
-| ===     | filter by one field (a =transient= menu)                  |
-| =t=     | limit to a report type (bug, patch, request...)         |
-| =S=     | sort by the column at point; on Mark, by sticky/dismiss |
-| =o=     | sort by a criterion chosen from a menu (=gnaw-sort=)      |
-| =!=     | mark sticky: bold + exported to todo.org, shown =!=       |
-| =d=     | flag the report for dismissal, shown =D=                  |
-| =x=     | dismiss all the flagged reports                         |
-| =D=     | dismiss immediately: hide the report, shown =d=           |
-| =u=     | remove the sticky/dismiss mark or the flag              |
-| =_=     | show / hide dismissed reports                           |
-| =h=     | list these bindings in a help window                    |
-| =\=     | apply a preset filter (see =gnaw-preset-filters=)         |
-| =g=     | reload from the local cache                             |
-| =G=     | refresh the remote cache, then reload                   |
+| Key | Action                                                  |
+|-----+---------------------------------------------------------|
+| =RET= | open the report's email (see /Reading/ below)             |
+| =SPC= | toggle the report's email in a window below the list    |
+| =f=   | follow mode: auto-show the email of the report at point |
+| =TAB= | fold / unfold the series, or narrow to related reports  |
+| =p=   | act on the attachments: patch menu, or view the file    |
+| =s=   | filter the list by a query (=/= works too, see /Searching/) |
+| =\vert=   | clear the active filter (=C-u s= also clears)             |
+| ===   | filter by one field (a =transient= menu)                  |
+| =t=   | limit to a report type (bug, patch, request...)         |
+| =S=   | sort by the column at point; on Mark, by sticky/dismiss |
+| =o=   | sort by a criterion chosen from a menu (=gnaw-sort=)      |
+| =!=   | mark sticky: bold + exported to todo.org, shown =!=       |
+| =d=   | flag the report for dismissal, shown =D=                  |
+| =x=   | dismiss all the flagged reports                         |
+| =D=   | dismiss immediately: hide the report, shown =d=           |
+| =u=   | remove the sticky/dismiss mark or the flag              |
+| =_=   | show / hide dismissed reports                           |
+| =h=   | list these bindings in a help window                    |
+| =\=   | apply a preset filter (see =gnaw-preset-filters=)         |
+| =g=   | reload from the local cache                             |
+| =G=   | refresh the remote cache, then reload                   |
 
 Patch series are folded into a single row (cover letter or first
 patch) with a status summary like =(2 acked, 1 open)=; =TAB= unfolds the
@@ -96,7 +95,16 @@ series to list each patch, =TAB= again folds it back.
 The Att column has three dedicated positions: =?= when the report
 awaits a reply, =~= when it has related reports, then one attachment
 glyph -- =+= for patches, =@= for calendar events (=.ics=) or =#= for
-plain-text files, in that order of priority.
+plain-text files, in that order of priority. The help echo of the
+Flags and Att cells (=C-h .=, or hovering with the mouse) spells them
+out.
+
+On a report with related reports, =TAB= narrows the list to the report
+and its relations, showing closed reports in italic like the BONE web
+interface; =TAB= again restores the full list. Series folding takes
+precedence: on a series member that also has related reports, use
+=C-u TAB= to narrow. Setting or clearing a filter leaves the related
+view.
 
 Two mutually exclusive local marks drive the view: *sticky* promotes a
 report (shown =!= in bold in the Mark column, and exported to =todo.org=
@@ -146,15 +154,23 @@ Front-ends set =gnaw-open-message-function= to handle =auto=/=mua=. =M-x
 gnaw-configure-email-client= configures this per source, including the
 Gnus group when =gnus= is selected.
 
-* Applying patches
+* Patches and attachments
 
-=p= opens the patch menu: =v= views the patch(es) in =diff-mode=, =a= runs
-=git apply= (patch the working tree), =m= runs =git am= (apply as commits)
-and =s= saves the patch files to a directory. Git runs in the source's
-=:repo= (falling back to =gnaw-apply-repo= or a prompt), warning when a
-patch series looks incomplete. See =*gnaw-git*= for the output; on a
-failed =git am=, run =git am --abort=. Saving proposes the source's
-=:repo= as the target directory; =p C-u s= saves there without asking.
+=p= acts on the attachments of the report at point. A single patch
+opens the patch menu: =v= views the patch in =diff-mode=, =a= runs =git
+apply= (patch the working tree), =m= runs =git am= (apply as a commit)
+and =s= saves the patch file to a directory. A single calendar (=.ics=)
+or text attachment is displayed right away. When the report has
+several attachments, =p= lists them in a buffer where =p= (or =RET=) acts
+on the attachment at point the same way; an extra first row opens the
+patch menu on all the patches at once.
+
+Git runs in the source's =:repo= (falling back to =gnaw-apply-repo= or a
+prompt), warning when a patch series looks incomplete. See =*gnaw-git*=
+for the output; on a failed =git am=, run =git am --abort=. Saving
+proposes the source's =:repo= as the target directory; a single patch
+is saved there without prompting, and =C-u s= in the menu does the
+same for several.
 
 * =config.edn=
 
