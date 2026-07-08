@@ -64,34 +64,40 @@ source.
 
 * The =*gnaw*= browser
 
-| Key | Action                                                  |
-|-----+---------------------------------------------------------|
-| =RET= | open the report's email (see /Reading/ below)             |
-| =SPC= | toggle the report's email in a window below the list    |
-| =f=   | follow mode: auto-show the email of the report at point |
-| =TAB= | fold / unfold the series, or narrow to related reports  |
-| =q=   | leave the related view, or quit the window              |
-| =v=   | view an attachment (patches in =diff-mode=)               |
-| =s=   | save an attachment (proposes the configured =:repo=)      |
-| =a=   | apply the report's patches with =git apply=               |
-| =A=   | apply the report's patches as commits with =git am=       |
-| =+=   | menu acting on the patches and attachments              |
-| =/=   | filter the list by a query (see /Searching/)              |
-| =\vert=   | clear the active filter (=C-u /= also clears)             |
-| ===   | filter by one field (a =transient= menu)                  |
-| =t=   | limit to a report type (bug, patch, request...)         |
-| =S=   | sort by the column at point; on Mark, by sticky/dismiss |
-| =o=   | sort by a criterion chosen from a menu (=gnaw-sort=)      |
-| =!=   | mark sticky: bold + exported to todo.org, shown =!=       |
-| =d=   | flag the report for dismissal, shown =D=                  |
-| =x=   | dismiss all the flagged reports                         |
-| =D=   | dismiss immediately: hide the report, shown =d=           |
-| =u=   | remove the sticky/dismiss mark or the flag              |
-| =_=   | show / hide dismissed reports                           |
-| =h=   | list these bindings in a help window                    |
-| =\=   | apply a preset filter (see =gnaw-preset-filters=)         |
-| =g=   | reload from the local cache                             |
-| =G=   | refresh the remote cache, then reload                   |
+| Key   | Action                                                    |
+|-------+-----------------------------------------------------------|
+| =RET=   | open the report's email (see /Reading/ below)               |
+| =SPC=   | toggle the report's email in a window below the list      |
+| =f=     | follow mode: auto-show the email of the report at point   |
+| =TAB=   | fold / unfold the series, or narrow to related reports    |
+| =q=     | leave the related view, or quit the window                |
+| =v=     | view an attachment (patches in =diff-mode=)                 |
+| =s=     | save an attachment (proposes the configured =:repo=)        |
+| =A=     | apply the report's patches with =git apply= (=C-u A=: =git am=) |
+| =:=     | menu acting on the patches and attachments                |
+| =/=     | filter the list by a query (see /Searching/)                |
+| =\vert=     | clear the active filter (=C-u /= also clears)               |
+| ===     | filter by one field (a =transient= menu)                    |
+| =t=     | limit to a report type (bug, patch, request...)           |
+| =a=     | only the acked reports (=acked:*=)                          |
+| =o=     | only the owned reports (=owned:*=)                          |
+| =c=     | only the closed reports (canceled, resolved...)           |
+| =?=     | only the reports awaiting a reply                         |
+| =~=     | only the reports with related reports                     |
+| =+=     | only the reports with attachments                         |
+| =C-RET= | filter by the cell at point (author, type, date, subject) |
+| =S=     | sort by the column at point; on Mark, by sticky/dismiss   |
+| =^=     | sort by a criterion chosen from a menu (=gnaw-sort=)        |
+| =!=     | mark sticky: bold + exported to todo.org, shown =!=         |
+| =d=     | flag the report for dismissal, shown =D=                    |
+| =x=     | dismiss all the flagged reports                           |
+| =D=     | dismiss immediately: hide the report, shown =d=             |
+| =u=     | remove the sticky/dismiss mark or the flag                |
+| =_=     | show / hide dismissed reports                             |
+| =h=     | list these bindings in a help window                      |
+| =\=     | apply a preset filter (see =gnaw-preset-filters=)           |
+| =g=     | reload from the local cache                               |
+| =G=     | refresh the remote cache, then reload                     |
 
 Patch series are folded into a single row (cover letter or first
 patch) with a status summary like =(2 acked, 1 open)=; =TAB= unfolds the
@@ -138,6 +144,7 @@ value is OR (=acked:alice,bob=). So =a b c | d= reads as =(a b c) | d=.
 |--------------------------+----------+-------------------------------------------|
 | =from:bzg=                 | =f:=       | from address or name                      |
 | =subject:crash=            | =s:=       | subject (a bare word matches subject)     |
+| =similar:a+b+c=            |          | subjects sharing 3 of the =+=-joined words  |
 | =topic:agenda=             | =t:=       | topic                                     |
 | =type:patch=               |          | report type                               |
 | =priority:2=               | =p:=       | exact priority (0-3, shown A/B/C)         |
@@ -152,6 +159,12 @@ value is OR (=acked:alice,bob=). So =a b c | d= reads as =(a b c) | d=.
 
 The active query shows in the mode line; =|= (or =C-u /=, or =/= then =RET=)
 clears it.
+
+=C-RET= builds the query from the cell at point: the author on From,
+the report type on Type, created on or after that date on Created,
+and =similar:= on Subject -- keeping the reports whose subject shares
+at least three significant words (four letters or more; bracketed
+tags like =[PATCH v2]= are ignored) with the subject at point.
 
 * Reading messages
 
@@ -172,15 +185,15 @@ Gnus group when =gnus= is selected.
 
 =v= views an attachment and =s= saves one: with a single attachment
 they act right away, otherwise they ask which one (with an /all
-patches/ candidate on multi-patch reports). =a= applies the report's
-patches with =git apply= (patch the working tree) and =A= with =git am=
-(apply as commits).
+patches/ candidate on multi-patch reports). =A= applies the report's
+patches with =git apply= (patch the working tree) and =C-u A= with
+=git am= (apply as commits).
 
-=+= opens the generic menu on the attachments of the report at point.
+=:= opens the generic menu on the attachments of the report at point.
 A single patch opens the patch menu: =v= views the patch in
 =diff-mode=, =a= runs =git apply=, =m= runs =git am= and =s= saves the patch
 file to a directory. A single calendar (=.ics=) or text attachment is
-displayed right away. When the report has several attachments, =+=
+displayed right away. When the report has several attachments, =:=
 lists them in a buffer where =+= (or =RET=) acts on the attachment at
 point the same way; when several of them are patches, an extra first
 row opens the patch menu on all of them at once.

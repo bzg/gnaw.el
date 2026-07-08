@@ -305,10 +305,16 @@ Reads `:repo' from the matching config.edn `:sources' entry."
      (concat "cache/reports/" prefix "-" h ".json")
      gnaw-config-dir)))
 
+(defcustom gnaw-http-timeout 30
+  "Seconds before a synchronous HTTP fetch gives up, nil to wait forever."
+  :type '(choice (const :tag "No timeout" nil) (integer :tag "Seconds"))
+  :group 'gnaw)
+
 (defun gnaw--http-body (url)
-  "Return the raw HTTP body bytes of URL."
+  "Return the raw HTTP body bytes of URL.
+Signal an error after `gnaw-http-timeout' seconds without a response."
   (let* ((coding-system-for-read 'binary)
-         (buf (url-retrieve-synchronously url t)))
+         (buf (url-retrieve-synchronously url t nil gnaw-http-timeout)))
     (unless buf (error "Failed to fetch %s" url))
     (unwind-protect
         (with-current-buffer buf
@@ -409,7 +415,7 @@ reports (flags R, C, E or S) still present in reports.json."
     (when (and fv (version< fv gnaw-supported-bone-format))
       (message "gnaw: %s has format %s, min supported is %s"
                source fv gnaw-supported-bone-format))
-    (dolist (r reports result)
+    (dolist (r reports)
       (let ((mid          (alist-get 'message-id r))
             (status       (alist-get 'status r))
             (type         (alist-get 'type r))
@@ -474,7 +480,8 @@ reports (flags R, C, E or S) still present in reports.json."
                                        :owned owned
                                        :owned-name owned-name
                                        :closed closed))
-                  result)))))))
+                  result)))))
+    (nreverse result)))
 
 (defun gnaw-reports ()
   "Collect open report pairs from all sources, tolerating failures."
@@ -1415,6 +1422,26 @@ absence; any other VAL matches nothing."
   (cond ((member val '(nil "" "*" "true")) set)
         ((equal val "false") (not set))))
 
+(defun gnaw--subject-words (subject)
+  "Return the significant words of SUBJECT for similarity matching.
+Downcased words of four letters or more, without duplicates;
+bracketed tags like [PATCH v2 1/3] are dropped first."
+  (let ((s (replace-regexp-in-string "\\[[^]]*\\]" " "
+                                     (downcase (or subject "")))))
+    (seq-filter (lambda (w) (>= (length w) 4))
+                (delete-dups (split-string s "[^[:alnum:]]+" t)))))
+
+(defun gnaw--query-similar-match (val subject)
+  "Non-nil if SUBJECT shares enough words with query value VAL.
+VAL is words joined by `+' (as built by `gnaw-list-filter-cell');
+SUBJECT matches when it contains at least three of them -- all of
+them when VAL has fewer than three."
+  (let* ((words (mapcar #'downcase (split-string (or val "") "\\+" t)))
+         (need (min 3 (length words)))
+         (mine (gnaw--subject-words subject)))
+    (and (> need 0)
+         (>= (seq-count (lambda (w) (member w mine)) words) need))))
+
 (defun gnaw--query-val-any (val pred)
   "Non-nil if PRED holds for any comma-separated (OR) value in VAL.
 An empty VAL is passed through unsplit, keeping its match-any meaning."
@@ -1487,6 +1514,8 @@ An empty VAL is passed through unsplit, keeping its match-any meaning."
                        ;; neighbor flags: alphabet is uppercase.
                        (seq-every-p (lambda (ch) (seq-contains-p s ch))
                                     (downcase v)))))))
+        ("similar"
+         (gnaw--query-similar-match val (plist-get info :subject)))
         ((or "date" "d") (gnaw--query-date-match val (plist-get info :date) nil))
         ((or "deadline" "D") (gnaw--query-date-match val (plist-get info :deadline) t))
         ((or "expired" "e") (gnaw--query-date-match val (plist-get info :expiry) t))
@@ -1505,8 +1534,8 @@ An empty VAL is passed through unsplit, keeping its match-any meaning."
             groups))
 
 (defconst gnaw--query-keys
-  '("from:" "subject:" "topic:" "type:" "priority:" "mid:" "acked:"
-    "owned:" "closed:" "urgent:" "important:" "flags:" "att:"
+  '("from:" "subject:" "similar:" "topic:" "type:" "priority:" "mid:"
+    "acked:" "owned:" "closed:" "urgent:" "important:" "flags:" "att:"
     "date:" "deadline:" "expired:")
   "Long-form query keys completed in `gnaw-list-filter'.")
 
@@ -1966,25 +1995,30 @@ is narrowed to related reports, delegate to
     (define-key map (kbd "TAB") #'gnaw-list-tab)
     (define-key map "v" #'gnaw-list-attachment-view)
     (define-key map "s" #'gnaw-list-attachment-save)
-    (define-key map "a" #'gnaw-list-patch-apply)
-    (define-key map "A" #'gnaw-list-patch-am)
-    (define-key map "+" #'gnaw-list-attachments)
+    (define-key map "A" #'gnaw-list-patch-apply)
+    (define-key map ":" #'gnaw-list-attachments)
     (define-key map "g" #'gnaw-list-reload)
     (define-key map "G" #'gnaw-list-update)
     (define-key map "/" #'gnaw-list-filter)
     (define-key map "|" #'gnaw-list-filter-clear)
     (define-key map "=" #'gnaw-list-filter-transient)
     (define-key map "t" #'gnaw-list-limit-type)
+    (define-key map "a" #'gnaw-list-filter-acked)
+    (define-key map "o" #'gnaw-list-filter-owned)
+    (define-key map "c" #'gnaw-list-limit-closed)
+    (define-key map "?" #'gnaw-list-limit-awaiting)
+    (define-key map "~" #'gnaw-list-limit-related)
+    (define-key map "+" #'gnaw-list-limit-attachments)
+    (define-key map (kbd "<C-return>") #'gnaw-list-filter-cell)
     (define-key map "!" #'gnaw-list-toggle-sticky)
     (define-key map "d" #'gnaw-list-flag-dismiss)
     (define-key map "D" #'gnaw-list-toggle-dismiss)
     (define-key map "x" #'gnaw-list-execute-flags)
     (define-key map "u" #'gnaw-list-remove-marks)
     (define-key map "h" #'gnaw-show-help)
-    (define-key map "o" #'gnaw-sort)
+    (define-key map "^" #'gnaw-sort)
     (define-key map "_" #'gnaw-list-toggle-dismissed)
     (define-key map "\\" #'gnaw-select-preset-filter)
-    (define-key map "?" #'describe-mode)
     (define-key map "q" #'gnaw-list-quit)
     map)
   "Keymap for `gnaw-list-mode'.")
@@ -2068,6 +2102,64 @@ With a prefix argument, clear the active filter without prompting."
   "Limit the list to a chosen report type."
   (interactive)
   (gnaw-list-filter-by "type"))
+
+(defun gnaw-list-limit-closed ()
+  "Limit the list to closed reports, whatever the close reason."
+  (interactive)
+  (gnaw-list-filter "flags:C,R,E,S"))
+
+(defun gnaw-list-limit-awaiting ()
+  "Limit the list to reports awaiting a reply."
+  (interactive)
+  (gnaw-list-filter "att:?"))
+
+(defun gnaw-list-limit-related ()
+  "Limit the list to reports with related reports."
+  (interactive)
+  (gnaw-list-filter "att:~"))
+
+(defun gnaw-list-limit-attachments ()
+  "Limit the list to reports carrying at least one attachment."
+  (interactive)
+  (gnaw-list-filter "att:+,x,@,#"))
+
+(defun gnaw-list-filter-cell ()
+  "Filter the list by the value of the cell at point.
+On the From column, keep the author's reports; on Type, the reports
+of that type; on Created, the reports created on or after that date;
+on Subject, the reports with a similar subject (at least three
+significant words in common, see `gnaw--query-similar-match').
+Outside any cell (the leading padding or past the last column, where
+point commonly rests), fall back on the Subject column."
+  (interactive)
+  (let ((info (cdr (gnaw-list--current)))
+        (col (or (get-text-property (point) 'tabulated-list-column-name)
+                 ;; End of line: the cell just before point.
+                 (and (> (point) (line-beginning-position))
+                      (get-text-property (1- (point))
+                                         'tabulated-list-column-name))
+                 "Subject")))
+    (gnaw-list-filter
+     (pcase col
+       ("From"
+        (let ((from (or (plist-get info :from)
+                        ;; The address never carries spaces; a name
+                        ;; would, and spaces separate query tokens, so
+                        ;; fall back on its first word only.
+                        (car (split-string (or (plist-get info :from-name) ""))))))
+          (when (member from '(nil ""))
+            (user-error "No author on this row"))
+          (format "from:%s" from)))
+       ("Type" (format "type:%s" (or (plist-get info :type) "bug")))
+       ("Created"
+        (let ((d (plist-get info :date)))
+          (unless d (user-error "No creation date on this row"))
+          (format "date:%s.." (substring d 0 (min 10 (length d))))))
+       ("Subject"
+        (let ((words (gnaw--subject-words (plist-get info :subject))))
+          (unless words (user-error "No significant word in this subject"))
+          (format "similar:%s" (string-join words "+"))))
+       (_ (user-error "No cell filter for the %s column" col))))))
 
 (defun gnaw-list--current ()
   "Return the (MID . INFO) pair at point, or signal an error."
@@ -2197,11 +2289,14 @@ else the report at point with all its patches (PATCHES nil)."
   (pcase-let ((`(,info . ,patches) (gnaw--patch-target)))
     (gnaw-view-patches info patches)))
 
-(defun gnaw-list-patch-apply ()
-  "Apply the target patches with `git apply'."
-  (interactive)
+(defun gnaw-list-patch-apply (&optional am)
+  "Apply the target patches with `git apply'.
+With a prefix argument AM, apply them as commits with `git am'."
+  (interactive "P")
   (pcase-let ((`(,info . ,patches) (gnaw--patch-target)))
-    (gnaw-apply-patches info patches)))
+    (if am
+        (gnaw-am-patches info patches)
+      (gnaw-apply-patches info patches))))
 
 (defun gnaw-list-patch-am ()
   "Apply the target patches with `git am'."
@@ -2709,36 +2804,42 @@ order."
     (call-interactively (nth 2 (assoc name cands)))))
 
 (defconst gnaw-list--help-sections
-  '(("Read"
+  '(("Read\n————"
      (gnaw-list-open "open the report's mail")
      (gnaw-list-open-other-window "toggle the mail below the list")
      (gnaw-list-follow-mode "toggle follow mode (auto-show the mail at point)"))
-    ("Marks"
+    ("Marks\n—————"
      (gnaw-list-toggle-sticky "toggle the sticky mark (bold, exported to todo.org)")
      (gnaw-list-flag-dismiss "flag for dismissal (D in the Mark column)")
      (gnaw-list-execute-flags "dismiss the flagged reports")
      (gnaw-list-toggle-dismiss "dismiss immediately (toggle)")
      (gnaw-list-remove-marks "remove the mark or flag at point")
      (gnaw-list-toggle-dismissed "show / hide dismissed reports"))
-    ("Patches and attachments"
-     (gnaw-list-tab "fold / unfold the series, or narrow to related reports")
-     (gnaw-list-quit "leave the related view, or quit the window")
-     (gnaw-list-attachment-view "view an attachment (patches in diff-mode)")
-     (gnaw-list-attachment-save "save an attachment (proposes the configured repo)")
-     (gnaw-list-patch-apply "apply the patches with git apply")
-     (gnaw-list-patch-am "apply the patches as commits with git am")
-     (gnaw-list-attachments "menu acting on patches and attachments"))
-    ("Filter and sort"
+    ("Filter and sort\n———————————————"
      (gnaw-list-filter "filter with key:value tokens")
      (gnaw-list-filter-transient "filter by one field (menu)")
      (gnaw-select-preset-filter "apply a preset filter")
      (gnaw-list-filter-clear "clear the filter")
      (gnaw-list-limit-type "limit to a report type")
+     (gnaw-list-filter-acked "only the acked reports")
+     (gnaw-list-filter-owned "only the owned reports")
+     (gnaw-list-limit-closed "only the closed reports (canceled, resolved...)")
+     (gnaw-list-limit-awaiting "only the reports awaiting a reply")
+     (gnaw-list-limit-related "only the reports with related reports")
+     (gnaw-list-limit-attachments "only the reports with attachments")
+     (gnaw-list-filter-cell "filter by the cell at point (author, type, date, subject)")
      (gnaw-sort "sort by a criterion"))
-    ("Refresh"
+    ("Patches and attachments\n———————————————————————"
+     (gnaw-list-tab "fold / unfold the series, or narrow to related reports")
+     (gnaw-list-quit "leave the related view, or quit the window")
+     (gnaw-list-attachment-view "view an attachment (patches in diff-mode)")
+     (gnaw-list-attachment-save "save an attachment (proposes the configured repo)")
+     (gnaw-list-patch-apply "apply the patches with git apply (C-u: git am)")
+     (gnaw-list-attachments "menu acting on patches and attachments"))
+    ("Refresh\n———————"
      (gnaw-list-reload "re-read the local cache")
      (gnaw-list-update "refresh the remote cache, then reload"))
-    ("Help"
+    ("Help\n————"
      (gnaw-show-help "this help")
      (describe-mode "full mode description")))
   "Sections shown by `gnaw-show-help': (TITLE (COMMAND DESCRIPTION)...).")
@@ -2751,11 +2852,11 @@ order."
     (dolist (section gnaw-list--help-sections)
       (princ (format "\n%s\n" (car section)))
       (dolist (cmd (cdr section))
-        (let ((keys (mapconcat #'key-description
-                               (where-is-internal (car cmd) gnaw-list-mode-map)
-                               ", ")))
+        ;; FIRSTONLY: commands unbound in the list map (describe-mode)
+        ;; would otherwise list every global binding, menus included.
+        (let ((key (where-is-internal (car cmd) gnaw-list-mode-map t)))
           (princ (format "  %-12s %s\n"
-                         (if (string-empty-p keys) "M-x" keys)
+                         (if key (key-description key) "M-x")
                          (cadr cmd))))))))
 
 (defun gnaw-select-preset-filter ()
