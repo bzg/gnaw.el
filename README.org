@@ -71,9 +71,7 @@ source.
 | =f=     | follow mode: auto-show the email of the report at point |
 | =TAB=   | fold / unfold the patch series at point                 |
 | =S-TAB= | unfold all the patch series, or fold them all back      |
-| =p=     | view the report's patch(es) in =diff-mode=                |
-| =a=     | =git apply= the patch(es) to the source repo tree         |
-| =A=     | =git am= the patch(es) as commits in the source repo      |
+| =p=     | patch menu: view, =git apply=, =git am=, save               |
 | =s=     | filter the list by a query (=/= works too, see /Searching/) |
 | =\vert=     | clear the active filter (=C-u s= also clears)             |
 | ===     | filter by one field (a =transient= menu)                  |
@@ -94,6 +92,11 @@ source.
 Patch series are folded into a single row (cover letter or first
 patch) with a status summary like =(2 acked, 1 open)=; =TAB= unfolds the
 series to list each patch, =TAB= again folds it back.
+
+The Att column has three dedicated positions: =?= when the report
+awaits a reply, =~= when it has related reports, then one attachment
+glyph -- =+= for patches, =@= for calendar events (=.ics=) or =#= for
+plain-text files, in that order of priority.
 
 Two mutually exclusive local marks drive the view: *sticky* promotes a
 report (shown =!= in bold in the Mark column, and exported to =todo.org=
@@ -145,10 +148,13 @@ Gnus group when =gnus= is selected.
 
 * Applying patches
 
-=a= runs =git apply= (patch the working tree) and =A= runs =git am= (apply as
-commits) in the source's =:repo= (falling back to =gnaw-apply-repo= or a
-prompt), warning when a patch series looks incomplete. See =*gnaw-git*=
-for the output; on a failed =git am=, run =git am --abort=.
+=p= opens the patch menu: =v= views the patch(es) in =diff-mode=, =a= runs
+=git apply= (patch the working tree), =m= runs =git am= (apply as commits)
+and =s= saves the patch files to a directory. Git runs in the source's
+=:repo= (falling back to =gnaw-apply-repo= or a prompt), warning when a
+patch series looks incomplete. See =*gnaw-git*= for the output; on a
+failed =git am=, run =git am --abort=. Saving proposes the source's
+=:repo= as the target directory; =p C-u s= saves there without asking.
 
 * =config.edn=
 
@@ -195,7 +201,8 @@ for the output; on a failed =git am=, run =git am --abort=.
 INFO is a plist with =:type :subject :date :from :from-name= (used to
 enrich state) plus display and action keys =:flags :priority :votes
 :deadline :expiry :last-activity :topic :source :source-name
-:archived-at :patches :series :version :superseded-by=.
+:archived-at :patches :events :texts :awaiting :related :series
+:version :superseded-by=.
 
 * Contributing
 

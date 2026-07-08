@@ -359,6 +359,22 @@ The body is read as raw bytes and decoded as UTF-8."
       mid
     (concat "<" mid ">")))
 
+(defconst gnaw--relation-keys
+  '(related-to resolves resolved-by
+    supersedes superseded-by
+    duplicates duplicated-by)
+  "Per-kind relation fields of a report, as emitted by BONE.")
+
+(defun gnaw--report-related (r)
+  "Merge report R's per-kind relation entries, deduped by message-id."
+  (let (mids entries)
+    (dolist (k gnaw--relation-keys (nreverse entries))
+      (dolist (e (alist-get k r))
+        (when-let* ((mid (alist-get 'message-id e)))
+          (unless (member mid mids)
+            (push mid mids)
+            (push e entries)))))))
+
 (defun gnaw--extract-open-reports (source)
   "Extract published reports from SOURCE as (MID . INFO) pairs.
 A report is kept when its status is at least 4, which includes closed
@@ -393,6 +409,10 @@ reports (flags R, C, E or S) still present in reports.json."
             (date         (alist-get 'date r))
             (archived-at  (alist-get 'archived-at r))
             (patches      (alist-get 'patches r))
+            (events       (alist-get 'events r))
+            (texts        (alist-get 'texts r))
+            (awaiting     (alist-get 'awaiting r))
+            (related      (gnaw--report-related r))
             (series       (alist-get 'series r))
             (patch-seq    (alist-get 'patch-seq r)))
         (when (and mid (numberp status) (>= status 4))
@@ -422,6 +442,10 @@ reports (flags R, C, E or S) still present in reports.json."
                                        :source-name sname
                                        :archived-at archived-at
                                        :patches patches
+                                       :events events
+                                       :texts texts
+                                       :awaiting awaiting
+                                       :related related
                                        :series series
                                        :patch-seq patch-seq
                                        :acked acked
@@ -1093,18 +1117,27 @@ Cover letters are excluded from the tally."
                                  (and (> open 0) (format "%d open" open))))
                  ", ")))
 
+(defun gnaw--patch-files (info verb)
+  "Return the local files of INFO's patches, fetching them as needed.
+Signal a `user-error' when INFO has no patches or some cannot be
+fetched; VERB names the aborted operation in the error message."
+  (let* ((patches (or (plist-get info :patches)
+                      (user-error "This report has no patches")))
+         (files (mapcar (lambda (p) (gnaw-patch-file info p)) patches)))
+    (when (memq nil files)
+      (user-error "Cannot fetch %d of %d patch file(s); not %s"
+                  (seq-count #'null files) (length files) verb))
+    files))
+
 (defun gnaw-view-patches (info)
   "Show the patches of report INFO in a `diff-mode' buffer."
-  (let ((patches (plist-get info :patches)))
-    (unless patches (user-error "This report has no patches"))
+  (let ((files (gnaw--patch-files info "viewing")))
     (with-current-buffer (get-buffer-create "*gnaw-patches*")
       (let ((inhibit-read-only t))
         (erase-buffer)
-        (dolist (p patches)
-          (let ((f (gnaw-patch-file info p)))
-            (when f
-              (insert-file-contents f)
-              (goto-char (point-max)))))
+        (dolist (f files)
+          (insert-file-contents f)
+          (goto-char (point-max)))
         (goto-char (point-min)))
       (diff-mode)
       (pop-to-buffer (current-buffer)))))
@@ -1149,19 +1182,14 @@ signals a `user-error' if the checkout fails."
   "Apply INFO's patches in its repo via git SUBCOMMAND (\"apply\" or \"am\").
 OPTIONS is a list of extra arguments inserted before the patch files.
 HINT is shown on failure."
-  (let ((patches (plist-get info :patches)))
-    (unless patches (user-error "This report has no patches"))
+  (let ((files (gnaw--patch-files info "applying")))
     (when (and (not (gnaw--series-complete-p info))
                (not (yes-or-no-p "Patch series looks incomplete; apply anyway? ")))
       (user-error "Aborted"))
     (let* ((repo (or (gnaw--source-repo info)
                      gnaw-apply-repo
                      (read-directory-name "Apply in git repo: ")))
-           (files (mapcar (lambda (p) (gnaw-patch-file info p)) patches))
            (default-directory (file-name-as-directory repo)))
-      (when (memq nil files)
-        (user-error "Cannot fetch %d of %d patch file(s); not applying"
-                    (seq-count #'null files) (length files)))
       (gnaw--maybe-checkout-base files)
       (let ((args (append (list subcommand) options (list "--") files)))
         (with-current-buffer (get-buffer-create "*gnaw-git*")
@@ -1185,6 +1213,22 @@ HINT is shown on failure."
   "Apply INFO's patches as commits with `git am'."
   (gnaw--run-git-patches info "am" gnaw-git-am-options
                          "run `git am --abort' to undo"))
+
+(defun gnaw-save-patches (info &optional no-confirm)
+  "Save INFO's patch files to a directory.
+Prompt for the target directory, proposing the source's `:repo'
+\(or `gnaw-apply-repo') when one is configured.  When NO-CONFIRM
+is non-nil and a repo is configured, save there without asking,
+overwriting existing files silently."
+  (let* ((files (gnaw--patch-files info "saving"))
+         (repo (or (gnaw--source-repo info) gnaw-apply-repo))
+         (dir (if (and no-confirm repo)
+                  (file-name-as-directory repo)
+                (read-directory-name "Save patch(es) in: " repo))))
+    (dolist (f files)
+      (copy-file f (expand-file-name (file-name-nondirectory f) dir)
+                 (if no-confirm t 1)))
+    (message "gnaw: saved %d patch(es) in %s" (length files) dir)))
 
 ;;; Query filter (subset of the BONE web search syntax)
 
@@ -1528,7 +1572,14 @@ message-id (both used for the mark: D flags a pending dismissal)."
     (:mark (if (and mid (member mid gnaw-list--flagged))
                "D"
              (gnaw-mark-prefix entry)))
-    (:att (if (plist-get info :patches) "+" ""))
+    ;; Three dedicated positions: awaiting, related, then a single
+    ;; attachment glyph, patches taking precedence over ics over text.
+    (:att (concat (if (plist-get info :awaiting) "?" " ")
+                  (if (plist-get info :related) "~" " ")
+                  (cond ((plist-get info :patches) "+")
+                        ((plist-get info :events)  "@")
+                        ((plist-get info :texts)   "#")
+                        (t " "))))
     (:msgs (let ((n (plist-get info :replies)))   ; thread size, initial mail included
              (if n (number-to-string (1+ n)) "")))
     (:priority (gnaw-priority-letter (plist-get info :priority)))
@@ -1683,11 +1734,9 @@ The query in `gnaw-list--query' filters the result."
     (define-key map (kbd "RET") #'gnaw-list-open)
     (define-key map (kbd "SPC") #'gnaw-list-open-other-window)
     (define-key map "f" #'gnaw-list-follow-mode)
-    (define-key map (kbd "TAB") #'gnaw-list-toggle-fold)
-    (define-key map (kbd "<backtab>") #'gnaw-list-toggle-fold-all)
-    (define-key map "p" #'gnaw-list-view-patches)
-    (define-key map "a" #'gnaw-list-apply-patches)
-    (define-key map "A" #'gnaw-list-am-patches)
+    (define-key map (kbd "TAB") #'gnaw-list-patch-series-fold)
+    (define-key map (kbd "<backtab>") #'gnaw-list-patch-series-unfold)
+    (define-key map "p" #'gnaw-list-patch-transient)
     (define-key map "g" #'gnaw-list-reload)
     (define-key map "G" #'gnaw-list-update)
     (define-key map "s" #'gnaw-list-filter)
@@ -1898,22 +1947,37 @@ the corresponding mail below the list, as
   (when gnaw-list-follow-mode
     (gnaw-list-follow-mode -1)))
 
-(defun gnaw-list-view-patches ()
+(defun gnaw-list-patch-view ()
   "View the patches of the report at point."
   (interactive)
   (gnaw-view-patches (cdr (gnaw-list--current))))
 
-(defun gnaw-list-apply-patches ()
+(defun gnaw-list-patch-apply ()
   "Apply the patches of the report at point with `git apply'."
   (interactive)
   (gnaw-apply-patches (cdr (gnaw-list--current))))
 
-(defun gnaw-list-am-patches ()
+(defun gnaw-list-patch-am ()
   "Apply the patches of the report at point with `git am'."
   (interactive)
   (gnaw-am-patches (cdr (gnaw-list--current))))
 
-(defun gnaw-list-toggle-fold ()
+(defun gnaw-list-patch-save (&optional no-confirm)
+  "Save the patch files of the report at point to a directory.
+With a prefix argument NO-CONFIRM, save into the source's
+configured repo without asking."
+  (interactive "P")
+  (gnaw-save-patches (cdr (gnaw-list--current)) no-confirm))
+
+(transient-define-prefix gnaw-list-patch-transient ()
+  "Act on the patches of the report at point."
+  [["Patches"
+    ("v" "View in diff-mode" gnaw-list-patch-view)
+    ("a" "Apply (git apply)" gnaw-list-patch-apply)
+    ("m" "Apply as commits (git am)" gnaw-list-patch-am)
+    ("s" "Save to a directory" gnaw-list-patch-save)]])
+
+(defun gnaw-list-patch-series-fold ()
   "Fold or unfold the patch series of the report at point."
   (interactive)
   (let* ((pair (gnaw-list--current))
@@ -1946,7 +2010,7 @@ the corresponding mail below the list, as
     (maphash (lambda (sid n) (when (> n 1) (push sid ids))) counts)
     ids))
 
-(defun gnaw-list-toggle-fold-all ()
+(defun gnaw-list-patch-series-unfold ()
   "Unfold every patch series of the list, or fold them all back.
 Unfold when at least one multi-patch series is folded, fold all
 otherwise; keep the cursor on the same report."
@@ -2216,11 +2280,9 @@ order."
      (gnaw-list-remove-marks "remove the mark or flag at point")
      (gnaw-list-toggle-dismissed "show / hide dismissed reports"))
     ("Patch series"
-     (gnaw-list-toggle-fold "fold / unfold the series at point")
-     (gnaw-list-toggle-fold-all "unfold / fold all the series")
-     (gnaw-list-view-patches "view the patches in diff-mode")
-     (gnaw-list-apply-patches "apply with git apply")
-     (gnaw-list-am-patches "apply with git am"))
+     (gnaw-list-patch-series-fold "fold / unfold the series at point")
+     (gnaw-list-patch-series-unfold "unfold / fold all the series")
+     (gnaw-list-patch-transient "patch menu (view, apply, am, save)"))
     ("Filter and sort"
      (gnaw-list-filter "filter with key:value tokens")
      (gnaw-list-filter-transient "filter by one field (menu)")
