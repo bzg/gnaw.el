@@ -706,7 +706,7 @@ A report's :topic may hold several space-separated topics."
    (lambda (r) (member topic (split-string (or (plist-get (cdr r) :topic) ""))))
    reports))
 
-;;; Source metadata (meta.json) and patch files
+;;; Source metadata (meta.json) and attachment files
 
 (defun gnaw--fetch-url-to-file (url file)
   "Fetch URL synchronously and write its raw body bytes to FILE."
@@ -723,10 +723,17 @@ A report's :topic may hold several space-separated topics."
       (gnaw--read-json (concat (file-name-directory source) "meta.json"))
     (error nil)))
 
-(defun gnaw--patches-base (source)
-  "Return the patches base URL or directory for reports SOURCE."
+(defun gnaw--attachments-base (source subdir)
+  "Return the SUBDIR base URL or directory for reports SOURCE.
+SUBDIR is one of BONE's attachment directories -- \"patches/\",
+\"events/\" or \"text/\" -- exported as siblings of reports/."
   (concat (file-name-directory (directory-file-name (file-name-directory source)))
-          "patches/"))
+          subdir))
+
+(defun gnaw--attachment-subdir (type)
+  "Return the BONE export subdir for attachment TYPE.
+TYPE is `patch', `event' or `text'."
+  (pcase type ('patch "patches/") ('event "events/") ('text "text/")))
 
 (defun gnaw--sanitize-path-component (s)
   "Return S reduced to a single safe path component, or nil.
@@ -735,12 +742,13 @@ remote reports.json values cannot escape the cache via path traversal."
   (let ((base (and s (file-name-nondirectory s))))
     (and base (not (member base '("" "." ".."))) base)))
 
-(defun gnaw--sanitize-patch-path (s)
-  "Return S when it is a safe relative patch path, else nil.
-A patch `file' has one or two components: an optional per-report hash
-directory, then the file name (BONE's patches/<mid-hash>/<file>
-layout).  Reject empty, `.', `..', absolute or backslashed
-components, so a remote reports.json cannot escape the cache."
+(defun gnaw--sanitize-attachment-path (s)
+  "Return S when it is a safe relative attachment path, else nil.
+An attachment `file' has one or two components: an optional
+per-report hash directory, then the file name (BONE's
+<subdir>/<mid-hash>/<file> layout).  Reject empty, `.', `..',
+absolute or backslashed components, so a remote reports.json
+cannot escape the cache."
   (when (and s (not (string-prefix-p "/" s)) (not (string-prefix-p "~" s)))
     (let ((parts (split-string s "/")))
       (and (<= 1 (length parts) 2)
@@ -750,25 +758,39 @@ components, so a remote reports.json cannot escape the cache."
                      parts)
            s))))
 
-(defun gnaw-patch-file (info patch)
-  "Return a local file for PATCH of report INFO, fetching it if absent.
-PATCH is an entry of the report `:patches' list."
-  (let* ((file   (gnaw--sanitize-patch-path (alist-get 'file patch)))
+(defun gnaw-attachment-file (info entry &optional type)
+  "Return a local file for ENTRY of report INFO, fetching it if absent.
+ENTRY is an element of the report `:patches', `:events' or `:texts'
+list; TYPE is `patch' (the default), `event' or `text'."
+  (let* ((subdir (gnaw--attachment-subdir (or type 'patch)))
+         (file   (gnaw--sanitize-attachment-path (alist-get 'file entry)))
          (source (plist-get info :source))
          (sname  (or (gnaw--sanitize-path-component (plist-get info :source-name))
                      "unknown"))
          (cache  (and file
-                      (expand-file-name (concat "cache/patches/" sname "/" file)
+                      (expand-file-name (concat "cache/" subdir sname "/" file)
                                         gnaw-config-dir))))
     (unless file
-      (user-error "Patch entry has no usable file name"))
+      (user-error "Attachment entry has no usable file name"))
     (unless (file-exists-p cache)
-      (let ((loc (concat (gnaw--patches-base source) file)))
+      (let ((loc (concat (gnaw--attachments-base source subdir) file)))
         (cond ((gnaw--http-url-p source) (gnaw--fetch-url-to-file loc cache))
               ((file-exists-p loc)
                (make-directory (file-name-directory cache) t)
                (copy-file loc cache t)))))
     (and (file-exists-p cache) cache)))
+
+(defun gnaw-patch-file (info patch)
+  "Return a local file for PATCH of report INFO, fetching it if absent.
+PATCH is an entry of the report `:patches' list."
+  (gnaw-attachment-file info patch 'patch))
+
+(defun gnaw--attachments (info)
+  "Return report INFO's attachments as (TYPE . ENTRY) pairs.
+TYPE is `patch', `event' or `text'; ENTRY the report list entry."
+  (append (mapcar (lambda (e) (cons 'patch e)) (plist-get info :patches))
+          (mapcar (lambda (e) (cons 'event e)) (plist-get info :events))
+          (mapcar (lambda (e) (cons 'text e)) (plist-get info :texts))))
 
 ;;; Reading the report message
 
@@ -1102,6 +1124,11 @@ Values: `ask' prompts, nil never, t always."
   "Non-nil if report INFO is a series cover letter (patch-seq \"0/...\")."
   (string-prefix-p "0/" (or (plist-get info :patch-seq) "")))
 
+(defun gnaw--closed-p (info)
+  "Non-nil if report INFO carries a close flag (R, C, E or S)."
+  (let ((f (or (plist-get info :flags) "---")))
+    (and (>= (length f) 3) (not (eq (aref f 2) ?-)))))
+
 (defun gnaw--series-summary (members)
   "Summarize series MEMBERS (INFO plists) like \"2 acked, 1 open\".
 Cover letters are excluded from the tally."
@@ -1109,7 +1136,7 @@ Cover letters are excluded from the tally."
     (dolist (m members)
       (unless (gnaw--cover-p m)
         (let ((f (or (plist-get m :flags) "---")))
-          (cond ((and (>= (length f) 3) (not (eq (aref f 2) ?-))) (cl-incf closed))
+          (cond ((gnaw--closed-p m) (cl-incf closed))
                 ((and (>= (length f) 1) (not (eq (aref f 0) ?-))) (cl-incf acked))
                 (t (cl-incf open))))))
     (string-join (delq nil (list (and (> acked 0) (format "%d acked" acked))
@@ -1117,11 +1144,12 @@ Cover letters are excluded from the tally."
                                  (and (> open 0) (format "%d open" open))))
                  ", ")))
 
-(defun gnaw--patch-files (info verb)
+(defun gnaw--patch-files (info verb &optional patches)
   "Return the local files of INFO's patches, fetching them as needed.
+PATCHES restricts the operation to these `:patches' entries.
 Signal a `user-error' when INFO has no patches or some cannot be
 fetched; VERB names the aborted operation in the error message."
-  (let* ((patches (or (plist-get info :patches)
+  (let* ((patches (or patches (plist-get info :patches)
                       (user-error "This report has no patches")))
          (files (mapcar (lambda (p) (gnaw-patch-file info p)) patches)))
     (when (memq nil files)
@@ -1129,9 +1157,10 @@ fetched; VERB names the aborted operation in the error message."
                   (seq-count #'null files) (length files) verb))
     files))
 
-(defun gnaw-view-patches (info)
-  "Show the patches of report INFO in a `diff-mode' buffer."
-  (let ((files (gnaw--patch-files info "viewing")))
+(defun gnaw-view-patches (info &optional patches)
+  "Show the patches of report INFO in a `diff-mode' buffer.
+PATCHES restricts the display to these `:patches' entries."
+  (let ((files (gnaw--patch-files info "viewing" patches)))
     (with-current-buffer (get-buffer-create "*gnaw-patches*")
       (let ((inhibit-read-only t))
         (erase-buffer)
@@ -1178,12 +1207,15 @@ signals a `user-error' if the checkout fails."
               (display-buffer (current-buffer))
               (user-error "Git checkout %s failed" base))))))))
 
-(defun gnaw--run-git-patches (info subcommand options hint)
+(defun gnaw--run-git-patches (info subcommand options hint &optional patches)
   "Apply INFO's patches in its repo via git SUBCOMMAND (\"apply\" or \"am\").
 OPTIONS is a list of extra arguments inserted before the patch files.
-HINT is shown on failure."
-  (let ((files (gnaw--patch-files info "applying")))
-    (when (and (not (gnaw--series-complete-p info))
+HINT is shown on failure.  PATCHES restricts the operation to these
+`:patches' entries."
+  (let ((files (gnaw--patch-files info "applying" patches)))
+    ;; PATCHES is a deliberate subset: no incomplete-series warning then.
+    (when (and (not patches)
+               (not (gnaw--series-complete-p info))
                (not (yes-or-no-p "Patch series looks incomplete; apply anyway? ")))
       (user-error "Aborted"))
     (let* ((repo (or (gnaw--source-repo info)
@@ -1204,25 +1236,29 @@ HINT is shown on failure."
               (display-buffer (current-buffer))
               (message "gnaw: git %s failed in %s (%s)" subcommand repo hint))))))))
 
-(defun gnaw-apply-patches (info)
-  "Apply INFO's patches to the working tree with `git apply'."
+(defun gnaw-apply-patches (info &optional patches)
+  "Apply INFO's patches to the working tree with `git apply'.
+PATCHES restricts the operation to these `:patches' entries."
   (gnaw--run-git-patches info "apply" gnaw-git-apply-options
-                         "rejects left as .rej"))
+                         "rejects left as .rej" patches))
 
-(defun gnaw-am-patches (info)
-  "Apply INFO's patches as commits with `git am'."
+(defun gnaw-am-patches (info &optional patches)
+  "Apply INFO's patches as commits with `git am'.
+PATCHES restricts the operation to these `:patches' entries."
   (gnaw--run-git-patches info "am" gnaw-git-am-options
-                         "run `git am --abort' to undo"))
+                         "run `git am --abort' to undo" patches))
 
-(defun gnaw-save-patches (info &optional no-confirm)
+(defun gnaw-save-patches (info &optional no-confirm patches)
   "Save INFO's patch files to a directory.
 Prompt for the target directory, proposing the source's `:repo'
-\(or `gnaw-apply-repo') when one is configured.  When NO-CONFIRM
-is non-nil and a repo is configured, save there without asking,
-overwriting existing files silently."
-  (let* ((files (gnaw--patch-files info "saving"))
+\(or `gnaw-apply-repo') when one is configured.  A single patch is
+saved to the configured repo without prompting; so are several when
+NO-CONFIRM is non-nil, which also overwrites existing files
+silently.  PATCHES restricts the operation to these `:patches'
+entries."
+  (let* ((files (gnaw--patch-files info "saving" patches))
          (repo (or (gnaw--source-repo info) gnaw-apply-repo))
-         (dir (if (and no-confirm repo)
+         (dir (if (and repo (or no-confirm (null (cdr files))))
                   (file-name-as-directory repo)
                 (read-directory-name "Save patch(es) in: " repo))))
     (dolist (f files)
@@ -1240,6 +1276,10 @@ overwriting existing files silently."
 
 (defvar gnaw-list--show-dismissed nil
   "When non-nil, show reports marked dismissed.  Buffer-local in `gnaw-list'.")
+
+(defvar gnaw-list--related-mids nil
+  "Message-ids the list is narrowed to, the origin report first, or nil.
+Set by `gnaw-list-related-narrow'.  Buffer-local in use.")
 
 (defvar-local gnaw-list--flagged nil
   "Message-ids flagged for dismissal (d), executed by x.")
@@ -1261,6 +1301,10 @@ Set by `gnaw--list-format'.  Buffer-local in use.")
 
 (defface gnaw-dismissed '((t :slant italic))
   "Face for dismissed reports when they are shown in the report list."
+  :group 'gnaw)
+
+(defface gnaw-closed '((t :slant italic))
+  "Face for closed reports in the related-reports view."
   :group 'gnaw)
 
 (defun gnaw--query-text-match (needle hay)
@@ -1468,6 +1512,7 @@ then set the query to `KEY:value'; an empty value clears the filter."
                     ((equal key "topic")
                      (completing-read "Topic: " (gnaw-topics gnaw-list--reports)))
                     (t (read-string (format "%s: " key))))))
+    (setq-local gnaw-list--related-mids nil) ; filtering leaves the related view
     (setq-local gnaw-list--query
                 (and val (not (string-empty-p val)) (format "%s:%s" key val)))
     (gnaw-list-refresh)
@@ -1564,22 +1609,63 @@ are offered."
   :type '(repeat string)
   :group 'gnaw)
 
+(defun gnaw--flags-help (info)
+  "Spell out INFO's flags for the Flags column help echo, or nil."
+  (let ((f (or (plist-get info :flags) "")))
+    (when-let* ((parts (delq nil
+                             (list (and (> (length f) 0) (eq (aref f 0) ?A)
+                                        "acked")
+                                   (and (> (length f) 1) (eq (aref f 1) ?O)
+                                        "owned")
+                                   (and (> (length f) 2)
+                                        ;; Keep in sync with `gnaw--closed-p':
+                                        ;; any non-dash means closed.
+                                        (pcase (aref f 2)
+                                          (?C "canceled") (?R "resolved")
+                                          (?E "expired") (?S "superseded")
+                                          (?- nil) (_ "closed")))))))
+      (string-join parts ", "))))
+
+(defun gnaw--att-help (info)
+  "Spell out INFO's Att column for its help echo, or nil."
+  (cl-flet ((tally (key one many)
+              (let ((n (length (plist-get info key))))
+                (and (> n 0) (format "%d %s" n (if (= n 1) one many))))))
+    (let ((parts (delq nil
+                       (list (and (plist-get info :awaiting)
+                                  "awaiting a reply")
+                             (and (plist-get info :related)
+                                  "related reports (TAB, or C-u TAB on a series)")
+                             (tally :patches "patch" "patches")
+                             (tally :events "calendar file" "calendar files")
+                             (tally :texts "text file" "text files")))))
+      (and parts (string-join parts ", ")))))
+
 (defun gnaw--list-cell (key info entry &optional mid)
   "Return the display string for column KEY of a report.
 INFO is the report plist; ENTRY its state.edn alist and MID its
-message-id (both used for the mark: D flags a pending dismissal)."
+message-id (both used for the mark: D flags a pending dismissal).
+The Flags and Att cells carry a help echo spelling them out, which
+`tabulated-list-print-col' preserves."
   (pcase key
     (:mark (if (and mid (member mid gnaw-list--flagged))
                "D"
              (gnaw-mark-prefix entry)))
     ;; Three dedicated positions: awaiting, related, then a single
     ;; attachment glyph, patches taking precedence over ics over text.
-    (:att (concat (if (plist-get info :awaiting) "?" " ")
-                  (if (plist-get info :related) "~" " ")
-                  (cond ((plist-get info :patches) "+")
-                        ((plist-get info :events)  "@")
-                        ((plist-get info :texts)   "#")
-                        (t " "))))
+    (:att (let ((s (concat (if (plist-get info :awaiting) "?" " ")
+                           (if (plist-get info :related) "~" " ")
+                           (cond ((plist-get info :patches) "+")
+                                 ((plist-get info :events)  "@")
+                                 ((plist-get info :texts)   "#")
+                                 (t " ")))))
+            (if-let* ((help (gnaw--att-help info)))
+                (propertize s 'help-echo (concat "Att: " help))
+              s)))
+    (:flags (let ((f (or (plist-get info :flags) "")))
+              (if-let* ((help (gnaw--flags-help info)))
+                  (propertize f 'help-echo (concat "Flags: " help))
+                f)))
     (:msgs (let ((n (plist-get info :replies)))   ; thread size, initial mail included
              (if n (number-to-string (1+ n)) "")))
     (:priority (gnaw-priority-letter (plist-get info :priority)))
@@ -1659,12 +1745,43 @@ width, so the trailing Created column stays at the right edge."
                              (nth 2 c)))
                      cols))))
 
+(defun gnaw--list-entries-related ()
+  "Return `tabulated-list-entries' for the related-reports view.
+Show the reports of `gnaw-list--related-mids' only, closed ones in
+italic, ignoring the filter query and the dismissed filter."
+  (let ((state (gnaw-read-state))
+        (cols (gnaw--active-columns))
+        rows)
+    (dolist (p gnaw-list--reports (nreverse rows))
+      (when (member (car p) gnaw-list--related-mids)
+        (let* ((entry (cdr (assoc (car p) state)))
+               (faces (delq nil
+                            (list (cond ((assq :sticky entry) 'gnaw-sticky)
+                                        ((assq :dismiss entry) 'gnaw-dismissed))
+                                  (and (gnaw--closed-p (cdr p)) 'gnaw-closed))))
+               (cells (mapcar (lambda (c)
+                                (gnaw--list-cell (nth 3 c) (cdr p)
+                                                 entry (car p)))
+                              cols)))
+          (when faces
+            (setq cells (mapcar (lambda (s) (propertize s 'face faces))
+                                cells)))
+          (push (list p (vconcat cells)) rows))))))
+
 (defun gnaw--list-entries ()
   "Return `tabulated-list-entries', folding patch series unless expanded.
 A series is shown as one representative row (cover letter or first
 patch) prefixed with ▸ and a status summary; unfolded series (in
 `gnaw-list--expanded') list each patch, ▾ marking the first row.
-The query in `gnaw-list--query' filters the result."
+The query in `gnaw-list--query' filters the result.  When the list
+is narrowed to related reports, delegate to
+`gnaw--list-entries-related'."
+  (if gnaw-list--related-mids
+      (gnaw--list-entries-related)
+    (gnaw--list-entries-full)))
+
+(defun gnaw--list-entries-full ()
+  "Return `tabulated-list-entries' for the full report list."
   (let ((state (gnaw-read-state))
         (cols (gnaw--active-columns))
         (qgroups (and gnaw-list--query (gnaw--query-parse gnaw-list--query)))
@@ -1734,9 +1851,8 @@ The query in `gnaw-list--query' filters the result."
     (define-key map (kbd "RET") #'gnaw-list-open)
     (define-key map (kbd "SPC") #'gnaw-list-open-other-window)
     (define-key map "f" #'gnaw-list-follow-mode)
-    (define-key map (kbd "TAB") #'gnaw-list-patch-series-fold)
-    (define-key map (kbd "<backtab>") #'gnaw-list-patch-series-unfold)
-    (define-key map "p" #'gnaw-list-patch-transient)
+    (define-key map (kbd "TAB") #'gnaw-list-tab)
+    (define-key map "p" #'gnaw-list-attachments)
     (define-key map "g" #'gnaw-list-reload)
     (define-key map "G" #'gnaw-list-update)
     (define-key map "s" #'gnaw-list-filter)
@@ -1782,8 +1898,9 @@ Does not re-read the report cache; use `gnaw-list-reload' for that."
   (let ((start (window-start)))
     (setq tabulated-list-format (gnaw--list-format))
     (tabulated-list-init-header)
-    (setq mode-line-process (and gnaw-list--query
-                                 (format " [%s]" gnaw-list--query)))
+    (setq mode-line-process
+          (cond (gnaw-list--related-mids " [related]")
+                (gnaw-list--query (format " [%s]" gnaw-list--query))))
     (setq tabulated-list-entries (gnaw--list-entries))
     (tabulated-list-print t)
     (force-mode-line-update)
@@ -1798,6 +1915,7 @@ Does not re-read the report cache; use `gnaw-list-reload' for that."
 (defun gnaw-list-filter-clear ()
   "Clear the active `gnaw-list' filter query."
   (interactive)
+  (setq-local gnaw-list--related-mids nil)  ; filtering leaves the related view
   (setq-local gnaw-list--query nil)
   (gnaw-list-refresh)
   (message "gnaw: filter cleared"))
@@ -1816,6 +1934,7 @@ With a prefix argument, clear the active filter without prompting."
                     m)))
              (completing-read "Filter: " #'gnaw--filter-completion
                               nil nil gnaw-list--query)))))
+  (setq-local gnaw-list--related-mids nil)  ; filtering leaves the related view
   (setq-local gnaw-list--query
               (and (not (string-empty-p (string-trim query))) query))
   (gnaw-list-refresh)
@@ -1947,35 +2066,138 @@ the corresponding mail below the list, as
   (when gnaw-list-follow-mode
     (gnaw-list-follow-mode -1)))
 
+(defun gnaw--patch-target ()
+  "Return (INFO . PATCHES) for the patch command being invoked.
+The scope of `gnaw-list-patch-transient' when called from the menu,
+else the report at point with all its patches (PATCHES nil)."
+  (or (and transient-current-prefix
+           (eq (oref transient-current-prefix command) 'gnaw-list-patch-transient)
+           (oref transient-current-prefix scope))
+      (cons (cdr (gnaw-list--current)) nil)))
+
 (defun gnaw-list-patch-view ()
-  "View the patches of the report at point."
+  "View the target patches in a `diff-mode' buffer."
   (interactive)
-  (gnaw-view-patches (cdr (gnaw-list--current))))
+  (pcase-let ((`(,info . ,patches) (gnaw--patch-target)))
+    (gnaw-view-patches info patches)))
 
 (defun gnaw-list-patch-apply ()
-  "Apply the patches of the report at point with `git apply'."
+  "Apply the target patches with `git apply'."
   (interactive)
-  (gnaw-apply-patches (cdr (gnaw-list--current))))
+  (pcase-let ((`(,info . ,patches) (gnaw--patch-target)))
+    (gnaw-apply-patches info patches)))
 
 (defun gnaw-list-patch-am ()
-  "Apply the patches of the report at point with `git am'."
+  "Apply the target patches with `git am'."
   (interactive)
-  (gnaw-am-patches (cdr (gnaw-list--current))))
+  (pcase-let ((`(,info . ,patches) (gnaw--patch-target)))
+    (gnaw-am-patches info patches)))
 
 (defun gnaw-list-patch-save (&optional no-confirm)
-  "Save the patch files of the report at point to a directory.
+  "Save the target patch files to a directory.
 With a prefix argument NO-CONFIRM, save into the source's
 configured repo without asking."
   (interactive "P")
-  (gnaw-save-patches (cdr (gnaw-list--current)) no-confirm))
+  (pcase-let ((`(,info . ,patches) (gnaw--patch-target)))
+    (gnaw-save-patches info no-confirm patches)))
 
-(transient-define-prefix gnaw-list-patch-transient ()
-  "Act on the patches of the report at point."
+(transient-define-prefix gnaw-list-patch-transient (info &optional patches)
+  "Act on PATCHES of report INFO -- all of its patches when nil."
   [["Patches"
     ("v" "View in diff-mode" gnaw-list-patch-view)
     ("a" "Apply (git apply)" gnaw-list-patch-apply)
     ("m" "Apply as commits (git am)" gnaw-list-patch-am)
-    ("s" "Save to a directory" gnaw-list-patch-save)]])
+    ("s" "Save to a directory" gnaw-list-patch-save)]]
+  (interactive (list (cdr (gnaw-list--current))))
+  (transient-setup 'gnaw-list-patch-transient nil nil
+                   :scope (cons info patches)))
+
+(defun gnaw--attachment-act (info att)
+  "Act on ATT, a (TYPE . ENTRY) attachment of report INFO.
+A patch opens the patch menu, TYPE `all-patches' opens it on every
+patch of the report; other files are displayed."
+  (pcase (car att)
+    ('patch (gnaw-list-patch-transient info (list (cdr att))))
+    ('all-patches (gnaw-list-patch-transient info nil))
+    (_ (gnaw--show-attachment info att))))
+
+(defun gnaw--show-attachment (info att)
+  "Display ATT, a (TYPE . ENTRY) attachment of report INFO."
+  (pcase-let* ((`(,type . ,entry) att)
+               (file (or (gnaw-attachment-file info entry type)
+                         (user-error "Cannot fetch attachment %s"
+                                     (alist-get 'file entry)))))
+    (with-current-buffer (get-buffer-create
+                          (format "*gnaw %s*" (file-name-nondirectory file)))
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert-file-contents file))
+      (special-mode)
+      (pop-to-buffer (current-buffer))
+      (goto-char (point-min)))))
+
+(defun gnaw-list-attachments ()
+  "Act on the attachments of the report at point.
+A single patch opens the patch menu; a single calendar or text
+attachment is displayed right away; several attachments are listed
+in a buffer where p acts again on the attachment at point."
+  (interactive)
+  (let* ((info (cdr (gnaw-list--current)))
+         (atts (gnaw--attachments info)))
+    (pcase atts
+      ('() (user-error "This report has no attachments"))
+      (`(,att) (gnaw--attachment-act info att))
+      (_ (gnaw--list-attachments info atts)))))
+
+(defvar-local gnaw-attachments--info nil
+  "Report plist whose attachments the current buffer lists.
+A snapshot from when the buffer was built: it is not refreshed when
+the report list is updated.")
+
+(defvar gnaw-attachments-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map "p" #'gnaw-attachments-act)
+    (define-key map (kbd "RET") #'gnaw-attachments-act)
+    map)
+  "Keymap for `gnaw-attachments-mode'.")
+
+(define-derived-mode gnaw-attachments-mode tabulated-list-mode "Gnaw-Attachments"
+  "Major mode listing the attachments of a report."
+  (setq tabulated-list-format [("Type" 6 t) ("File" 60 t)])
+  (tabulated-list-init-header))
+
+(defun gnaw--list-attachments (info atts)
+  "List ATTS, the (TYPE . ENTRY) attachments of report INFO, in a buffer.
+When the report has several patches, a first row acts on all of them
+at once."
+  (with-current-buffer (get-buffer-create "*gnaw-attachments*")
+    (gnaw-attachments-mode)
+    (setq gnaw-attachments--info info)
+    (setq tabulated-list-entries
+          (append
+           (when-let* ((patches (plist-get info :patches))
+                       ((cdr patches)))
+             (list (list '(all-patches)
+                         (vector "patch" (format "all patches (%d)"
+                                                 (length patches))))))
+           (mapcar (lambda (att)
+                     (list att
+                           (vector (pcase (car att)
+                                     ('patch "patch") ('event "ics") ('text "text"))
+                                   (file-name-nondirectory
+                                    (or (alist-get 'file (cdr att)) "")))))
+                   atts)))
+    (tabulated-list-print)
+    (pop-to-buffer (current-buffer))
+    (goto-char (point-min))
+    (message "gnaw: type p to act on the attachment at point")))
+
+(defun gnaw-attachments-act ()
+  "Act on the attachment at point: patch menu, or display the file."
+  (interactive)
+  (let ((att (tabulated-list-get-id)))
+    (unless att (user-error "No attachment at point"))
+    (gnaw--attachment-act gnaw-attachments--info att)))
 
 (defun gnaw-list-patch-series-fold ()
   "Fold or unfold the patch series of the report at point."
@@ -2000,34 +2222,57 @@ configured repo without asking."
       (gnaw-list--goto
        (lambda (p) (equal (gnaw--series-id (cdr p)) sid))))))
 
-(defun gnaw-list--all-series-ids ()
-  "Return the ids of the multi-patch series in the current reports."
-  (let ((counts (make-hash-table :test 'equal))
-        (ids nil))
-    (dolist (p gnaw-list--reports)
-      (when-let* ((sid (gnaw--series-id (cdr p))))
-        (puthash sid (1+ (gethash sid counts 0)) counts)))
-    (maphash (lambda (sid n) (when (> n 1) (push sid ids))) counts)
-    ids))
-
-(defun gnaw-list-patch-series-unfold ()
-  "Unfold every patch series of the list, or fold them all back.
-Unfold when at least one multi-patch series is folded, fold all
-otherwise; keep the cursor on the same report."
+(defun gnaw-list-related-narrow ()
+  "Narrow the list to the report at point and its related reports.
+Closed related reports are shown in italic.  \\<gnaw-list-mode-map>\
+\\[gnaw-list-tab] restores the full list."
   (interactive)
-  (let ((ids (gnaw-list--all-series-ids))
-        (mid (car (tabulated-list-get-id)))
-        (line (line-number-at-pos)))
-    (unless ids (user-error "No patch series in the list"))
-    (setq-local gnaw-list--expanded
-                (and (seq-difference ids gnaw-list--expanded) ids))
+  (let* ((pair (gnaw-list--current))
+         (related (or (plist-get (cdr pair) :related)
+                      (user-error "This report has no related reports")))
+         (mids (cons (car pair)
+                     (mapcar (lambda (e)
+                               (gnaw-normalize-mid (alist-get 'message-id e)))
+                             related)))
+         (missing (cl-count-if-not (lambda (mid) (assoc mid gnaw-list--reports))
+                                   (cdr mids))))
+    (setq-local gnaw-list--related-mids mids)
     (gnaw-list-refresh)
-    ;; Follow the report; if its row is gone (sub-patch folded away),
-    ;; fall back to the old line.
-    (unless (and mid (gnaw-list--goto-mid mid))
-      (gnaw-list--goto-line line))
-    (message "gnaw: %s all series"
-             (if gnaw-list--expanded "unfolded" "folded"))))
+    (gnaw-list--goto-mid (car mids))
+    (message "gnaw: %d related report(s)%s; TAB to come back"
+             (- (length mids) 1 missing)
+             (if (> missing 0)
+                 (format " (%d not in the current sources)" missing)
+               ""))))
+
+(defun gnaw-list-related-restore ()
+  "Restore the full list after `gnaw-list-related-narrow'."
+  (interactive)
+  (let ((mid (car gnaw-list--related-mids)))
+    (setq-local gnaw-list--related-mids nil)
+    (gnaw-list-refresh)
+    (when mid (gnaw-list--goto-mid mid))))
+
+(defun gnaw-list-tab (&optional related)
+  "Fold or unfold the series at point, or narrow to related reports.
+On a report of a multi-patch series, fold or unfold the series; on
+a report with related reports, narrow the list to them.  A prefix
+argument RELATED narrows to the related reports even on a series
+member.  When the list is already narrowed, restore it."
+  (interactive "P")
+  (if gnaw-list--related-mids
+      (gnaw-list-related-restore)
+    (let* ((info (cdr (gnaw-list--current)))
+           (sid (gnaw--series-id info)))
+      (cond ((and related (plist-get info :related))
+             (gnaw-list-related-narrow))
+            ((and sid (>= (cl-count sid gnaw-list--reports
+                                    :key (lambda (p) (gnaw--series-id (cdr p)))
+                                    :test #'equal)
+                          2))
+             (gnaw-list-patch-series-fold))
+            ((plist-get info :related) (gnaw-list-related-narrow))
+            (t (user-error "No patch series or related reports at point"))))))
 
 (defun gnaw-list--goto (pred)
   "Move point to the first row whose (MID . INFO) pair satisfies PRED.
@@ -2163,6 +2408,7 @@ Keep the cursor in place (see `gnaw-list--restore-point')."
 (defun gnaw-list-toggle-dismissed ()
   "Toggle whether dismissed reports are shown."
   (interactive)
+  (setq-local gnaw-list--related-mids nil) ; the toggle leaves the related view
   (setq-local gnaw-list--show-dismissed (not gnaw-list--show-dismissed))
   (gnaw-list-refresh)
   (message "gnaw: dismissed reports %s"
@@ -2279,10 +2525,9 @@ order."
      (gnaw-list-toggle-dismiss "dismiss immediately (toggle)")
      (gnaw-list-remove-marks "remove the mark or flag at point")
      (gnaw-list-toggle-dismissed "show / hide dismissed reports"))
-    ("Patch series"
-     (gnaw-list-patch-series-fold "fold / unfold the series at point")
-     (gnaw-list-patch-series-unfold "unfold / fold all the series")
-     (gnaw-list-patch-transient "patch menu (view, apply, am, save)"))
+    ("Patches and attachments"
+     (gnaw-list-tab "fold / unfold the series, or narrow to related reports")
+     (gnaw-list-attachments "act on attachments: patch menu, or view the file"))
     ("Filter and sort"
      (gnaw-list-filter "filter with key:value tokens")
      (gnaw-list-filter-transient "filter by one field (menu)")
