@@ -70,13 +70,12 @@ source.
 | =SPC=   | toggle the report's email in a window below the list      |
 | =f=     | follow mode: auto-show the email of the report at point   |
 | =TAB=   | fold / unfold the series, or narrow to related reports    |
-| =q=     | leave the related view, or quit the window                |
+| =q=     | leave the related view, clear the filter, or quit         |
 | =v=     | view an attachment (patches in =diff-mode=)                 |
 | =s=     | save an attachment (proposes the configured =:repo=)        |
 | =A=     | apply the report's patches with =git apply= (=C-u A=: =git am=) |
 | =:=     | menu acting on the patches and attachments                |
 | =/=     | filter the list by a query (see /Searching/)                |
-| =\vert=     | clear the active filter (=C-u /= also clears)               |
 | ===     | filter by one field (a =transient= menu)                    |
 | =t=     | limit to a report type (bug, patch, request...)           |
 | =a=     | only the acked reports (=acked:*=)                          |
@@ -85,7 +84,7 @@ source.
 | =?=     | only the reports awaiting a reply                         |
 | =~=     | only the reports with related reports                     |
 | =+=     | only the reports with attachments                         |
-| =C-RET= | filter by the cell at point (author, type, date, subject) |
+| =C-RET= | toggle a filter on the cell at point (see /Searching/)      |
 | =S=     | sort by the column at point; on Mark, by sticky/dismiss   |
 | =^=     | sort by a criterion chosen from a menu (=gnaw-sort=)        |
 | =!=     | mark sticky: bold + exported to todo.org, shown =!=         |
@@ -157,7 +156,7 @@ value is OR (=acked:alice,bob=). So =a b c | d= reads as =(a b c) | d=.
 | =deadline:2m=              | =D:=       | due within / on (forward)                 |
 | =expired:10d=              | =e:=       | expiring within (forward)                 |
 
-The active query shows in the mode line; =|= (or =C-u /=, or =/= then =RET=)
+The active query shows in the mode line; =q= (or =C-u /=, or =/= then =RET=)
 clears it.
 
 =C-RET= builds the query from the cell at point: the author on From,
@@ -165,6 +164,8 @@ the report type on Type, created on or after that date on Created,
 and =similar:= on Subject -- keeping the reports whose subject shares
 at least three significant words (four letters or more; bracketed
 tags like =[PATCH v2]= are ignored) with the subject at point.
+=C-RET= again restores the view the filter replaced: the previous
+query, a related-reports narrowing, or the full list.
 
 * Reading messages
 

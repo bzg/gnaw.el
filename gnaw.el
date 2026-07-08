@@ -2000,7 +2000,6 @@ is narrowed to related reports, delegate to
     (define-key map "g" #'gnaw-list-reload)
     (define-key map "G" #'gnaw-list-update)
     (define-key map "/" #'gnaw-list-filter)
-    (define-key map "|" #'gnaw-list-filter-clear)
     (define-key map "=" #'gnaw-list-filter-transient)
     (define-key map "t" #'gnaw-list-limit-type)
     (define-key map "a" #'gnaw-list-filter-acked)
@@ -2123,43 +2122,66 @@ With a prefix argument, clear the active filter without prompting."
   (interactive)
   (gnaw-list-filter "att:+,x,@,#"))
 
+(defvar-local gnaw-list--cell-filter nil
+  "State of the `gnaw-list-filter-cell' toggle, or nil.
+A list (QUERY PREV-QUERY PREV-RELATED-MIDS PREV-RELATED-ENTRIES):
+the query the command set, then the view it replaced, restored when
+the command is called again while QUERY is still active.")
+
 (defun gnaw-list-filter-cell ()
-  "Filter the list by the value of the cell at point.
+  "Toggle a filter built from the value of the cell at point.
 On the From column, keep the author's reports; on Type, the reports
 of that type; on Created, the reports created on or after that date;
 on Subject, the reports with a similar subject (at least three
 significant words in common, see `gnaw--query-similar-match').
 Outside any cell (the leading padding or past the last column, where
-point commonly rests), fall back on the Subject column."
+point commonly rests), fall back on the Subject column.  While the
+filter set by this command is active, calling it again restores the
+view the filter replaced (a query, a related-reports narrowing, or
+the full list)."
   (interactive)
-  (let ((info (cdr (gnaw-list--current)))
-        (col (or (get-text-property (point) 'tabulated-list-column-name)
-                 ;; End of line: the cell just before point.
-                 (and (> (point) (line-beginning-position))
-                      (get-text-property (1- (point))
-                                         'tabulated-list-column-name))
-                 "Subject")))
-    (gnaw-list-filter
-     (pcase col
-       ("From"
-        (let ((from (or (plist-get info :from)
-                        ;; The address never carries spaces; a name
-                        ;; would, and spaces separate query tokens, so
-                        ;; fall back on its first word only.
-                        (car (split-string (or (plist-get info :from-name) ""))))))
-          (when (member from '(nil ""))
-            (user-error "No author on this row"))
-          (format "from:%s" from)))
-       ("Type" (format "type:%s" (or (plist-get info :type) "bug")))
-       ("Created"
-        (let ((d (plist-get info :date)))
-          (unless d (user-error "No creation date on this row"))
-          (format "date:%s.." (substring d 0 (min 10 (length d))))))
-       ("Subject"
-        (let ((words (gnaw--subject-words (plist-get info :subject))))
-          (unless words (user-error "No significant word in this subject"))
-          (format "similar:%s" (string-join words "+"))))
-       (_ (user-error "No cell filter for the %s column" col))))))
+  (if (and gnaw-list--cell-filter
+           (equal gnaw-list--query (car gnaw-list--cell-filter)))
+      (pcase-let ((`(,_ ,query ,mids ,entries) gnaw-list--cell-filter))
+        (setq gnaw-list--cell-filter nil)
+        (setq-local gnaw-list--query query)
+        (setq-local gnaw-list--related-mids mids)
+        (setq-local gnaw-list--related-entries entries)
+        (gnaw-list-refresh)
+        (message "gnaw: %s" (cond (mids "back to the related view")
+                                  (query (format "filter %s" query))
+                                  (t "filter cleared"))))
+    (let ((info (cdr (gnaw-list--current)))
+          (col (or (get-text-property (point) 'tabulated-list-column-name)
+                   ;; End of line: the cell just before point.
+                   (and (> (point) (line-beginning-position))
+                        (get-text-property (1- (point))
+                                           'tabulated-list-column-name))
+                   "Subject"))
+          (prev (list gnaw-list--query gnaw-list--related-mids
+                      gnaw-list--related-entries)))
+      (gnaw-list-filter
+       (pcase col
+         ("From"
+          (let ((from (or (plist-get info :from)
+                          ;; The address never carries spaces; a name
+                          ;; would, and spaces separate query tokens, so
+                          ;; fall back on its first word only.
+                          (car (split-string (or (plist-get info :from-name) ""))))))
+            (when (member from '(nil ""))
+              (user-error "No author on this row"))
+            (format "from:%s" from)))
+         ("Type" (format "type:%s" (or (plist-get info :type) "bug")))
+         ("Created"
+          (let ((d (plist-get info :date)))
+            (unless d (user-error "No creation date on this row"))
+            (format "date:%s.." (substring d 0 (min 10 (length d))))))
+         ("Subject"
+          (let ((words (gnaw--subject-words (plist-get info :subject))))
+            (unless words (user-error "No significant word in this subject"))
+            (format "similar:%s" (string-join words "+"))))
+         (_ (user-error "No cell filter for the %s column" col))))
+      (setq gnaw-list--cell-filter (cons gnaw-list--query prev)))))
 
 (defun gnaw-list--current ()
   "Return the (MID . INFO) pair at point, or signal an error."
@@ -2533,14 +2555,15 @@ Closed related reports are shown in italic.  \\<gnaw-list-mode-map>\
     (when mid (gnaw-list--goto-mid mid))))
 
 (defun gnaw-list-quit ()
-  "Leave the related-reports view, or quit the window.
+  "Leave the related-reports view, clear the filter, or quit the window.
 When the list is narrowed to related reports, restore the full
-list (like \\<gnaw-list-mode-map>\\[gnaw-list-tab]); otherwise
-quit the window as `quit-window' does."
+list (like \\<gnaw-list-mode-map>\\[gnaw-list-tab]); when a filter
+query is active, clear it; otherwise quit the window as
+`quit-window' does."
   (interactive)
-  (if gnaw-list--related-mids
-      (gnaw-list-related-restore)
-    (quit-window)))
+  (cond (gnaw-list--related-mids (gnaw-list-related-restore))
+        (gnaw-list--query (gnaw-list-filter-clear))
+        (t (quit-window))))
 
 (defun gnaw-list-tab (&optional related)
   "Fold or unfold the series at point, or narrow to related reports.
@@ -2816,10 +2839,9 @@ order."
      (gnaw-list-remove-marks "remove the mark or flag at point")
      (gnaw-list-toggle-dismissed "show / hide dismissed reports"))
     ("Filter and sort\n———————————————"
-     (gnaw-list-filter "filter with key:value tokens")
+     (gnaw-list-filter "filter with key:value tokens (C-u: clear the filter)")
      (gnaw-list-filter-transient "filter by one field (menu)")
      (gnaw-select-preset-filter "apply a preset filter")
-     (gnaw-list-filter-clear "clear the filter")
      (gnaw-list-limit-type "limit to a report type")
      (gnaw-list-filter-acked "only the acked reports")
      (gnaw-list-filter-owned "only the owned reports")
@@ -2827,11 +2849,11 @@ order."
      (gnaw-list-limit-awaiting "only the reports awaiting a reply")
      (gnaw-list-limit-related "only the reports with related reports")
      (gnaw-list-limit-attachments "only the reports with attachments")
-     (gnaw-list-filter-cell "filter by the cell at point (author, type, date, subject)")
+     (gnaw-list-filter-cell "toggle a filter on the cell at point (author, type, date, subject)")
      (gnaw-sort "sort by a criterion"))
     ("Patches and attachments\n———————————————————————"
      (gnaw-list-tab "fold / unfold the series, or narrow to related reports")
-     (gnaw-list-quit "leave the related view, or quit the window")
+     (gnaw-list-quit "leave the related view, clear the filter, or quit the window")
      (gnaw-list-attachment-view "view an attachment (patches in diff-mode)")
      (gnaw-list-attachment-save "save an attachment (proposes the configured repo)")
      (gnaw-list-patch-apply "apply the patches with git apply (C-u: git am)")
