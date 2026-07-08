@@ -99,6 +99,11 @@ source.
 | =g=     | reload from the local cache                               |
 | =G=     | refresh the remote cache, then reload                     |
 
+With a prefix argument, the filter keys -- =t=, =T=, =a=, =o=, =c=, =?=, =~=, =+=,
+=C-RET=, and the fields of the === menu -- add their condition to the
+active filter (AND) instead of replacing it: =a C-u o= keeps the
+reports both acked and owned.
+
 Patch series are folded into a single row (cover letter or first
 patch) with a status summary like =(2 acked, 1 open)=; =TAB= unfolds the
 series to list each patch, =TAB= again folds it back.

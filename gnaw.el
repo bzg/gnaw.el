@@ -1616,10 +1616,19 @@ left untouched."
             (concat (substring string 0 vbeg) res)
           res))))))
 
-(defun gnaw-list-filter-by (key)
+(defun gnaw-list--query-add (query add)
+  "Return QUERY, appended to the active query when ADD is non-nil.
+Appending uses the space (AND) operator of the query syntax."
+  (if (and add gnaw-list--query)
+      (concat gnaw-list--query " " query)
+    query))
+
+(defun gnaw-list-filter-by (key &optional add)
   "Limit the list to reports whose KEY field matches a read value.
 Read the value (completing types and topics, `*' for flag fields),
-then set the query to `KEY:value'; an empty value clears the filter."
+then set the query to `KEY:value'; an empty value clears the filter.
+With ADD non-nil, add the condition to the active filter (AND)
+instead of replacing it."
   (let* ((flag (member key '("acked" "owned" "closed" "urgent" "important")))
          (val (cond (flag "*")
                     ((equal key "type") (completing-read "Type: " gnaw-report-types))
@@ -1632,7 +1641,8 @@ then set the query to `KEY:value'; an empty value clears the filter."
                     (t (read-string (format "%s: " key))))))
     (setq-local gnaw-list--related-mids nil) ; filtering leaves the related view
     (setq-local gnaw-list--query
-                (and val (not (string-empty-p val)) (format "%s:%s" key val)))
+                (and val (not (string-empty-p val))
+                     (gnaw-list--query-add (format "%s:%s" key val) add)))
     (gnaw-list-refresh)
     (if gnaw-list--query
         (message "gnaw: filter %s" gnaw-list--query)
@@ -1642,10 +1652,12 @@ then set the query to `KEY:value'; an empty value clears the filter."
   "Define a `gnaw-list-filter-FIELD' command for each of FIELDS."
   `(progn
      ,@(mapcar (lambda (f)
-                 `(defun ,(intern (concat "gnaw-list-filter-" f)) ()
-                    ,(concat "Filter the report list by the " f " field.")
-                    (interactive)
-                    (gnaw-list-filter-by ,f)))
+                 `(defun ,(intern (concat "gnaw-list-filter-" f)) (&optional add)
+                    ,(concat "Filter the report list by the " f " field.\n"
+                             "With a prefix argument ADD, add the condition to\n"
+                             "the active filter (AND) instead of replacing it.")
+                    (interactive "P")
+                    (gnaw-list-filter-by ,f add)))
                fields)))
 
 (gnaw--define-filter-commands
@@ -2149,30 +2161,40 @@ With a prefix argument, clear the active filter without prompting."
   (gnaw-update)
   (gnaw-list-reload))
 
-(defun gnaw-list-limit-type ()
-  "Limit the list to a chosen report type."
-  (interactive)
-  (gnaw-list-filter-by "type"))
+(defun gnaw-list-limit-type (&optional add)
+  "Limit the list to a chosen report type.
+With a prefix argument ADD, add the condition to the active
+filter (AND) instead of replacing it."
+  (interactive "P")
+  (gnaw-list-filter-by "type" add))
 
-(defun gnaw-list-limit-closed ()
-  "Limit the list to closed reports, whatever the close reason."
-  (interactive)
-  (gnaw-list-filter "flags:C,R,E,S"))
+(defun gnaw-list-limit-closed (&optional add)
+  "Limit the list to closed reports, whatever the close reason.
+With a prefix argument ADD, add the condition to the active
+filter (AND) instead of replacing it."
+  (interactive "P")
+  (gnaw-list-filter (gnaw-list--query-add "flags:C,R,E,S" add)))
 
-(defun gnaw-list-limit-awaiting ()
-  "Limit the list to reports awaiting a reply."
-  (interactive)
-  (gnaw-list-filter "att:?"))
+(defun gnaw-list-limit-awaiting (&optional add)
+  "Limit the list to reports awaiting a reply.
+With a prefix argument ADD, add the condition to the active
+filter (AND) instead of replacing it."
+  (interactive "P")
+  (gnaw-list-filter (gnaw-list--query-add "att:?" add)))
 
-(defun gnaw-list-limit-related ()
-  "Limit the list to reports with related reports."
-  (interactive)
-  (gnaw-list-filter "att:~"))
+(defun gnaw-list-limit-related (&optional add)
+  "Limit the list to reports with related reports.
+With a prefix argument ADD, add the condition to the active
+filter (AND) instead of replacing it."
+  (interactive "P")
+  (gnaw-list-filter (gnaw-list--query-add "att:~" add)))
 
-(defun gnaw-list-limit-attachments ()
-  "Limit the list to reports carrying at least one attachment."
-  (interactive)
-  (gnaw-list-filter "att:+,x,@,#"))
+(defun gnaw-list-limit-attachments (&optional add)
+  "Limit the list to reports carrying at least one attachment.
+With a prefix argument ADD, add the condition to the active
+filter (AND) instead of replacing it."
+  (interactive "P")
+  (gnaw-list-filter (gnaw-list--query-add "att:+,x,@,#" add)))
 
 (defvar-local gnaw-list--cell-filter nil
   "State of the `gnaw-list-filter-cell' toggle, or nil.
@@ -2180,7 +2202,7 @@ A list (QUERY PREV-QUERY PREV-RELATED-MIDS PREV-RELATED-ENTRIES):
 the query the command set, then the view it replaced, restored when
 the command is called again while QUERY is still active.")
 
-(defun gnaw-list-filter-cell ()
+(defun gnaw-list-filter-cell (&optional add)
   "Toggle a filter built from the value of the cell at point.
 On the From column, keep the author's reports; on Type, the reports
 of that type; on Created, the reports created on or after that date;
@@ -2190,8 +2212,9 @@ Outside any cell (the leading padding or past the last column, where
 point commonly rests), fall back on the Subject column.  While the
 filter set by this command is active, calling it again restores the
 view the filter replaced (a query, a related-reports narrowing, or
-the full list)."
-  (interactive)
+the full list).  With a prefix argument ADD, add the condition to
+the active filter (AND) instead of replacing it."
+  (interactive "P")
   (if (and gnaw-list--cell-filter
            (equal gnaw-list--query (car gnaw-list--cell-filter)))
       (pcase-let ((`(,_ ,query ,mids ,entries) gnaw-list--cell-filter))
@@ -2213,26 +2236,28 @@ the full list)."
           (prev (list gnaw-list--query gnaw-list--related-mids
                       gnaw-list--related-entries)))
       (gnaw-list-filter
-       (pcase col
-         ("From"
-          (let ((from (or (plist-get info :from)
-                          ;; The address never carries spaces; a name
-                          ;; would, and spaces separate query tokens, so
-                          ;; fall back on its first word only.
-                          (car (split-string (or (plist-get info :from-name) ""))))))
-            (when (member from '(nil ""))
-              (user-error "No author on this row"))
-            (format "from:%s" from)))
-         ("Type" (format "type:%s" (or (plist-get info :type) "bug")))
-         ("Created"
-          (let ((d (plist-get info :date)))
-            (unless d (user-error "No creation date on this row"))
-            (format "date:%s.." (substring d 0 (min 10 (length d))))))
-         ("Subject"
-          (let ((words (gnaw--subject-words (plist-get info :subject))))
-            (unless words (user-error "No significant word in this subject"))
-            (format "similar:%s" (string-join words "+"))))
-         (_ (user-error "No cell filter for the %s column" col))))
+       (gnaw-list--query-add
+        (pcase col
+          ("From"
+           (let ((from (or (plist-get info :from)
+                           ;; The address never carries spaces; a name
+                           ;; would, and spaces separate query tokens, so
+                           ;; fall back on its first word only.
+                           (car (split-string (or (plist-get info :from-name) ""))))))
+             (when (member from '(nil ""))
+               (user-error "No author on this row"))
+             (format "from:%s" from)))
+          ("Type" (format "type:%s" (or (plist-get info :type) "bug")))
+          ("Created"
+           (let ((d (plist-get info :date)))
+             (unless d (user-error "No creation date on this row"))
+             (format "date:%s.." (substring d 0 (min 10 (length d))))))
+          ("Subject"
+           (let ((words (gnaw--subject-words (plist-get info :subject))))
+             (unless words (user-error "No significant word in this subject"))
+             (format "similar:%s" (string-join words "+"))))
+          (_ (user-error "No cell filter for the %s column" col)))
+        add))
       (setq gnaw-list--cell-filter (cons gnaw-list--query prev)))))
 
 (defun gnaw-list--current ()
@@ -2903,6 +2928,8 @@ order."
      (gnaw-list-limit-related "only the reports with related reports")
      (gnaw-list-limit-attachments "only the reports with attachments")
      (gnaw-list-filter-cell "toggle a filter on the cell at point (author, type, date, subject)")
+     "C-u on the keys above (also in the = menu) adds the condition"
+     "to the active filter (AND)"
      (gnaw-sort "sort by a criterion"))
     ("Patches and attachments\n———————————————————————"
      (gnaw-list-tab "fold / unfold the series, or narrow to related reports")
@@ -2917,7 +2944,8 @@ order."
     ("Help\n————"
      (gnaw-show-help "this help")
      (describe-mode "full mode description")))
-  "Sections shown by `gnaw-show-help': (TITLE (COMMAND DESCRIPTION)...).")
+  "Sections shown by `gnaw-show-help': (TITLE (COMMAND DESCRIPTION)...).
+A plain string among the entries is printed as a note line.")
 
 (defun gnaw-show-help ()
   "List the report list's key bindings, grouped by theme."
@@ -2927,12 +2955,14 @@ order."
     (dolist (section gnaw-list--help-sections)
       (princ (format "\n%s\n" (car section)))
       (dolist (cmd (cdr section))
-        ;; FIRSTONLY: commands unbound in the list map (describe-mode)
-        ;; would otherwise list every global binding, menus included.
-        (let ((key (where-is-internal (car cmd) gnaw-list-mode-map t)))
-          (princ (format "  %-12s %s\n"
-                         (if key (key-description key) "M-x")
-                         (cadr cmd))))))))
+        (if (stringp cmd)
+            (princ (format "  %s\n" cmd))
+          ;; FIRSTONLY: commands unbound in the list map (describe-mode)
+          ;; would otherwise list every global binding, menus included.
+          (let ((key (where-is-internal (car cmd) gnaw-list-mode-map t)))
+            (princ (format "  %-12s %s\n"
+                           (if key (key-description key) "M-x")
+                           (cadr cmd)))))))))
 
 (defun gnaw-select-preset-filter ()
   "Apply a filter chosen from `gnaw-preset-filters'.
