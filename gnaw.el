@@ -2073,9 +2073,14 @@ Does not re-read the report cache; use `gnaw-list-reload' for that."
   (unless (derived-mode-p 'gnaw-list-mode)
     (user-error "Not in a gnaw report list"))
   ;; Restore `window-start': `tabulated-list-print' reprints the buffer,
-  ;; which would otherwise recenter the window on each refresh.  NOFORCE
-  ;; lets redisplay pick a new start if point falls off-screen.
-  (let ((start (window-start)))
+  ;; which would otherwise recenter the window on each refresh.  When
+  ;; the rows shift so much that the old start leaves point off-screen
+  ;; (setting or clearing a filter), keep point on the same window line
+  ;; instead of letting redisplay center it.
+  (let* ((win (and (eq (current-buffer) (window-buffer)) (selected-window)))
+         (start (and win (window-start win)))
+         ;; From bol to bol: `count-lines' counts a partial line as one.
+         (wline (and win (count-lines start (line-beginning-position)))))
     (setq tabulated-list-format (gnaw--list-format))
     (tabulated-list-init-header)
     (setq mode-line-process
@@ -2084,7 +2089,10 @@ Does not re-read the report cache; use `gnaw-list-reload' for that."
     (setq tabulated-list-entries (gnaw--list-entries))
     (tabulated-list-print t)
     (force-mode-line-update)
-    (set-window-start (selected-window) start t)))
+    (when win
+      (set-window-start win start t)
+      (unless (pos-visible-in-window-p (point) win)
+        (recenter wline)))))
 
 (defun gnaw-list-reload ()
   "Re-read reports from the local cache, then re-render.
