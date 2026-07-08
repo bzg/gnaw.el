@@ -13,9 +13,9 @@
 - the shared *data layer* of the mail front-ends [[https://codeberg.org/bzg/gnus-gnaw][gnus-gnaw]], [[https://codeberg.org/bzg/notmuch-gnaw][notmuch-gnaw]]
   and [[https://codeberg.org/bzg/mu4e-gnaw][mu4e-gnaw]].
 
-It reads =config.edn= and =reports.json= directly, caches remote reports
-and patches, and reads/writes =config.edn= and the =state.edn= shared with
-the CLI, so state stays consistent across clients.
+It reads =reports.json= directly, caches remote reports and patches,
+and reads/writes the =config.edn= and =state.edn= shared with the CLI,
+so state stays consistent across clients.
 
 * Requirements
 
@@ -108,35 +108,30 @@ Patch series are folded into a single row (cover letter or first
 patch) with a status summary like =(2 acked, 1 open)=; =TAB= unfolds the
 series to list each patch, =TAB= again folds it back.
 
-The Att column has three dedicated positions: =?= when the report
-awaits a reply, =~= when it has related reports, then one attachment
-glyph -- =+= for a single patch, =x= for several, =@= for calendar
-events (=.ics=) or =#= for plain-text files, in that order of priority. The help echo of the
-Flags and Att cells (=C-h .=, or hovering with the mouse) spells them
-out.
+The Att column has three positions: =?= when the report awaits a
+reply, =~= when it has related reports, then one attachment glyph --
+=+= a single patch, =x= several, =@= calendar events (=.ics=), =#= plain-text
+files, in that priority order. The help echo of the Flags and Att
+cells (=C-h .=, or hovering) spells them out.
 
 On a report with related reports, =TAB= narrows the list to the report
-and its relations, showing closed reports in italic like the BONE web
-interface; =TAB= (or =q=) restores the full list. Related reports absent
-from the loaded sources -- for instance closed reports when the
-source is an open-reports JSON -- are shown as greyed-out placeholder
-rows built from the relation metadata: type, subject, and the date
-the relation was posed in the Date column; the help echo (=C-h .=, or
-hovering) adds the relation kind, who posed it and the message-id.
-=RET= on such a row still works when the mail client can look the
-message up. Series
-folding takes precedence: on a series member that also has related
-reports, use =C-u TAB= to narrow. Setting or clearing a filter leaves
-the related view.
+and its relations, closed ones in italic like the BONE web interface;
+=TAB= or =q= restores the full list, and so does setting or clearing a
+filter. Series folding wins: on a series member, narrow with =C-u TAB=.
+Relations absent from the loaded sources -- closed reports when the
+source is an open-reports JSON -- get greyed-out placeholder rows
+built from the relation metadata: type, subject, the date the
+relation was posed in the Date column, and a help echo adding the
+relation kind, who posed it and the message-id. =RET= on such a row
+still works when the mail client can look the message up.
 
 Two mutually exclusive local marks drive the view: *sticky* promotes a
-report (shown =!= in bold in the Mark column, and exported to =todo.org=
-by the gnaw CLI), *dismiss* hides it. Dismissed reports are hidden by
-default; =_= reveals them (shown =d= in italics). =d= only *flags* a report
-(shown =D=) and =x= dismisses all the flagged ones at once, like in dired;
-=D= dismisses right away. =u= clears the mark or flag. =D= and =x= turn off
-the follow mode first. Marks live in =state.edn=, shared with the gnaw
-CLI and the front-ends.
+report (=!= in bold in the Mark column, exported to =todo.org= by the
+gnaw CLI), *dismiss* hides it until =_= reveals them (=d= in italics).
+Like in dired, =d= only *flags* a report (shown =D=) and =x= dismisses all
+the flagged ones at once; =D= dismisses right away; =u= clears the mark
+or flag. =D= and =x= turn off the follow mode first. Marks live in
+=state.edn=, shared with the gnaw CLI and the front-ends.
 
 * Searching
 
@@ -167,12 +162,12 @@ clears it.
 
 =C-RET= builds the query from the cell at point: the author on From,
 the report type on Type, created on or after that date on Created,
-and =similar:= on Subject -- keeping the reports whose subject shares
-at least three significant words (four letters or more, a hyphenated
-name like =org-element= counting as one word; bracketed tags like
-=[PATCH v2]= are ignored) with the subject at point.
-=C-RET= again restores the view the filter replaced: the previous
-query, a related-reports narrowing, or the full list.
+and =similar:= on Subject -- subjects sharing at least three
+significant words with the one at point (four letters or more, a
+hyphenated name like =org-element= counting as one word, bracketed
+tags like =[PATCH v2]= ignored). =C-RET= again restores the view the
+filter replaced: the previous query, a related-reports narrowing,
+or the full list.
 
 * Reading messages
 
@@ -198,13 +193,12 @@ patches with =git apply= (patch the working tree) and =C-u A= with
 =git am= (apply as commits).
 
 =:= opens the generic menu on the attachments of the report at point.
-A single patch opens the patch menu: =v= views the patch in
-=diff-mode=, =a= runs =git apply=, =m= runs =git am= and =s= saves the patch
-file to a directory. A single calendar (=.ics=) or text attachment is
-displayed right away. When the report has several attachments, =:=
-lists them in a buffer where =+= (or =RET=) acts on the attachment at
-point the same way; when several of them are patches, an extra first
-row opens the patch menu on all of them at once.
+A single patch opens the patch menu: =v= view in =diff-mode=, =a= runs
+=git apply=, =m= =git am=, =s= save to a directory. A single calendar
+(=.ics=) or text attachment is displayed right away; several are
+listed in a buffer where =+= (or =RET=) acts the same way on the
+attachment at point, with an extra first row acting on all the
+patches at once when several are patches.
 
 Git runs in the source's =:repo= (falling back to =gnaw-apply-repo= or a
 prompt), warning when a patch series looks incomplete. See =*gnaw-git*=
@@ -236,9 +230,9 @@ the same for several, overwriting silently.
   and Gnus group (see /Reading/).
 - =gnaw-apply-repo=: fallback git repo for =git am=.
 - =gnaw-after-update-hook=: run after =M-x gnaw-update=.
-- =gnaw-list-sort-key= (default =("Created" . t)=): default sort column
-  and direction; defaults to creation date, most recent first. Press
-  =S= on a column to re-sort interactively.
+- =gnaw-list-sort-key= (default =("Created" . t)=): initial sort column
+  and direction, most recently created first; =S= on a column re-sorts
+  interactively.
 - =gnaw-preset-filters= (default nil): list of predefined filter query
   strings; =\= prompts to apply one (=gnaw-select-preset-filter=).
 

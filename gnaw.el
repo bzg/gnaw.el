@@ -2207,7 +2207,9 @@ the command is called again while QUERY is still active.")
 On the From column, keep the author's reports; on Type, the reports
 of that type; on Created, the reports created on or after that date;
 on Subject, the reports with a similar subject (at least three
-significant words in common, see `gnaw--query-similar-match').
+significant words in common, see `gnaw--query-similar-match') --
+signaling a `user-error' instead of filtering when no other report
+has a similar subject.
 Outside any cell (the leading padding or past the last column, where
 point commonly rests), fall back on the Subject column.  While the
 filter set by this command is active, calling it again restores the
@@ -2255,7 +2257,17 @@ the active filter (AND) instead of replacing it."
           ("Subject"
            (let ((words (gnaw--subject-words (plist-get info :subject))))
              (unless words (user-error "No significant word in this subject"))
-             (format "similar:%s" (string-join words "+"))))
+             (let ((val (string-join words "+")))
+               ;; The report always matches its own words: fewer than
+               ;; two matches means filtering would leave it alone.
+               (when (< (seq-count
+                         (lambda (p)
+                           (gnaw--query-similar-match
+                            val (plist-get (cdr p) :subject)))
+                         gnaw-list--reports)
+                        2)
+                 (user-error "No other report with a similar subject"))
+               (format "similar:%s" val))))
           (_ (user-error "No cell filter for the %s column" col)))
         add))
       (setq gnaw-list--cell-filter (cons gnaw-list--query prev)))))
