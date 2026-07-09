@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.19.1
+;; Version: 0.20.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -70,7 +70,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.19.1")
+(defconst gnaw-version (or (package-get-version) "0.20.0")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -1918,31 +1918,37 @@ Appending uses the space (AND) operator of the query syntax."
       (concat gnaw-list--query " " query)
     query))
 
+(defun gnaw-list-filter-toggle (query &optional add)
+  "Set the list filter to QUERY, clearing it when QUERY is already active.
+With ADD non-nil, add QUERY to the active filter (AND) instead of
+replacing it, without toggling."
+  (gnaw-list-filter
+   (if (and (not add) (equal gnaw-list--query query)) ""
+     (gnaw-list--query-add query add))))
+
 (defun gnaw-list-filter-by (key &optional add)
   "Limit the list to reports whose KEY field matches a read value.
-Read the value (completing types and topics, `*' for flag fields),
-then set the query to `KEY:value'; an empty value clears the filter.
+Read the value (completing types and topics), then set the query to
+`KEY:value'; an empty value clears the filter.  The flag fields
+\(acked, owned, closed, urgent, important) read no value and toggle:
+calling the command again while its filter is active clears it.
 With ADD non-nil, add the condition to the active filter (AND)
 instead of replacing it."
-  (let* ((flag (member key '("acked" "owned" "closed" "urgent" "important")))
-         (val (cond (flag "*")
-                    ((equal key "type") (completing-read "Type: " gnaw-report-types))
-                    ((equal key "topic")
-                     (completing-read "Topic: " (gnaw-topics gnaw-list--reports)))
-                    ((equal key "flags")
-                     (read-string "Flags letters, all required (A O C R E S): "))
-                    ((equal key "att")
-                     (read-string "Att glyphs, all required (. ~ + x @ #): "))
-                    (t (read-string (format "%s: " key))))))
-    (setq-local gnaw-list--related-mids nil) ; filtering leaves the related view
-    (setq-local gnaw-list--query
-                (and val (not (string-empty-p val))
-                     (gnaw-list--query-add
-                      (format "%s:%s" key (gnaw--query-quote-val val)) add)))
-    (gnaw-list-refresh)
-    (if gnaw-list--query
-        (message "gnaw: filter %s" gnaw-list--query)
-      (message "gnaw: filter cleared"))))
+  (if (member key '("acked" "owned" "closed" "urgent" "important"))
+      (gnaw-list-filter-toggle (concat key ":*") add)
+    (let ((val (cond ((equal key "type")
+                      (completing-read "Type: " gnaw-report-types))
+                     ((equal key "topic")
+                      (completing-read "Topic: " (gnaw-topics gnaw-list--reports)))
+                     ((equal key "flags")
+                      (read-string "Flags letters, all required (A O C R E S): "))
+                     ((equal key "att")
+                      (read-string "Att glyphs, all required (. ~ + x @ #): "))
+                     (t (read-string (format "%s: " key))))))
+      (gnaw-list-filter
+       (if (string-empty-p val) ""
+         (gnaw-list--query-add
+          (format "%s:%s" key (gnaw--query-quote-val val)) add))))))
 
 (defmacro gnaw--define-filter-commands (&rest fields)
   "Define a `gnaw-list-filter-FIELD' command for each of FIELDS."
@@ -1950,6 +1956,10 @@ instead of replacing it."
      ,@(mapcar (lambda (f)
                  `(defun ,(intern (concat "gnaw-list-filter-" f)) (&optional add)
                     ,(concat "Filter the report list by the " f " field.\n"
+                             (if (member f '("acked" "owned" "closed"
+                                             "urgent" "important"))
+                                 "Calling it again while its filter is active clears it.\n"
+                               "")
                              "With a prefix argument ADD, add the condition to\n"
                              "the active filter (AND) instead of replacing it.")
                     (interactive "P")
@@ -2690,31 +2700,35 @@ filter (AND) instead of replacing it."
 
 (defun gnaw-list-limit-closed (&optional add)
   "Limit the list to closed reports, whatever the close reason.
-With a prefix argument ADD, add the condition to the active
-filter (AND) instead of replacing it."
+Calling it again while its filter is active clears it.  With a
+prefix argument ADD, add the condition to the active filter (AND)
+instead of replacing it."
   (interactive "P")
-  (gnaw-list-filter (gnaw-list--query-add "flags:C,R,E,S" add)))
+  (gnaw-list-filter-toggle "flags:C,R,E,S" add))
 
 (defun gnaw-list-limit-awaiting (&optional add)
   "Limit the list to reports awaiting a reply.
-With a prefix argument ADD, add the condition to the active
-filter (AND) instead of replacing it."
+Calling it again while its filter is active clears it.  With a
+prefix argument ADD, add the condition to the active filter (AND)
+instead of replacing it."
   (interactive "P")
-  (gnaw-list-filter (gnaw-list--query-add "att:." add)))
+  (gnaw-list-filter-toggle "att:." add))
 
 (defun gnaw-list-limit-related (&optional add)
   "Limit the list to reports with related reports.
-With a prefix argument ADD, add the condition to the active
-filter (AND) instead of replacing it."
+Calling it again while its filter is active clears it.  With a
+prefix argument ADD, add the condition to the active filter (AND)
+instead of replacing it."
   (interactive "P")
-  (gnaw-list-filter (gnaw-list--query-add "att:~" add)))
+  (gnaw-list-filter-toggle "att:~" add))
 
 (defun gnaw-list-limit-attachments (&optional add)
   "Limit the list to reports carrying at least one attachment.
-With a prefix argument ADD, add the condition to the active
-filter (AND) instead of replacing it."
+Calling it again while its filter is active clears it.  With a
+prefix argument ADD, add the condition to the active filter (AND)
+instead of replacing it."
   (interactive "P")
-  (gnaw-list-filter (gnaw-list--query-add "att:+,x,@,#" add)))
+  (gnaw-list-filter-toggle "att:+,x,@,#" add))
 
 (defvar-local gnaw-list--cell-filter nil
   "State of the `gnaw-list-filter-cell' toggle, or nil.
@@ -3477,12 +3491,12 @@ order."
      (gnaw-select-preset-filter "apply a preset filter")
      (gnaw-list-limit-type "limit to a report type")
      (gnaw-list-filter-topic "filter by a topic, with completion")
-     (gnaw-list-filter-acked "only the acked reports")
-     (gnaw-list-filter-owned "only the owned reports")
-     (gnaw-list-limit-closed "only the closed reports (canceled, resolved...)")
-     (gnaw-list-limit-awaiting "only the reports awaiting a reply")
-     (gnaw-list-limit-related "only the reports with related reports")
-     (gnaw-list-limit-attachments "only the reports with attachments")
+     (gnaw-list-filter-acked "only the acked reports (toggle)")
+     (gnaw-list-filter-owned "only the owned reports (toggle)")
+     (gnaw-list-limit-closed "only the closed reports (canceled, resolved...) (toggle)")
+     (gnaw-list-limit-awaiting "only the reports awaiting a reply (toggle)")
+     (gnaw-list-limit-related "only the reports with related reports (toggle)")
+     (gnaw-list-limit-attachments "only the reports with attachments (toggle)")
      (gnaw-list-filter-cell "toggle a filter on the cell at point (source, author, type, date, subject)")
      "C-u on the keys above (also in the = menu) adds the condition"
      "to the active filter (AND)"
