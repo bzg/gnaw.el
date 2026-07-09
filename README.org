@@ -91,7 +91,8 @@ only adds or updates a source.
 | =G=     | refresh the remote cache, then reload                     |
 
 The fixed filter keys -- =a=, =o=, =c=, =.=, =~=, =+= -- are toggles: typing the
-key again while its filter is active clears it.
+key again while its filter is active clears it and puts point back
+on the report it was on.
 
 With a prefix argument, the filter keys -- =t=, =T=, =a=, =o=, =c=, =.=, =~=, =+=,
 =C-RET=, and the fields of the === menu -- add their condition to the
