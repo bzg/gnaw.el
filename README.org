@@ -39,11 +39,15 @@ it runs the full interactive setup.
 2. which report files to track, chosen from =meta.json='s =reports-files=
    (default =all-open.json=; several may be picked);
 3. a source name (defaults to =meta.json='s =:source=);
-4. a local git repository for that source, used to apply patches;
-5. how to open report mail (=auto=, =mua=, =gnus=, =notmuch=, =mu4e= or =web=);
-6. when =gnus= is chosen, the Gnus group where the mails are stored.
+4. a letter identifying the source in the browser's =S= column
+   (suggesting the first free letter of the name, so /Org mode ML/
+   suggests =O=);
+5. a local git repository for that source, used to apply patches;
+6. how to open report mail (=auto=, =mua=, =gnus=, =notmuch=, =mu4e= or =web=);
+7. when =gnus= is chosen, the Gnus group where the mails are stored.
 
-The source and patch repository are written to =config.edn=.
+The source, its letter and the patch repository are written to
+=config.edn=.
 
 =M-x gnaw-configure= reruns the full setup later on; =M-x gnaw-add-source=
 only adds or updates a source.
@@ -101,6 +105,11 @@ patch, =x= several, =@= calendar events (=.ics=), =#= plain-text files, in
 that priority order. The help echo of the Flags and Att cells (=C-h .=,
 or hovering) spells them out.
 
+With several sources configured, a leading =S= column identifies each
+report's source by its letter (the =:letter= of its =config.edn= entry,
+asked on the first reload when missing); its help echo shows the full
+source name. With a single source, the column is not added.
+
 On a report with related reports, =TAB= narrows the list to the report
 and its relations, closed ones in italic; =TAB= or =q= restores the full
 list, and so does setting or clearing a filter. 
@@ -155,6 +164,7 @@ clauses (=s:/a/ | s:/b/=).
 | =subject:crash,latex=        | =s:=       | subject (a bare word matches subject)     |
 | =similar:a+b+c=              |          | subjects sharing 3 of the =+=-joined words  |
 | =topic:agenda=               | =t:= =T:=    | topic                                     |
+| =source:O= =source:emacs=      | =S:=       | source letter (one char) or name          |
 | =type:patch=                 |          | report type                               |
 | =priority:2=                 | =p:=       | exact priority (0-3, shown A/B/C)         |
 | =mid:<...>=                  | =m:=       | message-id                                |
@@ -169,8 +179,9 @@ clauses (=s:/a/ | s:/b/=).
 The active query shows in the mode line; =q= (or =C-u /=, or =/= then =RET=)
 clears it.
 
-=C-RET= builds the query from the cell at point: the author on From, the
-report type on Type, created on or after that date on Created, and
+=C-RET= builds the query from the cell at point: the source on S, the
+author on From, the report type on Type, created on or after that
+date on Created, and
 =similar:= on Subject -- subjects sharing at least three significant
 words with the one at point (four letters or more, a hyphenated name
 like =org-element= counting as one word, bracketed tags like =[PATCH v2]=
@@ -220,13 +231,16 @@ same for several, overwriting silently.
 #+begin_src clojure
 {:sources [{:urls ["https://tracker.orgmode.org/reports/all-open.json"]
             :name "Org mode ML"
+            :letter "O"
             :repo "~/src/org-mode"}]
  :my-addresses ["me@example.org"]
  :skip-columns ["owner"]}
 #+end_src
 
 - =:sources= -- each has =:urls= (a vector of reports.json URLs), an
-  optional =:name= and a =:repo= for =git am=.
+  optional =:name=, a =:letter= identifying the source in the =S= column
+  when several sources are configured (asked interactively when
+  missing) and a =:repo= for =git am=.
 - =:my-addresses= -- your email addresses.
 - =:skip-columns= -- browser columns to hide (by name, case-insensitive).
 
@@ -261,7 +275,7 @@ same for several, overwriting silently.
 INFO is a plist with =:type :subject :date :from :from-name= (used to
 enrich state) plus display and action keys =:flags :priority :votes
 :deadline :expiry :last-activity :replies :topic :source :source-name
-:archived-at :patches :events :texts :awaiting :related :series
+:source-letter :archived-at :patches :events :texts :awaiting :related :series
 :patch-seq :acked :owned :owned-name :closed=.
 
 * Contributing

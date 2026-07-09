@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.18.0
+;; Version: 0.19.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -70,7 +70,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.18.0")
+(defconst gnaw-version (or (package-get-version) "0.19.0")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -297,6 +297,97 @@ Reads `:repo' from the matching config.edn `:sources' entry."
   (when-let* ((repo (alist-get :repo (gnaw--source-config-entry info))))
     (expand-file-name repo)))
 
+(defun gnaw--multi-source-p ()
+  "Return non-nil when config.edn defines more than one source."
+  (> (length (plist-get (gnaw-load-config) :source-configs)) 1))
+
+(defun gnaw--source-letter (info)
+  "Return the letter identifying report INFO's source, or nil.
+Reads `:letter' from the matching config.edn `:sources' entry."
+  (alist-get :letter (gnaw--source-config-entry info)))
+
+(defun gnaw--suggest-source-letter (name taken)
+  "Suggest a letter identifying source NAME, avoiding the TAKEN ones.
+Try NAME's letters and digits in order (so \"Org mode ML\" suggests
+O), then A to Z.  TAKEN is a list of downcased single-character
+strings; return an upcased one, or nil when everything is taken."
+  (seq-some (lambda (ch)
+              (let ((s (upcase (char-to-string ch))))
+                (and (not (member (downcase s) taken)) s)))
+            (append (seq-filter (lambda (ch)
+                                  (string-match-p "[[:alnum:]]"
+                                                  (char-to-string ch)))
+                                (or name ""))
+                    (number-sequence ?A ?Z))))
+
+(defun gnaw--source-match-p (entry urls name)
+  "Return non-nil when config source ENTRY shares one of URLS or is NAME.
+This is the rule deciding which config.edn entry a
+`gnaw--config-add-source' call replaces."
+  (or (seq-intersection urls (alist-get :urls entry))
+      (and name (equal name (alist-get :name entry)))))
+
+(defun gnaw--taken-source-letters (entries)
+  "Return the downcased letters the config source ENTRIES define."
+  (mapcar #'downcase
+          (delq nil (mapcar (lambda (s) (alist-get :letter s)) entries))))
+
+(defun gnaw--read-source-letter (name taken &optional default)
+  "Read the letter identifying source NAME in the browser's S column.
+TAKEN is a list of downcased letters already identifying another
+source; DEFAULT preempts the `gnaw--suggest-source-letter' suggestion.
+Insist until the answer is a single letter or digit not in TAKEN --
+the query syntax gives other characters a meaning (\"|\", quotes,
+spaces), which would break the S: filters built from the letter."
+  (let ((def (or default (gnaw--suggest-source-letter name taken)))
+        letter)
+    (while (not letter)
+      (let ((s (string-trim
+                (read-string (format "Letter for source %s%s: " name
+                                     (if def (format " (default %s)" def) ""))
+                             nil nil def))))
+        (cond ((not (string-match-p "\\`[[:alnum:]]\\'" s))
+               (message "gnaw: a single letter or digit, please")
+               (sit-for 1))
+              ((member (downcase s) taken)
+               (message "gnaw: %s already identifies another source" s)
+               (sit-for 1))
+              (t (setq letter (upcase s))))))
+    letter))
+
+(defun gnaw--ensure-source-letters ()
+  "Ask for the missing source letters and save them to config.edn.
+With several sources, the browser's S column identifies each
+report's source by the `:letter' of its config.edn entry: ask
+interactively for the entries not defining one.  No-op with zero
+or one source.  Quitting mid-prompts still saves the letters
+answered so far, so they are not asked again."
+  (let* ((raw (gnaw--read-config-raw))
+         (cfgs (alist-get :sources raw)))
+    (when (and (> (length cfgs) 1)
+               (seq-some (lambda (s) (not (alist-get :letter s))) cfgs))
+      (let ((taken (gnaw--taken-source-letters cfgs))
+            (done nil)
+            (changed nil))
+        (unwind-protect
+            (dolist (s cfgs)
+              (push (if (alist-get :letter s)
+                        s
+                      (let ((letter (gnaw--read-source-letter
+                                     (or (alist-get :name s)
+                                         (car (alist-get :urls s)))
+                                     taken)))
+                        (push (downcase letter) taken)
+                        (setq changed t)
+                        (append s (list (cons :letter letter)))))
+                    done))
+          (when changed
+            ;; A quit leaves the entries not reached in their old form.
+            (let ((rest (nthcdr (length done) cfgs)))
+              (gnaw--write-config
+               (gnaw--alist-put raw :sources
+                                (append (nreverse done) rest))))))))))
+
 (defun gnaw--java-hash (str)
   "Calculate Java String hashCode of STR as an unsigned 32-bit integer."
   (let ((h 0)
@@ -419,6 +510,8 @@ reports (flags R, C, E or S) still present in reports.json."
   (let* ((data (gnaw--read-json source))
          (fv (alist-get 'bone-format data))
          (sname (alist-get 'source data))
+         (letter (gnaw--source-letter (list :source source
+                                            :source-name sname)))
          (reports (alist-get 'reports data))
          (result '()))
     (when (and fv (version< fv gnaw-supported-bone-format))
@@ -477,6 +570,7 @@ reports (flags R, C, E or S) still present in reports.json."
                                        :date date
                                        :source source
                                        :source-name sname
+                                       :source-letter letter
                                        :archived-at archived-at
                                        :patches patches
                                        :events events
@@ -1631,6 +1725,20 @@ the whole token in the subjects."
       ("similar"
        (let ((m (gnaw--query-similar-matcher val)))
          (lambda (_mid info) (funcall m (plist-get info :subject)))))
+      ;; source:O (a single character) matches the source letter of
+      ;; the S column, or a one-character source name, exactly; a
+      ;; longer value matches the source name as topic: does, and
+      ;; source:* keeps its any-source meaning.
+      ((or "source" "S")
+       (gnaw--query-field-matcher
+        val
+        (lambda (v)
+          (if (or (/= (length v) 1) (equal v "*"))
+              (gnaw--query-text-matcher v)
+            (let ((d (downcase v)))
+              (lambda (s) (and s (equal d (downcase s)))))))
+        (gnaw--query-getter :source-letter)
+        (gnaw--query-getter :source-name)))
       ((or "date" "d") (gnaw--query-date-matcher val :date nil))
       ((or "deadline" "D") (gnaw--query-date-matcher val :deadline t))
       ((or "expired" "e") (gnaw--query-date-matcher val :expiry t))
@@ -1680,9 +1788,9 @@ GROUPS comes from `gnaw--query-compile'."
             groups))
 
 (defconst gnaw--query-keys
-  '("from:" "subject:" "similar:" "topic:" "type:" "priority:" "mid:"
-    "acked:" "owned:" "closed:" "urgent:" "important:" "flags:" "att:"
-    "date:" "deadline:" "expired:")
+  '("from:" "subject:" "similar:" "topic:" "source:" "type:" "priority:"
+    "mid:" "acked:" "owned:" "closed:" "urgent:" "important:" "flags:"
+    "att:" "date:" "deadline:" "expired:")
   "Long-form query keys completed in `gnaw-list-filter'.")
 
 (defconst gnaw--query-text-keys
@@ -1694,8 +1802,9 @@ holds their value back until it reaches
 `gnaw-list-filter-live-min-chars'.")
 
 (defconst gnaw--query-closed-keys
-  '("type" "priority" "p" "urgent" "u" "important" "i" "flags" "F"
-    "att" "attributes" "A" "date" "d" "deadline" "D" "expired" "e")
+  '("source" "S" "type" "priority" "p" "urgent" "u" "important" "i"
+    "flags" "F" "att" "attributes" "A" "date" "d" "deadline" "D"
+    "expired" "e")
   "Query keys taking closed-set or short values, aliases included.
 Keep in sync with `gnaw--query-compile-key'.  The live preview only
 waits for their value to be non-empty.")
@@ -1707,13 +1816,26 @@ waits for their value to be non-empty.")
 (defun gnaw--filter-value-candidates (key)
   "Return completion candidates for the value of filter KEY, or nil.
 Topics come from the reports of the list buffer the minibuffer was
-entered from."
-  (pcase key
-    ("type" gnaw-report-types)
-    ((or "topic" "t")
-     (gnaw-topics (buffer-local-value
-                   'gnaw-list--reports
-                   (window-buffer (minibuffer-selected-window)))))))
+entered from.  Candidates the tokenizer would split apart (a source
+name with spaces) are offered quoted, so completing one yields a
+working query."
+  (mapcar
+   #'gnaw--query-quote-val
+   (pcase key
+     ("type" gnaw-report-types)
+     ((or "source" "S")
+      (let (cands)
+        (dolist (p (buffer-local-value
+                    'gnaw-list--reports
+                    (window-buffer (minibuffer-selected-window))))
+          (dolist (k '(:source-letter :source-name))
+            (when-let* ((v (plist-get (cdr p) k)))
+              (cl-pushnew v cands :test #'equal))))
+        (nreverse cands)))
+     ((or "topic" "t")
+      (gnaw-topics (buffer-local-value
+                    'gnaw-list--reports
+                    (window-buffer (minibuffer-selected-window))))))))
 
 (defun gnaw--filter-token-start (string)
   "Return the position where STRING's trailing query token starts.
@@ -1961,8 +2083,9 @@ Also matched, sans spaces, by the att: query key."
   "Return the display string for column KEY of a report.
 INFO is the report plist; ENTRY its state.edn alist and MID its
 message-id (both used for the mark: D flags a pending dismissal).
-The Flags and Att cells carry a help echo spelling them out, which
-`tabulated-list-print-col' preserves.  Every cell carries a
+The Flags and Att cells carry a help echo spelling them out, and the
+S cell the full source name, which `tabulated-list-print-col'
+preserves.  Every cell carries a
 mouse-face, so mouse-1 opens the report (see the follow-link entry
 of `gnaw-list-mode-map')."
   (propertize
@@ -1983,6 +2106,11 @@ of `gnaw-list-mode-map')."
               (if-let* ((help (gnaw--flags-help info)))
                   (propertize f 'help-echo (concat "Flags: " help))
                 f)))
+    (:source-letter
+     (let ((l (or (plist-get info :source-letter) "")))
+       (if-let* ((name (plist-get info :source-name)))
+           (propertize l 'help-echo (concat "Source: " name))
+         l)))
     (:msgs (let ((n (plist-get info :replies)))   ; thread size, initial mail included
              (if n (number-to-string (1+ n)) "")))
     (:priority (gnaw-priority-letter (plist-get info :priority)))
@@ -2041,9 +2169,15 @@ prefixes of series rows, not their subjects."
                 (or (plist-get (cdr (car b)) :subject) "")))
 
 (defun gnaw--active-columns ()
-  "Return `gnaw-list-columns' minus those named in config `:skip-columns'."
-  (let ((skip (mapcar #'downcase (plist-get (gnaw-load-config) :skip-columns))))
-    (cl-remove-if (lambda (c) (member (downcase (car c)) skip)) gnaw-list-columns)))
+  "Return `gnaw-list-columns' minus those named in config `:skip-columns'.
+With several configured sources, prepend the S column, which shows
+the letter identifying each report's source (the `:letter' of its
+config.edn entry, see `gnaw-add-source')."
+  (let ((skip (mapcar #'downcase (plist-get (gnaw-load-config) :skip-columns)))
+        (cols (if (gnaw--multi-source-p)
+                  (cons '("S" 2 t :source-letter) gnaw-list-columns)
+                gnaw-list-columns)))
+    (cl-remove-if (lambda (c) (member (downcase (car c)) skip)) cols)))
 
 (defun gnaw--list-format ()
   "Return the `tabulated-list-format' vector for the active columns.
@@ -2106,6 +2240,7 @@ relation metadata, shown in `gnaw-missing' face."
                              :date posed-at
                              :source (plist-get origin :source)
                              :source-name (plist-get origin :source-name)
+                             :source-letter (plist-get origin :source-letter)
                              :archived-at (alist-get 'archived-at e)
                              :missing t))
                  (help (mapconcat
@@ -2257,9 +2392,10 @@ is narrowed to related reports, delegate to
         (and gnaw-list-sort-key
              (assoc (car gnaw-list-sort-key) (gnaw--active-columns))
              gnaw-list-sort-key))
-  ;; The native refresh entry points: C-x x g, auto-revert...
+  ;; The native refresh entry points: C-x x g, auto-revert...  Pass
+  ;; NO-ASK: an auto-revert timer must not prompt for source letters.
   (setq-local revert-buffer-function
-              (lambda (&rest _) (gnaw-list-reload)))
+              (lambda (&rest _) (gnaw-list-reload t)))
   ;; C-x r m bookmarks the current view (filter, sort, position).
   (setq-local bookmark-make-record-function
               #'gnaw-list--bookmark-make-record)
@@ -2319,6 +2455,16 @@ preview), since a row then only ever appears or disappears whole."
          ;; From bol to bol: `count-lines' counts a partial line as one.
          (wline (and win (count-lines start (line-beginning-position)))))
     (setq tabulated-list-format (gnaw--list-format))
+    ;; The S column comes and goes with the number of sources: a sort
+    ;; key naming a gone column would abort `tabulated-list-print',
+    ;; so fall back on the default sort, as `gnaw-list-mode' does.
+    (when (and tabulated-list-sort-key
+               (not (assoc (car tabulated-list-sort-key)
+                           (gnaw--active-columns))))
+      (setq tabulated-list-sort-key
+            (and gnaw-list-sort-key
+                 (assoc (car gnaw-list-sort-key) (gnaw--active-columns))
+                 gnaw-list-sort-key)))
     (tabulated-list-init-header)
     (gnaw-list--update-mode-line)
     (setq tabulated-list-entries (gnaw--list-entries))
@@ -2329,11 +2475,17 @@ preview), since a row then only ever appears or disappears whole."
       (unless (pos-visible-in-window-p (point) win)
         (recenter wline)))))
 
-(defun gnaw-list-reload ()
+(defun gnaw-list-reload (&optional no-ask)
   "Re-read reports from the local cache, then re-render.
-Reset the subject-words cache, then re-warm it once Emacs has been
-idle for a second, so the first similar: filter finds it filled."
+With several sources, first ask for the letters identifying them in
+the S column when config.edn does not define some (see
+`gnaw--ensure-source-letters') -- unless NO-ASK is non-nil, as on
+the `revert-buffer' path, where auto-revert timers must not block
+on a minibuffer prompt.  Reset the subject-words cache, then
+re-warm it once Emacs has been idle for a second, so the first
+similar: filter finds it filled."
   (interactive)
+  (unless no-ask (gnaw--ensure-source-letters))
   (setq-local gnaw-list--reports (gnaw-reports))
   (clrhash gnaw--subject-words-cache)
   (when (timerp gnaw--subject-words-timer)
@@ -2566,8 +2718,9 @@ the command is called again while QUERY is still active.")
 
 (defun gnaw-list-filter-cell (&optional add)
   "Toggle a filter built from the value of the cell at point.
-On the From column, keep the author's reports; on Type, the reports
-of that type; on Created, the reports created on or after that date;
+On the S column, keep the reports of that source; on From, the
+author's reports; on Type, the reports of that type; on Created,
+the reports created on or after that date;
 on Subject, the reports with a similar subject (at least three
 significant words in common, see `gnaw--query-similar-matcher') --
 signaling a `user-error' instead of filtering when no other report
@@ -2602,6 +2755,11 @@ the active filter (AND) instead of replacing it."
       (gnaw-list-filter
        (gnaw-list--query-add
         (pcase col
+          ("S"
+           (let ((l (plist-get info :source-letter)))
+             (when (member l '(nil ""))
+               (user-error "No source letter on this row"))
+             (format "S:%s" l)))
           ("From"
            (let ((from (or (plist-get info :from)
                            (plist-get info :from-name))))
@@ -3319,7 +3477,7 @@ order."
      (gnaw-list-limit-awaiting "only the reports awaiting a reply")
      (gnaw-list-limit-related "only the reports with related reports")
      (gnaw-list-limit-attachments "only the reports with attachments")
-     (gnaw-list-filter-cell "toggle a filter on the cell at point (author, type, date, subject)")
+     (gnaw-list-filter-cell "toggle a filter on the cell at point (source, author, type, date, subject)")
      "C-u on the keys above (also in the = menu) adds the condition"
      "to the active filter (AND)"
      (tabulated-list-sort "sort by the column at point")
@@ -3383,20 +3541,29 @@ rewriting a misread config would drop its other settings."
   (gnaw--read-edn-map-or-signal
    (expand-file-name "config.edn" gnaw-config-dir)))
 
-(defun gnaw--config-add-source (config urls name repo)
-  "Return CONFIG alist with a source (URLS, NAME, REPO) added or updated.
-URLS is a list of reports.json URLs.  An existing source sharing any
-URL or the NAME is replaced."
-  (let* ((src (append (list (cons :urls urls))
+(defun gnaw--config-add-source (config urls name repo &optional letter)
+  "Return CONFIG alist with a source (URLS, NAME, REPO, LETTER) added.
+URLS is a list of reports.json URLs; LETTER identifies the source in
+the browser's S column, and defaults to the letter of the entry
+being replaced, so a letterless update keeps it.  An existing
+source sharing any URL or the NAME is replaced; a LETTER already
+identifying a kept entry signals a `user-error'."
+  (let* ((sources (alist-get :sources config))
+         (others (cl-remove-if (lambda (s) (gnaw--source-match-p s urls name))
+                               sources))
+         (letter (or letter
+                     (alist-get :letter
+                                (seq-find (lambda (s)
+                                            (gnaw--source-match-p s urls name))
+                                          sources))))
+         (src (append (list (cons :urls urls))
                       (and name (list (cons :name name)))
-                      (and repo (list (cons :repo repo)))))
-         (sources (alist-get :sources config))
-         (others (cl-remove-if
-                  (lambda (s) (or (seq-intersection urls (alist-get :urls s))
-                                  (and name (equal name (alist-get :name s)))))
-                  sources)))
-    (cons (cons :sources (append others (list src)))
-          (assq-delete-all :sources (copy-alist config)))))
+                      (and letter (list (cons :letter letter)))
+                      (and repo (list (cons :repo repo))))))
+    (when (and letter (member (downcase letter)
+                              (gnaw--taken-source-letters others)))
+      (user-error "gnaw: letter %s already identifies another source" letter))
+    (gnaw--alist-put config :sources (append others (list src)))))
 
 (defun gnaw--write-config (config)
   "Write CONFIG alist to config.edn as UTF-8."
@@ -3410,11 +3577,14 @@ URL or the NAME is replaced."
 (declare-function completing-read-multiple "crm")
 
 ;;;###autoload
-(defun gnaw-add-source (urls &optional name repo)
-  "Add a source (URLS, NAME, REPO) to config.edn.
-URLS is a list of reports.json URLs.  Interactively, give a base,
-meta.json or reports.json URL, then pick the report files listed in
-meta.json, the source NAME and its local git REPO for patches."
+(defun gnaw-add-source (urls &optional name repo letter)
+  "Add a source (URLS, NAME, REPO, LETTER) to config.edn.
+URLS is a list of reports.json URLs; LETTER identifies the source in
+the browser's S column, shown when several sources are configured.
+Interactively, give a base, meta.json or reports.json URL, then pick
+the report files listed in meta.json, the source NAME, its LETTER
+\(suggesting the first free one of NAME) and its local git REPO for
+patches."
   (interactive
    (let* ((input (read-string "Report source URL (base, meta.json or .json): "))
           (_ (when (string-empty-p (string-trim input)) (user-error "No URL given")))
@@ -3432,13 +3602,28 @@ meta.json, the source NAME and its local git REPO for patches."
           (name (read-string
                  (format "Source name%s: " (if sname (format " (default %s)" sname) ""))
                  nil nil sname))
+          (urls (mapcar (lambda (f) (concat dir f)) chosen))
+          (letter
+           ;; Letters taken by the sources this add does not replace;
+           ;; a replaced entry hands down its letter as the default.
+           (let* ((cfgs (alist-get :sources (gnaw--read-config-raw)))
+                  (old (seq-find (lambda (s)
+                                   (gnaw--source-match-p s urls name))
+                                 cfgs))
+                  (taken (gnaw--taken-source-letters
+                          (cl-remove-if (lambda (s)
+                                          (gnaw--source-match-p s urls name))
+                                        cfgs))))
+             (gnaw--read-source-letter (or name (car urls)) taken
+                                       (alist-get :letter old))))
           (repo (when (y-or-n-p "Link a local git repo (for patches)? ")
                   (expand-file-name (read-directory-name "Git repo: ")))))
-     (list (mapcar (lambda (f) (concat dir f)) chosen) name repo)))
+     (list urls name repo letter)))
   (let ((urls (if (listp urls) urls (list urls)))
         (name (and name (not (string-empty-p (string-trim name))) name)))
     (unless urls (user-error "No report file selected"))
-    (gnaw--write-config (gnaw--config-add-source (gnaw--read-config-raw) urls name repo))
+    (gnaw--write-config
+     (gnaw--config-add-source (gnaw--read-config-raw) urls name repo letter))
     (message "gnaw: added to config.edn: %s%s"
              (string-join urls ", ") (if name (format " (%s)" name) ""))
     urls))
