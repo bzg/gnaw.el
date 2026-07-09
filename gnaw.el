@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.19.0
+;; Version: 0.19.1
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -70,7 +70,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.19.0")
+(defconst gnaw-version (or (package-get-version) "0.19.1")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -1528,7 +1528,9 @@ A duration is TODAY plus or minus its days, per FORWARD."
 SPEC is a duration (3d/2w/2m), a YYYY-MM-DD date, or an A..B range
 whose ends are dates or durations and may be empty (the order is
 normalized); FORWARD durations look ahead from today.  The bounds
-are resolved once, here; an unparseable SPEC matches nothing."
+are resolved once, here; an unparseable SPEC or range bound matches
+nothing -- an empty bound is open, an invalid one is an error, like
+on the BONE web page."
   (let ((today (time-to-days (current-time)))
         (lo nil) (hi nil) (none nil))
     (if (string-match "\\`\\(.*\\)\\.\\.\\(.*\\)\\'" spec)
@@ -1538,8 +1540,11 @@ are resolved once, here; an unparseable SPEC matches nothing."
                (sb (match-string 2 spec))
                (va (gnaw--query-bound sa forward today))
                (vb (gnaw--query-bound sb forward today)))
-          (setq lo (if (and va vb) (min va vb) va)
-                hi (if (and va vb) (max va vb) vb)))
+          (if (or (and (not (string-empty-p sa)) (null va))
+                  (and (not (string-empty-p sb)) (null vb)))
+              (setq none t)
+            (setq lo (if (and va vb) (min va vb) va)
+                  hi (if (and va vb) (max va vb) vb))))
       (let ((d (gnaw--query-duration->days spec))
             (single (gnaw--query-ymd->days spec)))
         (cond (d (if forward
@@ -1557,10 +1562,10 @@ are resolved once, here; an unparseable SPEC matches nothing."
 
 (defun gnaw--query-actor-matcher (needle)
   "Compile query NEEDLE into a predicate on an actor (identity) string.
-`*' or `true' matches any set actor; otherwise NEEDLE matches as
-`gnaw--query-text-matcher' does, so /regexp/ and \"quoted\" values
-work here too -- but never against an unset actor."
-  (if (member needle '("*" "true"))
+`*' or `true' (any case) matches any set actor; otherwise NEEDLE
+matches as `gnaw--query-text-matcher' does, so /regexp/ and \"quoted\"
+values work here too -- but never against an unset actor."
+  (if (member (downcase needle) '("*" "true"))
       (lambda (a) (and a (not (string-empty-p a))))
     (let ((m (gnaw--query-text-matcher needle)))
       (lambda (a)
@@ -1568,9 +1573,10 @@ work here too -- but never against an unset actor."
 
 (defun gnaw--query-flag-matcher (val bit)
   "Compile VAL into a predicate testing priority BIT on INFO.
-`*' and `true' require the flag, `false' its absence; any other VAL
-matches nothing."
-  (let ((want (and (member val '("*" "true")) t)))
+`*' and `true' require the flag, `false' its absence (any case);
+any other VAL matches nothing."
+  (let* ((val (downcase val))
+         (want (and (member val '("*" "true")) t)))
     (if (and (not want) (not (equal val "false")))
         #'ignore
       (lambda (_mid info)
