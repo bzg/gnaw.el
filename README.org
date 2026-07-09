@@ -95,7 +95,7 @@ Patch series are folded into a single row (cover letter or first
 patch) with a status summary like =(2 acked, 1 open)=; =TAB= unfolds the
 series to list each patch, =TAB= again folds it back.
 
-The =Att= column has three positions: =?= when the report awaits a reply,
+The =Att= column has three positions: =.= when the report awaits a reply,
 =~= when it has related reports, then one attachment glyph -- =+= a single
 patch, =x= several, =@= calendar events (=.ics=), =#= plain-text files, in
 that priority order. The help echo of the Flags and Att cells (=C-h .=,
@@ -152,7 +152,7 @@ clauses (=s:/a/ | s:/b/=).
 | =acked:bzg= =owned:*= =closed:*= | =a: o: c:= | by person (or =*= for any)                  |
 | =urgent:*= =important:false=   | =u: i:=    | priority bits (set or not)                |
 | =flags:AO=                   | =F:=       | Flags letters, all required (A O C R E S) |
-| =att:~+=                     | =A:=       | Att glyphs, all required (? ~ + x @ #)    |
+| =att:~+=                     | =A:=       | Att glyphs, all required (. ~ + x @ #)    |
 | =date:3d= =date:A..B=          | =d:=       | created (durations =Nd/Nw/Nm=, ranges)      |
 | =deadline:2m=                | =D:=       | due within / on (forward)                 |
 | =expired:10d=                | =e:=       | expiring within (forward)                 |

@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.4.0
+;; Version: 0.17.1
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -69,6 +69,15 @@
 (defgroup gnaw nil
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
+
+(defconst gnaw-version (or (package-get-version) "0.17.1")
+  "Version of gnaw.el, read from its package header.")
+
+;;;###autoload
+(defun gnaw-version ()
+  "Display the version of gnaw.el."
+  (interactive)
+  (message "gnaw.el %s" gnaw-version))
 
 (defcustom gnaw-config-dir "~/.config/gnaw"
   "Directory containing gnaw configuration and state/cache files."
@@ -1780,7 +1789,7 @@ instead of replacing it."
                     ((equal key "flags")
                      (read-string "Flags letters, all required (A O C R E S): "))
                     ((equal key "att")
-                     (read-string "Att glyphs, all required (? ~ + x @ #): "))
+                     (read-string "Att glyphs, all required (. ~ + x @ #): "))
                     (t (read-string (format "%s: " key))))))
     (setq-local gnaw-list--related-mids nil) ; filtering leaves the related view
     (setq-local gnaw-list--query
@@ -1906,11 +1915,11 @@ are offered."
 
 (defun gnaw--att-string (info)
   "Return the three-position Att column string for report INFO.
-Positions: awaiting (?), related (~), then one attachment glyph --
+Positions: awaiting (.), related (~), then one attachment glyph --
 + one patch, x several, @ calendar events, # plain-text files.
 Also matched, sans spaces, by the att: query key."
   (let ((patches (plist-get info :patches)))
-    (concat (if (plist-get info :awaiting) "?" " ")
+    (concat (if (plist-get info :awaiting) "." " ")
             (if (plist-get info :related) "~" " ")
             (cond ((cdr patches)            "x")
                   (patches                  "+")
@@ -2375,7 +2384,7 @@ filter (AND) instead of replacing it."
 With a prefix argument ADD, add the condition to the active
 filter (AND) instead of replacing it."
   (interactive "P")
-  (gnaw-list-filter (gnaw-list--query-add "att:?" add)))
+  (gnaw-list-filter (gnaw-list--query-add "att:." add)))
 
 (defun gnaw-list-limit-related (&optional add)
   "Limit the list to reports with related reports.
