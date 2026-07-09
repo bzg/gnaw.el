@@ -1348,14 +1348,55 @@ Set by `gnaw--list-format'.  Buffer-local in use.")
 Their placeholder rows are built from the relation metadata only."
   :group 'gnaw)
 
-(defun gnaw--query-text-match (needle hay)
-  "Non-nil if HAY contains NEEDLE, case-insensitively.
-NEEDLE `*' matches any non-empty HAY; empty NEEDLE matches anything."
-  (let ((hay (or hay "")))
-    (cond ((equal needle "*") (not (string-empty-p hay)))
-          ((or (null needle) (string-empty-p needle)) t)
-          (t (let ((case-fold-search t))
-               (and (string-match-p (regexp-quote needle) hay) t))))))
+(defun gnaw--query-delimited (needle delim)
+  "Return NEEDLE's content when delimited by character DELIM, else nil.
+NEEDLE is delimited when it starts and ends with DELIM and holds at
+least the two delimiters."
+  (and needle (>= (length needle) 2)
+       (eq (aref needle 0) delim)
+       (eq (aref needle (1- (length needle))) delim)
+       (substring needle 1 -1)))
+
+(defun gnaw--query-regexp (needle)
+  "Return the regexp of a slash-delimited query NEEDLE, or nil.
+NEEDLE is slash-delimited when it starts and ends with a `/', as
+in /^\\[PATCH/."
+  (gnaw--query-delimited needle ?/))
+
+(defun gnaw--query-quoted (needle)
+  "Return the text of a double-quoted query NEEDLE, or nil.
+Quotes make NEEDLE literal: spaces and the operator characters
+lose their meaning inside."
+  (gnaw--query-delimited needle ?\"))
+
+(defun gnaw--query-text-matcher (needle)
+  "Compile query NEEDLE into a predicate on a text field.
+The predicate takes the field string (or nil) and is non-nil when
+it contains NEEDLE, case-insensitively.  NEEDLE `*' matches any
+non-empty field; a slash-delimited NEEDLE (/regexp/) is matched as
+an Emacs regexp instead of a literal substring; a double-quoted
+NEEDLE is matched literally, `*' and slashes included.  An empty
+NEEDLE, even quoted or slashed, matches nothing, and so does an
+invalid regexp."
+  (let* ((lit (gnaw--query-quoted needle))
+         (re (and (not lit) (gnaw--query-regexp needle))))
+    (cond
+     ((equal needle "*")
+      (lambda (hay) (and hay (not (string-empty-p hay)))))
+     ((string-empty-p (or lit re needle)) #'ignore)
+     ((and re (not (ignore-errors (string-match-p re "") t)))
+      #'ignore)                         ; invalid regexp
+     (t (let ((rx (or re (regexp-quote (or lit needle)))))
+          (lambda (hay)
+            (let ((case-fold-search t))
+              (string-match-p rx (or hay "")))))))))
+
+(defun gnaw--query-subject-matcher (needle)
+  "Compile NEEDLE into a predicate on (MID INFO) searching the subject.
+The whole NEEDLE is matched as `gnaw--query-text-matcher' does,
+commas included: this is the bare-word (and unknown-key) search."
+  (let ((m (gnaw--query-text-matcher needle)))
+    (lambda (_mid info) (funcall m (plist-get info :subject)))))
 
 (defun gnaw--query-ymd->days (s)
   "Absolute day number for the YYYY-MM-DD prefix of S, or nil."
@@ -1379,48 +1420,58 @@ A duration is TODAY plus or minus its days, per FORWARD."
       (let ((d (gnaw--query-duration->days s)))
         (and d (if forward (+ today d) (- today d))))))
 
-(defun gnaw--query-date-match (spec field forward)
-  "Non-nil if FIELD's date satisfies SPEC; FORWARD looks ahead from today.
-SPEC is a duration (3d/2w/2m), a YYYY-MM-DD date, or an A..B range whose
-ends are dates or durations and may be empty (the order is normalized)."
-  (let ((fd (gnaw--query-ymd->days field))
-        (today (time-to-days (current-time))))
-    (when fd
-      (if (string-match "\\`\\(.*\\)\\.\\.\\(.*\\)\\'" spec)
-          ;; Read both ends before calling `gnaw--query-bound', which
-          ;; clobbers the match data via its own `string-match'.
-          (let* ((sa (match-string 1 spec))
-                 (sb (match-string 2 spec))
-                 (va (gnaw--query-bound sa forward today))
-                 (vb (gnaw--query-bound sb forward today))
-                 (lo (if (and va vb) (min va vb) va))
-                 (hi (if (and va vb) (max va vb) vb)))
-            (and (or (null lo) (>= fd lo)) (or (null hi) (<= fd hi))))
-        (let ((d (gnaw--query-duration->days spec))
-              (single (gnaw--query-ymd->days spec)))
-          (cond (d (if forward (and (>= fd today) (<= fd (+ today d)))
-                     (and (<= fd today) (>= fd (- today d)))))
-                (single (= fd single))))))))
+(defun gnaw--query-date-matcher (spec key forward)
+  "Compile date SPEC into a predicate on INFO's KEY date field.
+SPEC is a duration (3d/2w/2m), a YYYY-MM-DD date, or an A..B range
+whose ends are dates or durations and may be empty (the order is
+normalized); FORWARD durations look ahead from today.  The bounds
+are resolved once, here; an unparseable SPEC matches nothing."
+  (let ((today (time-to-days (current-time)))
+        (lo nil) (hi nil) (none nil))
+    (if (string-match "\\`\\(.*\\)\\.\\.\\(.*\\)\\'" spec)
+        ;; Read both ends before calling `gnaw--query-bound', which
+        ;; clobbers the match data via its own `string-match'.
+        (let* ((sa (match-string 1 spec))
+               (sb (match-string 2 spec))
+               (va (gnaw--query-bound sa forward today))
+               (vb (gnaw--query-bound sb forward today)))
+          (setq lo (if (and va vb) (min va vb) va)
+                hi (if (and va vb) (max va vb) vb)))
+      (let ((d (gnaw--query-duration->days spec))
+            (single (gnaw--query-ymd->days spec)))
+        (cond (d (if forward
+                     (setq lo today hi (+ today d))
+                   (setq lo (- today d) hi today)))
+              (single (setq lo single hi single))
+              (t (setq none t)))))
+    (if none
+        #'ignore
+      (lambda (_mid info)
+        (let ((fd (gnaw--query-ymd->days (plist-get info key))))
+          (and fd
+               (or (null lo) (>= fd lo))
+               (or (null hi) (<= fd hi))))))))
 
-(defun gnaw--query-actor-match (needle &rest actors)
-  "Non-nil if NEEDLE matches one of ACTORS (identity strings).
-`*', `true' or empty NEEDLE matches when any actor is set; otherwise a
-case-insensitive substring of an actor matches."
-  (let ((set (seq-some (lambda (a) (and a (not (string-empty-p a)))) actors)))
-    (if (member needle '("*" "true" nil ""))
-        (and set t)
-      (let ((case-fold-search t))
-        (and (seq-some (lambda (a)
-                         (and a (string-match-p (regexp-quote needle) a)))
-                       actors)
-             t)))))
+(defun gnaw--query-actor-matcher (needle)
+  "Compile query NEEDLE into a predicate on an actor (identity) string.
+`*' or `true' matches any set actor; otherwise NEEDLE matches as
+`gnaw--query-text-matcher' does, so /regexp/ and \"quoted\" values
+work here too -- but never against an unset actor."
+  (if (member needle '("*" "true"))
+      (lambda (a) (and a (not (string-empty-p a))))
+    (let ((m (gnaw--query-text-matcher needle)))
+      (lambda (a)
+        (and a (not (string-empty-p a)) (funcall m a))))))
 
-(defun gnaw--query-flag-match (val set)
-  "Non-nil if boolean flag state SET satisfies query value VAL.
-Empty VAL, `*' and `true' require the flag; `false' requires its
-absence; any other VAL matches nothing."
-  (cond ((member val '(nil "" "*" "true")) set)
-        ((equal val "false") (not set))))
+(defun gnaw--query-flag-matcher (val bit)
+  "Compile VAL into a predicate testing priority BIT on INFO.
+`*' and `true' require the flag, `false' its absence; any other VAL
+matches nothing."
+  (let ((want (and (member val '("*" "true")) t)))
+    (if (and (not want) (not (equal val "false")))
+        #'ignore
+      (lambda (_mid info)
+        (eq want (= (logand (or (plist-get info :priority) 0) bit) bit))))))
 
 (defvar gnaw--subject-words-cache (make-hash-table :test 'equal)
   "Memoized `gnaw--subject-words' results, keyed by subject.
@@ -1451,116 +1502,172 @@ The result is memoized in `gnaw--subject-words-cache'."
                               (split-string s "[^[:alnum:]-]+" t)))))
        gnaw--subject-words-cache))))
 
-(defvar gnaw--query-similar-parsed nil
-  "Cons (VAL . WORDS) memoizing the last similar: value parsed.
-A filter pass calls `gnaw--query-similar-match' once per report
-with the same VAL; parsing it once per pass is enough.")
+(defun gnaw--query-similar-matcher (val)
+  "Compile similar: VAL (words joined by `+') into a subject predicate.
+A subject matches when it shares at least three of VAL's words --
+all of them when VAL has fewer than three (see `gnaw--subject-words'
+for what counts as a word)."
+  (let* ((words (mapcar #'downcase (split-string (or val "") "\\+" t)))
+         (need (min 3 (length words))))
+    (lambda (subject)
+      (let ((mine (gnaw--subject-words subject)))
+        (and (> need 0)
+             (>= (seq-count (lambda (w) (member w mine)) words) need))))))
 
-(defun gnaw--query-similar-match (val subject)
-  "Non-nil if SUBJECT shares enough words with query value VAL.
-VAL is words joined by `+' (as built by `gnaw-list-filter-cell');
-SUBJECT matches when it contains at least three of them -- all of
-them when VAL has fewer than three."
-  (let* ((words (if (equal val (car gnaw--query-similar-parsed))
-                    (cdr gnaw--query-similar-parsed)
-                  (cdr (setq gnaw--query-similar-parsed
-                             (cons val (mapcar #'downcase
-                                               (split-string (or val "")
-                                                             "\\+" t)))))))
-         (need (min 3 (length words)))
-         (mine (gnaw--subject-words subject)))
-    (and (> need 0)
-         (>= (seq-count (lambda (w) (member w mine)) words) need))))
+(defun gnaw--query-vals (val)
+  "Split VAL into its comma-separated (OR) alternatives.
+A slash-delimited (/regexp/) or double-quoted VAL stays whole: each
+is always the whole value, and may thus contain commas."
+  (if (or (gnaw--query-regexp val) (gnaw--query-quoted val))
+      (list val)
+    (split-string val "," t)))
 
-(defun gnaw--query-val-any (val pred)
-  "Non-nil if PRED holds for any comma-separated (OR) value in VAL.
-An empty VAL is passed through unsplit, keeping its match-any meaning."
-  (seq-some pred (if (or (null val) (string-empty-p val))
-                     (list val)
-                   (split-string val "," t))))
+(defun gnaw--query-getter (key)
+  "Return a (MID INFO) accessor for the INFO plist KEY."
+  (lambda (_mid info) (plist-get info key)))
 
-(defun gnaw--query-token-match (token mid info)
-  "Non-nil if search TOKEN matches report MID with INFO."
+(defun gnaw--query-field-matcher (val make-matcher &rest getters)
+  "Compile VAL into a predicate on the fields read by GETTERS.
+MAKE-MATCHER turns each comma (OR) alternative of VAL into a
+predicate on one string; each of GETTERS takes (MID INFO) and
+returns a field the alternatives are tried against."
+  (let ((ms (mapcar make-matcher (gnaw--query-vals val))))
+    (lambda (mid info)
+      (seq-some (lambda (m)
+                  (seq-some (lambda (g) (funcall m (funcall g mid info)))
+                            getters))
+                ms))))
+
+(defun gnaw--query-glyph-matcher (val glyphs)
+  "Compile VAL into a predicate on a glyph string returned by GLYPHS.
+GLYPHS maps an INFO plist to the string; every character of a VAL
+alternative must be present in it (a comma is OR, as elsewhere)."
+  (let ((alts (seq-remove #'string-empty-p (gnaw--query-vals val))))
+    (lambda (_mid info)
+      (let ((s (funcall glyphs info)))
+        (seq-some (lambda (v)
+                    (seq-every-p (lambda (ch) (seq-contains-p s ch)) v))
+                  alts)))))
+
+(defun gnaw--query-compile-token (token)
+  "Compile search TOKEN into a predicate taking (MID INFO).
+A token starting with `-' matches when the rest of the token does
+not: -type:patch, -acked:*, -subject:/^re:/ or -latex.  The
+negation covers the whole token, comma (OR) alternatives included."
+  (cond ((and (> (length token) 1) (eq (aref token 0) ?-))
+         (let ((inner (gnaw--query-compile-token (substring token 1))))
+           (lambda (mid info) (not (funcall inner mid info)))))
+        ;; A fully quoted token is a literal subject search: a colon
+        ;; inside the quotes is not a key separator.
+        ((gnaw--query-quoted token)
+         (gnaw--query-subject-matcher token))
+        (t (gnaw--query-compile-key token))))
+
+(defun gnaw--query-compile-key (token)
+  "Compile unquoted, unnegated TOKEN into a predicate taking (MID INFO).
+A known key with an empty value matches nothing: each branch below
+then compiles a predicate with no alternative left to satisfy.  A
+token without a colon, or whose prefix is no known key, searches
+the whole token in the subjects."
   (let* ((i (string-search ":" token))
          (key (and i (substring token 0 i)))
-         (val (and i (substring token (1+ i))))
-         (prio (or (plist-get info :priority) 0)))
-    (if (null key)
-        (gnaw--query-text-match token (plist-get info :subject))
-      (pcase key
-        ((or "from" "f")
-         (gnaw--query-val-any
-          val (lambda (v)
-                (or (gnaw--query-text-match v (plist-get info :from))
-                    (gnaw--query-text-match v (plist-get info :from-name))))))
-        ((or "subject" "s")
-         (gnaw--query-val-any
-          val (lambda (v) (gnaw--query-text-match v (plist-get info :subject)))))
-        ((or "topic" "t")
-         (gnaw--query-val-any
-          val (lambda (v) (gnaw--query-text-match v (plist-get info :topic)))))
-        ("type"
-         (gnaw--query-val-any
-          val (lambda (v)
-                (and v (equal (downcase v)
-                              (downcase (or (plist-get info :type) "")))))))
-        ((or "priority" "p")
-         (gnaw--query-val-any
-          val (lambda (v) (equal v (number-to-string prio)))))
-        ((or "mid" "m")
-         (gnaw--query-val-any val (lambda (v) (gnaw--query-text-match v mid))))
-        ((or "acked" "a")
-         (gnaw--query-val-any
-          val (lambda (v) (gnaw--query-actor-match v (plist-get info :acked)))))
-        ((or "owned" "o")
-         (gnaw--query-val-any
-          val (lambda (v) (gnaw--query-actor-match
-                           v (plist-get info :owned)
-                           (plist-get info :owned-name)))))
-        ((or "closed" "c")
-         (gnaw--query-val-any
-          val (lambda (v) (gnaw--query-actor-match v (plist-get info :closed)))))
-        ((or "urgent" "u")
-         (gnaw--query-flag-match val (= (logand prio 2) 2)))
-        ((or "important" "i")
-         (gnaw--query-flag-match val (= (logand prio 1) 1)))
-        ;; Glyph matches, mirroring the Flags and Att columns: every
-        ;; letter of the value must be present (a comma is OR, as
-        ;; elsewhere).  flags:AO = acked and owned; flags:S =
-        ;; superseded; att:~+ = related and a single patch.
-        ("flags"
-         (gnaw--query-val-any
-          val (lambda (v)
-                (and v (not (string-empty-p v))
-                     (let ((f (or (plist-get info :flags) "")))
-                       (seq-every-p (lambda (ch) (seq-contains-p f ch))
-                                    (upcase v)))))))
-        ((or "att" "attributes")
-         (gnaw--query-val-any
-          val (lambda (v)
-                (and v (not (string-empty-p v))
-                     (let ((s (gnaw--att-string info)))
-                       ;; downcase: x is the only cased glyph, and the
-                       ;; neighbor flags: alphabet is uppercase.
-                       (seq-every-p (lambda (ch) (seq-contains-p s ch))
-                                    (downcase v)))))))
-        ("similar"
-         (gnaw--query-similar-match val (plist-get info :subject)))
-        ((or "date" "d") (gnaw--query-date-match val (plist-get info :date) nil))
-        ((or "deadline" "D") (gnaw--query-date-match val (plist-get info :deadline) t))
-        ((or "expired" "e") (gnaw--query-date-match val (plist-get info :expiry) t))
-        (_ (gnaw--query-text-match token (plist-get info :subject)))))))
+         (val (and i (substring token (1+ i)))))
+    (pcase key
+      ((or "from" "f")
+       (gnaw--query-field-matcher val #'gnaw--query-text-matcher
+                                  (gnaw--query-getter :from)
+                                  (gnaw--query-getter :from-name)))
+      ((or "subject" "s")
+       (gnaw--query-field-matcher val #'gnaw--query-text-matcher
+                                  (gnaw--query-getter :subject)))
+      ((or "topic" "t" "T")
+       (gnaw--query-field-matcher val #'gnaw--query-text-matcher
+                                  (gnaw--query-getter :topic)))
+      ((or "mid" "m")
+       (gnaw--query-field-matcher val #'gnaw--query-text-matcher
+                                  (lambda (mid _info) mid)))
+      ((or "acked" "a")
+       (gnaw--query-field-matcher val #'gnaw--query-actor-matcher
+                                  (gnaw--query-getter :acked)))
+      ((or "owned" "o")
+       (gnaw--query-field-matcher val #'gnaw--query-actor-matcher
+                                  (gnaw--query-getter :owned)
+                                  (gnaw--query-getter :owned-name)))
+      ((or "closed" "c")
+       (gnaw--query-field-matcher val #'gnaw--query-actor-matcher
+                                  (gnaw--query-getter :closed)))
+      ("type"
+       ;; A closed set compared whole: no *, regexp or quotes here,
+       ;; and type:* matches nothing.
+       (let ((vals (mapcar #'downcase (gnaw--query-vals val))))
+         (lambda (_mid info)
+           (member (downcase (or (plist-get info :type) "")) vals))))
+      ((or "priority" "p")
+       (let ((vals (gnaw--query-vals val)))
+         (lambda (_mid info)
+           (member (number-to-string (or (plist-get info :priority) 0))
+                   vals))))
+      ((or "urgent" "u") (gnaw--query-flag-matcher val 2))
+      ((or "important" "i") (gnaw--query-flag-matcher val 1))
+      ;; Glyph matches, mirroring the Flags and Att columns:
+      ;; flags:AO = acked and owned; flags:S = superseded;
+      ;; att:~+ = related and a single patch.
+      ((or "flags" "F")
+       (gnaw--query-glyph-matcher
+        (upcase val) (lambda (info) (or (plist-get info :flags) ""))))
+      ((or "att" "attributes" "A")
+       ;; downcase: x is the only cased glyph, and the neighbor
+       ;; flags: alphabet is uppercase.
+       (gnaw--query-glyph-matcher (downcase val) #'gnaw--att-string))
+      ("similar"
+       (let ((m (gnaw--query-similar-matcher val)))
+         (lambda (_mid info) (funcall m (plist-get info :subject)))))
+      ((or "date" "d") (gnaw--query-date-matcher val :date nil))
+      ((or "deadline" "D") (gnaw--query-date-matcher val :deadline t))
+      ((or "expired" "e") (gnaw--query-date-matcher val :expiry t))
+      (_ (gnaw--query-subject-matcher token)))))
 
 (defun gnaw--query-parse (query)
-  "Parse QUERY into OR-groups of AND-token lists (`|' = OR, space = AND)."
-  (mapcar (lambda (grp) (split-string grp "[ \t]+" t))
-          (split-string query "|" t)))
+  "Parse QUERY into OR-groups of AND-token lists (`|' = OR, space = AND).
+Double quotes keep a token together: spaces and `|' between them
+split nothing, so subject:\"a b\" stays one token.  An unbalanced
+quote swallows the rest of QUERY into the current token."
+  (let (groups tokens tok in-quote)
+    (cl-flet ((end-token ()
+                (when tok
+                  (push (concat (nreverse tok)) tokens)
+                  (setq tok nil)))
+              (end-group ()
+                (when tokens
+                  (push (nreverse tokens) groups)
+                  (setq tokens nil))))
+      (dolist (ch (append query nil))
+        (cond
+         ((eq ch ?\")
+          (setq in-quote (not in-quote))
+          (push ch tok))
+         ((and (not in-quote) (memq ch '(?\s ?\t)))
+          (end-token))
+         ((and (not in-quote) (eq ch ?|))
+          (end-token)
+          (end-group))
+         (t (push ch tok))))
+      (end-token)
+      (end-group))
+    (nreverse groups)))
+
+(defun gnaw--query-compile (query)
+  "Compile QUERY into OR-groups of AND predicate lists.
+Each predicate takes (MID INFO); tokens are dissected once, here,
+instead of once per report and per refresh."
+  (mapcar (lambda (toks) (mapcar #'gnaw--query-compile-token toks))
+          (gnaw--query-parse query)))
 
 (defun gnaw--query-match-p (groups mid info)
-  "Non-nil if report MID/INFO matches parsed GROUPS (from `gnaw--query-parse')."
-  (seq-some (lambda (toks)
-              (seq-every-p (lambda (tok) (gnaw--query-token-match tok mid info))
-                           toks))
+  "Non-nil if report MID/INFO matches compiled GROUPS.
+GROUPS comes from `gnaw--query-compile'."
+  (seq-some (lambda (preds)
+              (seq-every-p (lambda (p) (funcall p mid info)) preds))
             groups))
 
 (defconst gnaw--query-keys
@@ -1584,13 +1691,30 @@ entered from."
                    'gnaw-list--reports
                    (window-buffer (minibuffer-selected-window)))))))
 
+(defun gnaw--filter-token-start (string)
+  "Return the position where STRING's trailing query token starts.
+Like the tokenizer of `gnaw--query-parse', ignore separators inside
+double quotes, so typing a quoted phrase is not completed as if the
+text after a space started a new token."
+  (let ((start 0) (in-quote nil))
+    (dotimes (i (length string))
+      (let ((ch (aref string i)))
+        (cond ((eq ch ?\") (setq in-quote (not in-quote)))
+              ((and (not in-quote) (memq ch '(?\s ?\t ?|)))
+               (setq start (1+ i))))))
+    start))
+
 (defun gnaw--filter-completion (string pred action)
   "Completion table for the last token of filter query STRING.
 Complete the query key and, after keys like `type:' or `topic:', its
 value (starting after the last comma, commas being OR).  PRED and
 ACTION are the usual completion-table arguments; earlier tokens are
 left untouched."
-  (let* ((beg (progn (string-match "[^ \t|]*\\'" string) (match-beginning 0)))
+  (let* ((beg (gnaw--filter-token-start string))
+         ;; Step over a leading negation so -ty completes to -type:.
+         (beg (if (and (< beg (length string)) (eq (aref string beg) ?-))
+                  (1+ beg)
+                beg))
          (tok (substring string beg))
          (colon (string-search ":" tok))
          (cands (if colon
@@ -1615,6 +1739,25 @@ left untouched."
         (if (and (null action) (stringp res))
             (concat (substring string 0 vbeg) res)
           res))))))
+
+(defun gnaw--query-quote-val (val)
+  "Return VAL protected for use as a literal query value.
+Quote VAL when it contains a character the tokenizer or the value
+splitting would interpret (whitespace, `|', a comma), or when it
+would read as a /regexp/ or \"quoted\" value.  The syntax cannot
+escape a double quote: a VAL containing one is emitted as a
+whole-value regexp with `.' standing for each character quotes
+cannot carry."
+  (cond ((string-match-p "\"" val)
+         (concat "/"
+                 (replace-regexp-in-string "[\"| \t]" "."
+                                           (regexp-quote val))
+                 "/"))
+        ((or (string-match-p "[ \t|,]" val)
+             (gnaw--query-regexp val)
+             (gnaw--query-quoted val))
+         (concat "\"" val "\""))
+        (t val)))
 
 (defun gnaw-list--query-add (query add)
   "Return QUERY, appended to the active query when ADD is non-nil.
@@ -1642,7 +1785,8 @@ instead of replacing it."
     (setq-local gnaw-list--related-mids nil) ; filtering leaves the related view
     (setq-local gnaw-list--query
                 (and val (not (string-empty-p val))
-                     (gnaw-list--query-add (format "%s:%s" key val) add)))
+                     (gnaw-list--query-add
+                      (format "%s:%s" key (gnaw--query-quote-val val)) add)))
     (gnaw-list-refresh)
     (if gnaw-list--query
         (message "gnaw: filter %s" gnaw-list--query)
@@ -1794,7 +1938,15 @@ Also matched, sans spaces, by the att: query key."
 INFO is the report plist; ENTRY its state.edn alist and MID its
 message-id (both used for the mark: D flags a pending dismissal).
 The Flags and Att cells carry a help echo spelling them out, which
-`tabulated-list-print-col' preserves."
+`tabulated-list-print-col' preserves.  Every cell carries a
+mouse-face, so mouse-1 opens the report (see the follow-link entry
+of `gnaw-list-mode-map')."
+  (propertize
+   (gnaw--list-cell-1 key info entry mid)
+   'mouse-face 'highlight))
+
+(defun gnaw--list-cell-1 (key info entry mid)
+  "Return the bare display string for column KEY (see `gnaw--list-cell')."
   (pcase key
     (:mark (if (and mid (member mid gnaw-list--flagged))
                "D"
@@ -1967,7 +2119,7 @@ is narrowed to related reports, delegate to
   "Return `tabulated-list-entries' for the full report list."
   (let ((state (gnaw-read-state))
         (cols (gnaw--active-columns))
-        (qgroups (and gnaw-list--query (gnaw--query-parse gnaw-list--query)))
+        (qgroups (and gnaw-list--query (gnaw--query-compile gnaw-list--query)))
         (pairs gnaw-list--reports)
         (groups (make-hash-table :test 'equal))
         (seen (make-hash-table :test 'equal))
@@ -2033,10 +2185,15 @@ is narrowed to related reports, delegate to
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'gnaw-list-open)
     (define-key map (kbd "SPC") #'gnaw-list-open-other-window)
+    (define-key map "b" #'gnaw-list-browse)
+    (define-key map [mouse-2] #'gnaw-list-mouse-open)
+    ;; Let mouse-1 follow the rows, which carry mouse-face (the
+    ;; package-menu convention).
+    (define-key map [follow-link] 'mouse-face)
     (define-key map "f" #'gnaw-list-follow-mode)
     (define-key map (kbd "TAB") #'gnaw-list-tab)
     (define-key map "v" #'gnaw-list-attachment-view)
-    (define-key map "s" #'gnaw-list-attachment-save)
+    (define-key map "S" #'gnaw-list-attachment-save)
     (define-key map "A" #'gnaw-list-patch-apply)
     (define-key map ":" #'gnaw-list-attachments)
     (define-key map "g" #'gnaw-list-reload)
@@ -2048,7 +2205,8 @@ is narrowed to related reports, delegate to
     (define-key map "a" #'gnaw-list-filter-acked)
     (define-key map "o" #'gnaw-list-filter-owned)
     (define-key map "c" #'gnaw-list-limit-closed)
-    (define-key map "?" #'gnaw-list-limit-awaiting)
+    (define-key map "." #'gnaw-list-limit-awaiting)
+    (define-key map "?" #'gnaw-show-help)
     (define-key map "~" #'gnaw-list-limit-related)
     (define-key map "+" #'gnaw-list-limit-attachments)
     (define-key map (kbd "<C-return>") #'gnaw-list-filter-cell)
@@ -2058,6 +2216,7 @@ is narrowed to related reports, delegate to
     (define-key map "x" #'gnaw-list-execute-flags)
     (define-key map "u" #'gnaw-list-remove-marks)
     (define-key map "h" #'gnaw-show-help)
+    (define-key map "s" #'tabulated-list-sort)
     (define-key map "^" #'gnaw-sort)
     (define-key map "_" #'gnaw-list-toggle-dismissed)
     (define-key map "\\" #'gnaw-select-preset-filter)
@@ -2074,7 +2233,45 @@ is narrowed to related reports, delegate to
         (and gnaw-list-sort-key
              (assoc (car gnaw-list-sort-key) (gnaw--active-columns))
              gnaw-list-sort-key))
+  ;; The native refresh entry points: C-x x g, auto-revert...
+  (setq-local revert-buffer-function
+              (lambda (&rest _) (gnaw-list-reload)))
+  ;; C-x r m bookmarks the current view (filter, sort, position).
+  (setq-local bookmark-make-record-function
+              #'gnaw-list--bookmark-make-record)
   (tabulated-list-init-header))
+
+(declare-function bookmark-prop-get "bookmark")
+
+(defun gnaw-list--bookmark-make-record ()
+  "Return a `bookmark.el' record for the current gnaw list view."
+  `(,(concat "gnaw" (and gnaw-list--query (format ": %s" gnaw-list--query)))
+    (handler . gnaw-list-bookmark-jump)
+    (query . ,gnaw-list--query)
+    (sort-key . ,tabulated-list-sort-key)
+    (mid . ,(car (tabulated-list-get-id)))))
+
+;;;###autoload
+(defun gnaw-list-bookmark-jump (bookmark)
+  "Restore the gnaw list view saved in BOOKMARK."
+  (gnaw)
+  (setq-local gnaw-list--query (bookmark-prop-get bookmark 'query))
+  (when-let* ((key (bookmark-prop-get bookmark 'sort-key))
+              ((assoc (car key) (gnaw--active-columns))))
+    (setq-local tabulated-list-sort-key key))
+  (gnaw-list-refresh)
+  (when-let* ((mid (bookmark-prop-get bookmark 'mid)))
+    (gnaw-list--goto-mid mid)))
+
+(defun gnaw-list--update-mode-line ()
+  "Reflect the view (related or query) and pending flags in the mode line."
+  (let ((s (concat
+            (cond (gnaw-list--related-mids " [related]")
+                  (gnaw-list--query (format " [%s]" gnaw-list--query)))
+            (and gnaw-list--flagged
+                 (format " [%d flagged]" (length gnaw-list--flagged))))))
+    (setq mode-line-process (and (not (string-empty-p s)) s))
+    (force-mode-line-update)))
 
 (defun gnaw-list-refresh ()
   "Re-render the list from the in-memory reports and current state.
@@ -2095,9 +2292,7 @@ Does not re-read the report cache; use `gnaw-list-reload' for that."
          (wline (and win (count-lines start (line-beginning-position)))))
     (setq tabulated-list-format (gnaw--list-format))
     (tabulated-list-init-header)
-    (setq mode-line-process
-          (cond (gnaw-list--related-mids " [related]")
-                (gnaw-list--query (format " [%s]" gnaw-list--query))))
+    (gnaw-list--update-mode-line)
     (setq tabulated-list-entries (gnaw--list-entries))
     (tabulated-list-print t)
     (force-mode-line-update)
@@ -2207,7 +2402,7 @@ the command is called again while QUERY is still active.")
 On the From column, keep the author's reports; on Type, the reports
 of that type; on Created, the reports created on or after that date;
 on Subject, the reports with a similar subject (at least three
-significant words in common, see `gnaw--query-similar-match') --
+significant words in common, see `gnaw--query-similar-matcher') --
 signaling a `user-error' instead of filtering when no other report
 has a similar subject.
 Outside any cell (the leading padding or past the last column, where
@@ -2242,13 +2437,10 @@ the active filter (AND) instead of replacing it."
         (pcase col
           ("From"
            (let ((from (or (plist-get info :from)
-                           ;; The address never carries spaces; a name
-                           ;; would, and spaces separate query tokens, so
-                           ;; fall back on its first word only.
-                           (car (split-string (or (plist-get info :from-name) ""))))))
+                           (plist-get info :from-name))))
              (when (member from '(nil ""))
                (user-error "No author on this row"))
-             (format "from:%s" from)))
+             (format "from:%s" (gnaw--query-quote-val from))))
           ("Type" (format "type:%s" (or (plist-get info :type) "bug")))
           ("Created"
            (let ((d (plist-get info :date)))
@@ -2257,13 +2449,13 @@ the active filter (AND) instead of replacing it."
           ("Subject"
            (let ((words (gnaw--subject-words (plist-get info :subject))))
              (unless words (user-error "No significant word in this subject"))
-             (let ((val (string-join words "+")))
+             (let* ((val (string-join words "+"))
+                    (m (gnaw--query-similar-matcher val)))
                ;; The report always matches its own words: fewer than
                ;; two matches means filtering would leave it alone.
                (when (< (seq-count
                          (lambda (p)
-                           (gnaw--query-similar-match
-                            val (plist-get (cdr p) :subject)))
+                           (funcall m (plist-get (cdr p) :subject)))
                          gnaw-list--reports)
                         2)
                  (user-error "No other report with a similar subject"))
@@ -2281,6 +2473,20 @@ the active filter (AND) instead of replacing it."
   (interactive)
   (let ((p (gnaw-list--current)))
     (gnaw-read-message (car p) (cdr p))))
+
+(defun gnaw-list-mouse-open (event)
+  "Open the email of the report clicked in EVENT."
+  (interactive "e")
+  (mouse-set-point event)
+  (gnaw-list-open))
+
+(defun gnaw-list-browse ()
+  "Browse the archived web page of the report at point."
+  (interactive)
+  (pcase-let ((`(,mid . ,info) (gnaw-list--current)))
+    (let ((url (gnaw-message-archive-url mid info)))
+      (unless url (user-error "No archive URL for this report"))
+      (browse-url url))))
 
 (defun gnaw-list--open-below (pair)
   "Open PAIR's mail and arrange it below the list, point staying there.
@@ -2735,13 +2941,16 @@ See `gnaw-list-flag-dismiss' for deferred dismissal."
          (line (line-number-at-pos))
          (next (save-excursion
                  (forward-line 1)
-                 (car (tabulated-list-get-id)))))
-    (gnaw-toggle-mark (car p) (cdr p) :dismiss)
+                 (car (tabulated-list-get-id))))
+         (on (gnaw-toggle-mark (car p) (cdr p) :dismiss)))
     (gnaw-list-refresh)
     ;; Land on the report that followed; without one (last row), stay in
     ;; place like the other mark commands.
     (unless (and next (gnaw-list--goto-mid next))
-      (gnaw-list--restore-point (car p) line))))
+      (gnaw-list--restore-point (car p) line))
+    (message (if on
+                 "gnaw: dismissed (type _ to include dismissed reports to the view)"
+               "gnaw: dismiss mark removed"))))
 
 (defun gnaw-list--set-mark-cell (mid)
   "Redraw MID's Mark cell on the current row, when the column is shown.
@@ -2767,6 +2976,7 @@ in memory only; nothing is written until then."
                     (delete mid gnaw-list--flagged)
                   (cons mid gnaw-list--flagged)))
     (gnaw-list--set-mark-cell mid)
+    (gnaw-list--update-mode-line)
     (forward-line 1)
     (unless (tabulated-list-get-id) (forward-line -1))))
 
@@ -2790,7 +3000,8 @@ Turn off `gnaw-list-follow-mode' first; write state.edn only once."
     (setq-local gnaw-list--flagged nil)
     (gnaw-list-refresh)
     (gnaw-list--restore-point mid line)
-    (message "gnaw: dismissed %d report(s)" count)))
+    (message "gnaw: dismissed %d report(s) (type _ to include dismissed reports to the view)"
+             count)))
 
 (defun gnaw-list-remove-marks ()
   "Remove the mark or dismissal flag from the report at point, then refresh.
@@ -2801,7 +3012,8 @@ Keep the cursor in place (see `gnaw-list--restore-point')."
     (cond
      ((member (car p) gnaw-list--flagged)
       (setq-local gnaw-list--flagged (delete (car p) gnaw-list--flagged))
-      (gnaw-list--set-mark-cell (car p)))
+      (gnaw-list--set-mark-cell (car p))
+      (gnaw-list--update-mode-line))
      ((gnaw-remove-marks (car p))
       (gnaw-list-refresh)
       (gnaw-list--restore-point (car p) line))
@@ -2919,6 +3131,7 @@ order."
   '(("Read\n————"
      (gnaw-list-open "open the report's mail")
      (gnaw-list-open-other-window "toggle the mail below the list")
+     (gnaw-list-browse "browse the report's archived web page")
      (gnaw-list-follow-mode "toggle follow mode (auto-show the mail at point)"))
     ("Marks\n—————"
      (gnaw-list-toggle-sticky "toggle the sticky mark (bold, exported to todo.org)")
@@ -2942,6 +3155,7 @@ order."
      (gnaw-list-filter-cell "toggle a filter on the cell at point (author, type, date, subject)")
      "C-u on the keys above (also in the = menu) adds the condition"
      "to the active filter (AND)"
+     (tabulated-list-sort "sort by the column at point")
      (gnaw-sort "sort by a criterion"))
     ("Patches and attachments\n———————————————————————"
      (gnaw-list-tab "fold / unfold the series, or narrow to related reports")
