@@ -1918,13 +1918,41 @@ Appending uses the space (AND) operator of the query syntax."
       (concat gnaw-list--query " " query)
     query))
 
+(defvar-local gnaw-list--toggle-point nil
+  "Point saved by `gnaw-list-filter-toggle' when it set its filter.
+A (MID . LINE) cons restored when the same toggle clears its query.
+Replacing one toggle's filter by another's keeps the saved point,
+whose LINE was measured in the view the chain of toggles started
+from -- the view a clear returns to.  `gnaw-list-filter' resets it
+otherwise, so a non-nil value always dates from the active chain.")
+
+(defvar-local gnaw-list--cell-filter nil
+  "State of the `gnaw-list-filter-cell' toggle, or nil.
+A list (QUERY PREV-QUERY PREV-RELATED-MIDS PREV-RELATED-ENTRIES MID
+LINE): the query the command set, then the view it replaced and the
+point position in it, restored when the command is called again
+while QUERY is still active.  `gnaw-list-filter' resets it.")
+
 (defun gnaw-list-filter-toggle (query &optional add)
   "Set the list filter to QUERY, clearing it when QUERY is already active.
-With ADD non-nil, add QUERY to the active filter (AND) instead of
-replacing it, without toggling."
-  (gnaw-list-filter
-   (if (and (not add) (equal gnaw-list--query query)) ""
-     (gnaw-list--query-add query add))))
+Clearing restores point to the report (or, failing that, the line)
+it was on when the toggle -- or the chain of toggles it replaced --
+set its filter.  In the related-reports view, whose entry query is
+not the toggle's doing, always set the filter.  With ADD non-nil,
+add QUERY to the active filter (AND) instead of replacing it,
+without toggling."
+  (if (and (not add) (not gnaw-list--related-mids)
+           (equal gnaw-list--query query))
+      (let ((saved gnaw-list--toggle-point))
+        (gnaw-list-filter "")
+        (when saved
+          (gnaw-list--goto-mid-or-line (car saved) (cdr saved))))
+    (let ((saved (or gnaw-list--toggle-point
+                     (cons (car (tabulated-list-get-id))
+                           (line-number-at-pos)))))
+      (gnaw-list-filter (gnaw-list--query-add query add))
+      (unless add
+        (setq gnaw-list--toggle-point saved)))))
 
 (defun gnaw-list-filter-by (key &optional add)
   "Limit the list to reports whose KEY field matches a read value.
@@ -2466,7 +2494,7 @@ preview), since a row then only ever appears or disappears whole."
   ;; the rows shift so much that the old start leaves point off-screen
   ;; (setting or clearing a filter), keep point on the same window line
   ;; instead of letting redisplay center it.
-  (let* ((win (and (eq (current-buffer) (window-buffer)) (selected-window)))
+  (let* ((win (get-buffer-window nil t))
          (start (and win (window-start win)))
          ;; From bol to bol: `count-lines' counts a partial line as one.
          (wline (and win (count-lines start (line-beginning-position)))))
@@ -2487,9 +2515,12 @@ preview), since a row then only ever appears or disappears whole."
     (tabulated-list-print t update)
     (force-mode-line-update)
     (when win
+      ;; Reprinting moved the window's own point; put it back on the
+      ;; report `tabulated-list-print' remembered, selected or not.
+      (set-window-point win (point))
       (set-window-start win start t)
       (unless (pos-visible-in-window-p (point) win)
-        (recenter wline)))))
+        (with-selected-window win (recenter wline))))))
 
 (defun gnaw-list-reload (&optional no-ask)
   "Re-read reports from the local cache, then re-render.
@@ -2519,10 +2550,7 @@ similar: filter finds it filled."
 (defun gnaw-list-filter-clear ()
   "Clear the active `gnaw-list' filter query."
   (interactive)
-  (setq-local gnaw-list--related-mids nil)  ; filtering leaves the related view
-  (setq-local gnaw-list--query nil)
-  (gnaw-list-refresh)
-  (message "gnaw: filter cleared"))
+  (gnaw-list-filter ""))
 
 (defcustom gnaw-list-filter-live t
   "Whether `gnaw-list-filter' previews its results while typing.
@@ -2616,7 +2644,7 @@ Aborting the minibuffer restores the view the preview replaced."
          (orig-query gnaw-list--query)
          (orig-related gnaw-list--related-mids)
          (shown orig-query)
-         timer dirty committed)
+         timer dirty committed full)
     (cl-labels
         ((preview ()
            (setq timer nil)
@@ -2634,14 +2662,22 @@ Aborting the minibuffer restores the view the preview replaced."
                    ;; partial, and the retry finishes it at the next
                    ;; pause.
                    (setq dirty t)
+                   ;; Leaving the related view changes the face of rows
+                   ;; whose text stays equal, which the row-diffing
+                   ;; update render would skip: reprint everything until
+                   ;; one full render completes.  The timer runs in the
+                   ;; minibuffer, so read the flag in the list buffer.
+                   (when (buffer-local-value 'gnaw-list--related-mids buf)
+                     (setq full t))
                    (if (eq t (while-no-input
                                (with-selected-window win
                                  (setq-local gnaw-list--related-mids nil)
                                  (setq-local gnaw-list--query query)
-                                 (gnaw-list-refresh t)
+                                 (gnaw-list-refresh (not full))
                                  nil)))
                        (schedule)
-                     (setq shown query)))))))
+                     (setq shown query
+                           full nil)))))))
          (schedule (&rest _)
            (when (timerp timer) (cancel-timer timer))
            (setq timer (run-with-idle-timer
@@ -2665,9 +2701,13 @@ Aborting the minibuffer restores the view the preview replaced."
           (with-current-buffer buf
             (setq-local gnaw-list--query orig-query)
             (setq-local gnaw-list--related-mids orig-related)
-            (if-let* ((win (get-buffer-window buf)))
-                (with-selected-window win (gnaw-list-refresh t))
-              (gnaw-list-refresh t))))))))
+            ;; Re-entering the related view changes the face of
+            ;; text-equal rows, which the update render would keep
+            ;; stale: reprint everything in that case.
+            (let ((update (null orig-related)))
+              (if-let* ((win (get-buffer-window buf)))
+                  (with-selected-window win (gnaw-list-refresh update))
+                (gnaw-list-refresh update)))))))))
 
 (defun gnaw-list-filter (query)
   "Filter the report list by QUERY; an empty QUERY clears the filter.
@@ -2678,6 +2718,9 @@ prefix argument, clear the active filter without prompting."
   (interactive
    (list (if current-prefix-arg "" (gnaw--filter-read))))
   (setq-local gnaw-list--related-mids nil)  ; filtering leaves the related view
+  ;; Any query change ends the filter toggles; they re-save afterwards.
+  (setq gnaw-list--toggle-point nil)
+  (setq gnaw-list--cell-filter nil)
   (setq-local gnaw-list--query
               (and (not (string-empty-p (string-trim query))) query))
   (gnaw-list-refresh)
@@ -2730,12 +2773,6 @@ instead of replacing it."
   (interactive "P")
   (gnaw-list-filter-toggle "att:+,x,@,#" add))
 
-(defvar-local gnaw-list--cell-filter nil
-  "State of the `gnaw-list-filter-cell' toggle, or nil.
-A list (QUERY PREV-QUERY PREV-RELATED-MIDS PREV-RELATED-ENTRIES):
-the query the command set, then the view it replaced, restored when
-the command is called again while QUERY is still active.")
-
 (defun gnaw-list-filter-cell (&optional add)
   "Toggle a filter built from the value of the cell at point.
 On the S column, keep the reports of that source; on From, the
@@ -2749,17 +2786,20 @@ Outside any cell (the leading padding or past the last column, where
 point commonly rests), fall back on the Subject column.  While the
 filter set by this command is active, calling it again restores the
 view the filter replaced (a query, a related-reports narrowing, or
-the full list).  With a prefix argument ADD, add the condition to
-the active filter (AND) instead of replacing it."
+the full list) and puts point back on the report it was on.  With a
+prefix argument ADD, add the condition to the active filter (AND)
+instead of replacing it."
   (interactive "P")
   (if (and gnaw-list--cell-filter
            (equal gnaw-list--query (car gnaw-list--cell-filter)))
-      (pcase-let ((`(,_ ,query ,mids ,entries) gnaw-list--cell-filter))
+      (pcase-let ((`(,_ ,query ,mids ,entries ,mid ,line)
+                   gnaw-list--cell-filter))
         (setq gnaw-list--cell-filter nil)
         (setq-local gnaw-list--query query)
         (setq-local gnaw-list--related-mids mids)
         (setq-local gnaw-list--related-entries entries)
         (gnaw-list-refresh)
+        (gnaw-list--goto-mid-or-line mid line)
         (message "gnaw: %s" (cond (mids "back to the related view")
                                   (query (format "filter %s" query))
                                   (t "filter cleared"))))
@@ -2771,7 +2811,9 @@ the active filter (AND) instead of replacing it."
                                            'tabulated-list-column-name))
                    "Subject"))
           (prev (list gnaw-list--query gnaw-list--related-mids
-                      gnaw-list--related-entries)))
+                      gnaw-list--related-entries
+                      (car (tabulated-list-get-id))
+                      (line-number-at-pos))))
       (gnaw-list-filter
        (gnaw-list--query-add
         (pcase col
@@ -3229,7 +3271,8 @@ member.  When the list is already narrowed, restore it."
 
 (defun gnaw-list--goto (pred)
   "Move point to the first row whose (MID . INFO) pair satisfies PRED.
-Return non-nil if found, else return nil with point at end of buffer."
+Return non-nil if found, else return nil with point stepped back
+onto the last row, so a failed search never strands point past it."
   (goto-char (point-min))
   (let (found)
     (while (and (not found) (not (eobp)))
@@ -3237,12 +3280,21 @@ Return non-nil if found, else return nil with point at end of buffer."
         (if (and p (funcall pred p))
             (setq found t)
           (forward-line 1))))
+    (when (and (not found) (not (bobp)))
+      (forward-line -1))
     found))
 
 (defun gnaw-list--goto-mid (mid)
   "Move point to the row whose report id is MID.
-Return non-nil if found, else return nil with point at end of buffer."
+Return non-nil if found, else return nil with point on the last row."
   (gnaw-list--goto (lambda (p) (equal (car p) mid))))
+
+(defun gnaw-list--goto-mid-or-line (mid line)
+  "Move point to MID's row, or to LINE when MID has no row anymore.
+The converse preference of `gnaw-list--restore-point': after a view
+change, following the report matters more than the screen position."
+  (unless (and mid (gnaw-list--goto-mid mid))
+    (gnaw-list--goto-line line)))
 
 (defun gnaw-list--restore-point (mid line)
   "Move to MID's row, unless it moved away from LINE; then stay at LINE.
@@ -3260,14 +3312,26 @@ away from where the user is working."
   (when (and (eobp) (not (bobp)))
     (forward-line -1)))
 
+(defun gnaw-list--refresh-keeping-point ()
+  "Re-render the list, keeping the cursor in place.
+When the refresh kept the row count, a report whose line changed
+was re-sorted away: stay at the same line rather than chase it (see
+`gnaw-list--restore-point').  When rows appeared or vanished, every
+line below them shifted: follow the report instead."
+  (let ((mid (car (tabulated-list-get-id)))
+        (line (line-number-at-pos))
+        (rows (count-lines (point-min) (point-max))))
+    (gnaw-list-refresh)
+    (if (= rows (count-lines (point-min) (point-max)))
+        (gnaw-list--restore-point mid line)
+      (gnaw-list--goto-mid-or-line mid line))))
+
 (defun gnaw-list--toggle (action)
   "Toggle local mark ACTION on the report at point, then refresh.
 Keep the cursor in place (see `gnaw-list--restore-point')."
-  (let ((p (gnaw-list--current))
-        (line (line-number-at-pos)))
+  (let ((p (gnaw-list--current)))
     (gnaw-toggle-mark (car p) (cdr p) action)
-    (gnaw-list-refresh)
-    (gnaw-list--restore-point (car p) line)))
+    (gnaw-list--refresh-keeping-point)))
 
 (defun gnaw-list-toggle-sticky ()
   "Toggle the sticky mark on the report at point.
@@ -3332,9 +3396,7 @@ Turn off `gnaw-list-follow-mode' first; write state.edn only once."
   (unless gnaw-list--flagged
     (user-error "No report flagged for dismissal"))
   (gnaw-list--follow-off)
-  (let ((mid (car (tabulated-list-get-id)))
-        (line (line-number-at-pos))
-        (state (gnaw--read-state-for-update))
+  (let ((state (gnaw--read-state-for-update))
         (count 0))
     (dolist (fmid gnaw-list--flagged)
       (let ((pair (assoc fmid gnaw-list--reports)))
@@ -3343,8 +3405,7 @@ Turn off `gnaw-list-follow-mode' first; write state.edn only once."
           (setq count (1+ count)))))
     (gnaw-write-state state)
     (setq-local gnaw-list--flagged nil)
-    (gnaw-list-refresh)
-    (gnaw-list--restore-point mid line)
+    (gnaw-list--refresh-keeping-point)
     (message "gnaw: dismissed %d report(s) (type _ to include dismissed reports to the view)"
              count)))
 
@@ -3352,16 +3413,14 @@ Turn off `gnaw-list-follow-mode' first; write state.edn only once."
   "Remove the mark or dismissal flag from the report at point, then refresh.
 Keep the cursor in place (see `gnaw-list--restore-point')."
   (interactive)
-  (let ((p (gnaw-list--current))
-        (line (line-number-at-pos)))
+  (let ((p (gnaw-list--current)))
     (cond
      ((member (car p) gnaw-list--flagged)
       (setq-local gnaw-list--flagged (delete (car p) gnaw-list--flagged))
       (gnaw-list--set-mark-cell (car p))
       (gnaw-list--update-mode-line))
      ((gnaw-remove-marks (car p))
-      (gnaw-list-refresh)
-      (gnaw-list--restore-point (car p) line))
+      (gnaw-list--refresh-keeping-point))
      (t (message "gnaw: no mark on this report")))))
 
 (defun gnaw-list-toggle-dismissed ()
