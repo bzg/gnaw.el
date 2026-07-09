@@ -1685,6 +1685,21 @@ GROUPS comes from `gnaw--query-compile'."
     "date:" "deadline:" "expired:")
   "Long-form query keys completed in `gnaw-list-filter'.")
 
+(defconst gnaw--query-text-keys
+  '("from" "f" "subject" "s" "similar" "topic" "t" "T" "mid" "m"
+    "acked" "a" "owned" "o" "closed" "c")
+  "Query keys taking free text, aliases included.
+Keep in sync with `gnaw--query-compile-key'.  The live preview
+holds their value back until it reaches
+`gnaw-list-filter-live-min-chars'.")
+
+(defconst gnaw--query-closed-keys
+  '("type" "priority" "p" "urgent" "u" "important" "i" "flags" "F"
+    "att" "attributes" "A" "date" "d" "deadline" "D" "expired" "e")
+  "Query keys taking closed-set or short values, aliases included.
+Keep in sync with `gnaw--query-compile-key'.  The live preview only
+waits for their value to be non-empty.")
+
 (defconst gnaw-report-types
   '("bug" "patch" "request" "announcement" "change" "release")
   "BONE report types, offered when filtering by type.")
@@ -2282,9 +2297,13 @@ is narrowed to related reports, delegate to
     (setq mode-line-process (and (not (string-empty-p s)) s))
     (force-mode-line-update)))
 
-(defun gnaw-list-refresh ()
+(defun gnaw-list-refresh (&optional update)
   "Re-render the list from the in-memory reports and current state.
-Does not re-read the report cache; use `gnaw-list-reload' for that."
+Does not re-read the report cache; use `gnaw-list-reload' for that.
+Non-nil UPDATE reprints only the rows that changed, which is much
+faster when few did -- correct as long as the row contents and the
+sort key stayed put, as when only the filter moved (the live
+preview), since a row then only ever appears or disappears whole."
   (interactive)
   ;; Guard every list command funneling through here: `tabulated-list-print'
   ;; would erase whatever buffer is current.
@@ -2303,7 +2322,7 @@ Does not re-read the report cache; use `gnaw-list-reload' for that."
     (tabulated-list-init-header)
     (gnaw-list--update-mode-line)
     (setq tabulated-list-entries (gnaw--list-entries))
-    (tabulated-list-print t)
+    (tabulated-list-print t update)
     (force-mode-line-update)
     (when win
       (set-window-start win start t)
@@ -2337,20 +2356,159 @@ idle for a second, so the first similar: filter finds it filled."
   (gnaw-list-refresh)
   (message "gnaw: filter cleared"))
 
+(defcustom gnaw-list-filter-live t
+  "Whether `gnaw-list-filter' previews its results while typing.
+When nil, the list only refreshes once the query is confirmed."
+  :type 'boolean
+  :group 'gnaw)
+
+(defcustom gnaw-list-filter-live-delay 0.2
+  "Idle seconds before `gnaw-list-filter' previews the query being typed.
+Each pause this long refreshes the list with what the minibuffer
+contents match, a half-typed trailing token left out (see
+`gnaw--filter-preview-query')."
+  :type 'number
+  :group 'gnaw)
+
+(defcustom gnaw-list-filter-live-min-chars 3
+  "Minimum needle length before it takes part in the live preview.
+A shorter bare word or free-text value matches too many subjects to
+make a useful preview; the list stays put until this many
+characters are typed.  Closed-set values (type:, priority:...),
+`*', `true', \"quoted\" and complete /regexp/ needles are not held
+back by this limit."
+  :type 'integer
+  :group 'gnaw)
+
+(defun gnaw--filter-preview-token (tok)
+  "Return the previewable part of trailing query token TOK, or nil.
+TOK is still being typed, and previewing it too early misleads: a
+known key awaiting its value, an open \"quote and an open /regexp/
+match nothing by construction, and a free-text needle shorter than
+`gnaw-list-filter-live-min-chars' matches too much.  An incomplete
+last comma (OR) alternative drops off alone when complete ones
+precede it; nil means TOK contributes nothing yet."
+  (let* ((case-fold-search nil)
+         (bare (if (string-prefix-p "-" tok) (substring tok 1) tok))
+         (colon (string-search ":" bare))
+         (key (and colon (substring bare 0 colon)))
+         (text (and key (member key gnaw--query-text-keys) t))
+         (closed (and key (member key gnaw--query-closed-keys) t))
+         ;; The needle being typed: a known key's value, or the whole
+         ;; token (a bare word keeps its commas, see
+         ;; `gnaw--query-subject-matcher').
+         (needle (if (or text closed) (substring bare (1+ colon)) bare)))
+    (cond
+     ;; A known key with an empty value matches nothing.
+     ((and (or text closed) (string-empty-p needle)) nil)
+     ;; An open quote swallows the rest of the query.
+     ((cl-oddp (cl-count ?\" bare)) nil)
+     ((or closed
+          (gnaw--query-regexp needle)
+          (gnaw--query-quoted needle))
+      tok)
+     (t
+      ;; Free text: judge the alternative being typed, the last one.
+      (let ((alt (if text (car (last (split-string needle ","))) needle)))
+        (cond
+         ((or (string-empty-p alt)      ; a trailing comma changes nothing
+              (member alt '("*" "true"))
+              (gnaw--query-quoted alt)
+              (gnaw--query-regexp alt)
+              (and (not (string-prefix-p "/" alt)) ; no open regexp
+                   (>= (length alt) gnaw-list-filter-live-min-chars)))
+          tok)
+         ;; Complete alternatives before the open one still preview;
+         ;; recheck them, the comma split is blind to an open regexp.
+         ((and text (> (- (length needle) (length alt) 1) 0))
+          (gnaw--filter-preview-token
+           (substring tok 0 (- (length tok) (length alt) 1))))
+         (t nil)))))))
+
+(defun gnaw--filter-preview-query (query)
+  "Return QUERY as the live preview should run it, or nil for none.
+The trailing token, still being typed, only joins the preview once
+it can match something sensible (`gnaw--filter-preview-token');
+until then the preview runs the rest of QUERY.  Return nil when
+nothing previewable remains."
+  (let* ((beg (gnaw--filter-token-start query))
+         (tok (substring query beg))
+         (q (concat (substring query 0 beg)
+                    (if (string-empty-p tok) ""
+                      (or (gnaw--filter-preview-token tok) "")))))
+    (and (not (string-empty-p (string-trim q))) q)))
+
+(defun gnaw--filter-read ()
+  "Read a filter query for the current report list, previewing it live.
+Pauses of `gnaw-list-filter-live-delay' seconds while typing show
+in the list what the query matches (see `gnaw--filter-preview-query';
+tokens the preview leaves out fall back to the active filter).
+Aborting the minibuffer restores the view the preview replaced."
+  (let* ((buf (current-buffer))
+         (orig-query gnaw-list--query)
+         (orig-related gnaw-list--related-mids)
+         (shown orig-query)
+         timer dirty committed)
+    (cl-labels
+        ((preview ()
+           (setq timer nil)
+           (if (input-pending-p)        ; still typing: do not even start
+               (schedule)
+             (when-let* ((mini (active-minibuffer-window))
+                         (win (get-buffer-window buf)))
+               (let ((query (or (gnaw--filter-preview-query
+                                 (with-current-buffer (window-buffer mini)
+                                   (minibuffer-contents-no-properties)))
+                                orig-query)))
+                 (unless (equal query shown)
+                   ;; Typing stays responsive: `while-no-input' aborts
+                   ;; the render as soon as a key arrives, leaving it
+                   ;; partial, and the retry finishes it at the next
+                   ;; pause.
+                   (setq dirty t)
+                   (if (eq t (while-no-input
+                               (with-selected-window win
+                                 (setq-local gnaw-list--related-mids nil)
+                                 (setq-local gnaw-list--query query)
+                                 (gnaw-list-refresh t)
+                                 nil)))
+                       (schedule)
+                     (setq shown query)))))))
+         (schedule (&rest _)
+           (when (timerp timer) (cancel-timer timer))
+           (setq timer (run-with-idle-timer
+                        gnaw-list-filter-live-delay nil #'preview))))
+      (unwind-protect
+          (prog1
+              (minibuffer-with-setup-hook
+                  (lambda ()
+                    (when gnaw-list-filter-live
+                      (add-hook 'after-change-functions #'schedule nil t)))
+                (let ((minibuffer-local-completion-map
+                       (let ((m (copy-keymap minibuffer-local-completion-map)))
+                         (define-key m " " nil) ; let SPACE separate tokens
+                         (define-key m "?" nil) ; and `?' self-insert
+                         m)))
+                  (completing-read "Filter: " #'gnaw--filter-completion
+                                   nil nil orig-query)))
+            (setq committed t))
+        (when (timerp timer) (cancel-timer timer))
+        (when (and dirty (not committed) (buffer-live-p buf))
+          (with-current-buffer buf
+            (setq-local gnaw-list--query orig-query)
+            (setq-local gnaw-list--related-mids orig-related)
+            (if-let* ((win (get-buffer-window buf)))
+                (with-selected-window win (gnaw-list-refresh t))
+              (gnaw-list-refresh t))))))))
+
 (defun gnaw-list-filter (query)
   "Filter the report list by QUERY; an empty QUERY clears the filter.
 QUERY combines `key:value' tokens with spaces (AND) and `|' (OR).
-With a prefix argument, clear the active filter without prompting."
+While the query is typed, the list previews its matches (see
+`gnaw-list-filter-live' and `gnaw-list-filter-live-delay').  With a
+prefix argument, clear the active filter without prompting."
   (interactive
-   (list (if current-prefix-arg
-             ""
-           (let ((minibuffer-local-completion-map
-                  (let ((m (copy-keymap minibuffer-local-completion-map)))
-                    (define-key m " " nil)   ; let SPACE separate tokens
-                    (define-key m "?" nil)   ; and `?' self-insert
-                    m)))
-             (completing-read "Filter: " #'gnaw--filter-completion
-                              nil nil gnaw-list--query)))))
+   (list (if current-prefix-arg "" (gnaw--filter-read))))
   (setq-local gnaw-list--related-mids nil)  ; filtering leaves the related view
   (setq-local gnaw-list--query
               (and (not (string-empty-p (string-trim query))) query))

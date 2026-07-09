@@ -121,6 +121,15 @@ For example, "type:bug subject:latex acked:bzg" will look for a bug
 report whose subject matches "latex" and acked by someone whose email
 matches "bzg".
 
+While you type, the list previews what the query matches, refreshing
+at each pause (=gnaw-list-filter-live-delay=, 0.2 seconds).  A
+half-typed trailing token stays out of the preview until it can match
+something sensible: a key awaiting its value (=subject:=), an open
+=/regexp/= or ="quote=, or a free-text word shorter than
+=gnaw-list-filter-live-min-chars= (3).  =C-g= restores the view the
+preview replaced; set =gnaw-list-filter-live= to nil to disable the
+preview altogether.
+
 Operator =|= is OR between clauses, space is AND between tokens, and a
 comma inside a value is OR (=acked:alice,bob=). So =a b c | d= reads as =(a
 b c) | d=. A leading =-= negates its whole token, comma alternatives
