@@ -90,6 +90,9 @@ only adds or updates a source.
 | =g=     | reload from the local cache                               |
 | =G=     | refresh the remote cache, then reload                     |
 
+The fixed filter keys -- =a=, =o=, =c=, =.=, =~=, =+= -- are toggles: typing the
+key again while its filter is active clears it.
+
 With a prefix argument, the filter keys -- =t=, =T=, =a=, =o=, =c=, =.=, =~=, =+=,
 =C-RET=, and the fields of the === menu -- add their condition to the
 active filter (AND) instead of replacing it: =a C-u o= keeps the reports
