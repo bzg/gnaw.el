@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.20.1
+;; Version: 0.20.2
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -70,7 +70,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.20.1")
+(defconst gnaw-version (or (package-get-version) "0.20.2")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -2518,6 +2518,14 @@ preview), since a row then only ever appears or disappears whole."
       ;; Reprinting moved the window's own point; put it back on the
       ;; report `tabulated-list-print' remembered, selected or not.
       (set-window-point win (point))
+      ;; A filter can shrink the list into fewer rows than the window
+      ;; holds; the saved start, taken in the taller view, would then
+      ;; anchor the window on the last rows with the other matches
+      ;; hidden above it (or on blank space past the end).  When the
+      ;; whole list fits, show it from the top instead.
+      (when (<= (count-lines (point-min) (point-max))
+                (window-body-height win))
+        (setq start (point-min)))
       (set-window-start win start t)
       (unless (pos-visible-in-window-p (point) win)
         (with-selected-window win (recenter wline))))))
