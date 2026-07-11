@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.22.0
+;; Version: 0.22.1
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -70,7 +70,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.22.0")
+(defconst gnaw-version (or (package-get-version) "0.22.1")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -2523,6 +2523,26 @@ is narrowed to related reports, delegate to
     (setq mode-line-process (and (not (string-empty-p s)) s))
     (force-mode-line-update)))
 
+(defun gnaw--anchor-cells (entries)
+  "Truncate ENTRIES' cells that would fill or overflow their column.
+`tabulated-list-print-col' re-anchors the display on the column
+grid (a `:align-to' display property) in a cell's trailing padding;
+a cell filling its column gets no padding, so when the buffer text
+is scaled away from the frame's canonical character width (e.g. by
+`text-scale-adjust'), everything after that cell drifts off the
+grid.  Truncating such cells one column short keeps an anchored
+padding space on every cell.  The last column never pads: leave it
+whole."
+  (let ((fmt tabulated-list-format))
+    (dolist (e entries entries)
+      (let ((cells (cadr e)))
+        (dotimes (i (1- (length fmt)))
+          (let ((w (nth 1 (aref fmt i)))
+                (s (aref cells i)))
+            (when (>= (string-width s) w)
+              (aset cells i
+                    (truncate-string-to-width s (1- w) nil nil t)))))))))
+
 (defun gnaw-list-refresh (&optional update)
   "Re-render the list from the in-memory reports and current state.
 Does not re-read the report cache; use `gnaw-list-reload' for that.
@@ -2557,7 +2577,7 @@ preview), since a row then only ever appears or disappears whole."
                  gnaw-list-sort-key)))
     (tabulated-list-init-header)
     (gnaw-list--update-mode-line)
-    (setq tabulated-list-entries (gnaw--list-entries))
+    (setq tabulated-list-entries (gnaw--anchor-cells (gnaw--list-entries)))
     (tabulated-list-print t update)
     (force-mode-line-update)
     (when win
