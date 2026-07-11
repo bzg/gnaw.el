@@ -12,6 +12,7 @@ other mail front-ends like [[https://codeberg.org/bzg/gnus-gnaw][gnus-gnaw]], [[
 read the associated email and to view/apply patches and attachments.
 
 [[file:gnaw.png]]
+#+caption: Gnaw summary
 
 * Installation
 
