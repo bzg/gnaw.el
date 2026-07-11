@@ -128,8 +128,9 @@ Two mutually exclusive local marks drive the view: *sticky* promotes a
 report (=!= in bold in the Mark column, exported to =todo.org= by the gnaw
 CLI), *dismiss* hides it until =_= reveals them (=d= in italics). Like in
 dired, =d= only *flags* a report (shown =D=) and =x= dismisses all the flagged
-ones at once; =D= dismisses right away; =u= clears the mark or flag. =D= and
-=x= turn off the follow mode first. Marks live in =state.edn=, shared with
+ones at once; =D= dismisses right away; =u= clears the mark or flag; each
+of =!=, =d=, =D= and =u= then moves point to the next row, keeping the column.
+=D= and =x= turn off the follow mode first. Marks live in =state.edn=, shared with
 the gnaw CLI and the front-ends.
 
 * Searching

@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.22.1
+;; Version: 0.23.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -70,7 +70,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.22.1")
+(defconst gnaw-version (or (package-get-version) "0.23.0")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -3437,6 +3437,13 @@ away from where the user is working."
   (when (and (eobp) (not (bobp)))
     (forward-line -1)))
 
+(defun gnaw-list--forward-row (col)
+  "Move to the next row and to column COL, staying put on the last row.
+Mark commands move down so a run of reports can be marked in a row."
+  (forward-line 1)
+  (unless (tabulated-list-get-id) (forward-line -1))
+  (move-to-column col))
+
 (defun gnaw-list--refresh-keeping-point ()
   "Re-render the list, keeping the cursor in place.
 When the refresh kept the row count, a report whose line changed
@@ -3462,10 +3469,13 @@ Keep the cursor in place (see `gnaw-list--restore-point')."
     (gnaw-list--refresh-keeping-point)))
 
 (defun gnaw-list-toggle-sticky ()
-  "Toggle the sticky mark on the report at point.
-Sticky reports are shown in bold and exported to todo.org by the gnaw CLI."
+  "Toggle the sticky mark on the report at point, then move down.
+Sticky reports are shown in bold and exported to todo.org by the gnaw
+CLI.  Moving down keeps point on its column."
   (interactive)
-  (gnaw-list--toggle :sticky))
+  (let ((col (current-column)))
+    (gnaw-list--toggle :sticky)
+    (gnaw-list--forward-row col)))
 
 (defun gnaw-list-toggle-dismiss ()
   "Toggle the dismiss mark (hide) on the report at point, immediately.
@@ -3519,9 +3529,7 @@ point on its column."
                   (cons mid gnaw-list--flagged)))
     (gnaw-list--set-mark-cell mid)
     (gnaw-list--update-mode-line)
-    (forward-line 1)
-    (unless (tabulated-list-get-id) (forward-line -1))
-    (move-to-column col)))
+    (gnaw-list--forward-row col)))
 
 (defun gnaw-list-execute-flags ()
   "Dismiss the reports flagged by \\<gnaw-list-mode-map>\\[gnaw-list-flag-dismiss].
@@ -3544,17 +3552,20 @@ Turn off `gnaw-list-follow-mode' first; write state.edn only once."
              count)))
 
 (defun gnaw-list-remove-marks ()
-  "Remove the mark or dismissal flag from the report at point, then refresh.
-Keep the cursor in place (see `gnaw-list--restore-point')."
+  "Remove the mark or dismissal flag from the report at point, then move down.
+Moving down keeps point on its column."
   (interactive)
-  (let ((p (gnaw-list--current)))
+  (let ((p (gnaw-list--current))
+        (col (current-column)))
     (cond
      ((member (car p) gnaw-list--flagged)
       (setq-local gnaw-list--flagged (delete (car p) gnaw-list--flagged))
       (gnaw-list--set-mark-cell (car p))
-      (gnaw-list--update-mode-line))
+      (gnaw-list--update-mode-line)
+      (gnaw-list--forward-row col))
      ((gnaw-remove-marks (car p))
-      (gnaw-list--refresh-keeping-point))
+      (gnaw-list--refresh-keeping-point)
+      (gnaw-list--forward-row col))
      (t (message "gnaw: no mark on this report")))))
 
 (defun gnaw-list-toggle-dismissed ()
