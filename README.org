@@ -11,9 +11,11 @@ other mail front-ends like [[https://codeberg.org/bzg/gnus-gnaw][gnus-gnaw]], [[
 =M-x gnaw= lists reports. It makes it easy to search through them, to
 read the associated email and to view/apply patches and attachments.
 
-gnaw.el requires Emacs 28.1 or later.
+[[file:gnaw.png]]
 
 * Installation
+
+gnaw.el requires Emacs 28.1 or later.
 
 =gnaw.el= is not on MELPA yet. On Emacs 30 or later, install it straight
 from its git repository with the built-in =package-vc=:
