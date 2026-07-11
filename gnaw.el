@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.21.1
+;; Version: 0.22.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -70,7 +70,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.21.1")
+(defconst gnaw-version (or (package-get-version) "0.22.0")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -2072,7 +2072,7 @@ EXCLUDED names the reports two prefix arguments exclude."
 (defcustom gnaw-list-columns
   '(("Mark"      5 gnaw--mark-sort :mark)
     ("Type"      8 t :type)
-    ("Pri"       4 gnaw--priority-sort :priority)
+    ("Votes"     5 gnaw--votes-sort :votes)
     ("Flags"     5 t :flags)
     ("Att"       4 t :att)
     ("Msgs"      5 gnaw--msgs-sort :msgs)
@@ -2086,11 +2086,11 @@ width is recomputed to fill the window by `gnaw--list-format', so it
 flexes while the trailing Created column stays pinned to the right edge.
 
 The default follows a left-to-right priority order: the mark you act on,
-the high-signal short codes (priority, flags, type), then identity, then
+the high-signal short codes (votes, flags, type), then identity, then
 the flexible subject, then the creation date as the rightmost time
-anchor.  The Votes, Activity (last activity) and Topic columns are left
-out by default to reduce noise; re-add their tuples here to show them —
-  (\"Votes\"    5 gnaw--votes-sort :votes)
+anchor.  The Pri (priority), Activity (last activity) and Topic columns
+are left out by default to reduce noise. If you want to re-add them:
+  (\"Pri\"       4 gnaw--priority-sort :priority)
   (\"Activity\" 11 t :last-activity)
   (\"Topic\"   16 t :topic)
 which also re-enables their `gnaw-sort-by-*' commands."
@@ -2465,7 +2465,7 @@ is narrowed to related reports, delegate to
     (define-key map "x" #'gnaw-list-execute-flags)
     (define-key map "u" #'gnaw-list-remove-marks)
     (define-key map "h" #'gnaw-show-help)
-    (define-key map "s" #'tabulated-list-sort)
+    (define-key map "s" #'gnaw-list-sort)
     (define-key map "^" #'gnaw-sort)
     (define-key map "_" #'gnaw-list-toggle-dismissed)
     (define-key map "\\" #'gnaw-select-preset-filter)
@@ -3546,6 +3546,22 @@ Keep the cursor in place (see `gnaw-list--restore-point')."
   (message "gnaw: dismissed reports %s"
            (if gnaw-list--show-dismissed "shown" "hidden")))
 
+(defun gnaw-list-sort (&optional n)
+  "Sort the report list by the column at point.
+With a numeric prefix argument N, sort by the Nth column instead.
+Like `tabulated-list-sort', but keep the cursor on its report and
+in its column across the re-ordering, and refuse with a clearer
+message when point sits in the margin, outside any column."
+  (interactive "P")
+  (unless (or n (get-text-property (point) 'tabulated-list-column-name))
+    (user-error "Point is not in a sortable column"))
+  (let ((mid (car (tabulated-list-get-id)))
+        (line (line-number-at-pos))
+        (col (current-column)))
+    (tabulated-list-sort n)
+    (gnaw-list--goto-mid-or-line mid line)
+    (move-to-column col)))
+
 (defun gnaw-list--sort (column default-descending flip)
   "Sort the report list by COLUMN, a header string in `gnaw-list-columns'.
 DEFAULT-DESCENDING is the natural direction for that column; a non-nil
@@ -3678,7 +3694,7 @@ order."
      "c, ., ~, + and the = menu flags -- C-u C-u excludes the matching"
      "reports instead (-owned:*...) and C-u C-u C-u adds the exclusion"
      "to the active filter (AND)"
-     (tabulated-list-sort "sort by the column at point")
+     (gnaw-list-sort "sort by the column at point")
      (gnaw-sort "sort by a criterion"))
     ("Patches and attachments\n———————————————————————"
      (gnaw-list-tab "fold / unfold the series, or narrow to related reports")

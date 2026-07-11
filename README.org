@@ -263,6 +263,10 @@ same for several, overwriting silently.
 - =gnaw-apply-repo=: fallback git repo for =git am=.
 - =gnaw-http-timeout= (default 30): seconds before a fetch gives up.
 - =gnaw-after-update-hook=: run after =M-x gnaw-update=.
+- =gnaw-list-columns=: columns of the report list -- by default Mark,
+  Type, Votes, Flags, Att, Msgs, From, Subject and Created. The
+  docstring shows how to re-add the left-out Pri (priority),
+  Activity (last activity) and Topic columns.
 - =gnaw-list-sort-key= (default =("Created" . t)=): initial sort column
   and direction, most recently created first; =S= on a column re-sorts
   interactively.
