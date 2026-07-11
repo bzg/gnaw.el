@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.23.0
+;; Version: 0.24.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -70,7 +70,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.23.0")
+(defconst gnaw-version (or (package-get-version) "0.24.0")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -1582,6 +1582,40 @@ on the BONE web page."
                (or (null lo) (>= fd lo))
                (or (null hi) (<= fd hi))))))))
 
+(defun gnaw--query-number-bound (s)
+  "Parse range bound S into an integer, or nil when S is not one."
+  (and (string-match-p "\\`-?[0-9]+\\'" s) (string-to-number s)))
+
+(defun gnaw--query-number-matcher (spec getter)
+  "Compile numeric SPEC into a predicate on the number read by GETTER.
+Each comma (OR) alternative of SPEC is an integer N or an A..B
+range whose ends may be empty (the order is normalized), like the
+date: ranges; an unparseable alternative or bound matches nothing.
+GETTER maps an INFO plist to the number, nil when the report has
+none -- which no alternative matches."
+  (let ((ranges
+         (delq nil
+               (mapcar
+                (lambda (alt)
+                  (if (string-match "\\`\\(.*\\)\\.\\.\\(.*\\)\\'" alt)
+                      (let* ((sa (match-string 1 alt))
+                             (sb (match-string 2 alt))
+                             (va (gnaw--query-number-bound sa))
+                             (vb (gnaw--query-number-bound sb)))
+                        (unless (or (and (not (string-empty-p sa)) (null va))
+                                    (and (not (string-empty-p sb)) (null vb)))
+                          (cons (if (and va vb) (min va vb) va)
+                                (if (and va vb) (max va vb) vb))))
+                    (when-let* ((n (gnaw--query-number-bound alt)))
+                      (cons n n))))
+                (gnaw--query-vals spec)))))
+    (lambda (_mid info)
+      (when-let* ((n (funcall getter info)))
+        (seq-some (lambda (r)
+                    (and (or (null (car r)) (>= n (car r)))
+                         (or (null (cdr r)) (<= n (cdr r)))))
+                  ranges)))))
+
 (defun gnaw--query-actor-matcher (needle)
   "Compile query NEEDLE into a predicate on an actor (identity) string.
 `*' or `true' (any case) matches any set actor; otherwise NEEDLE
@@ -1738,6 +1772,15 @@ the whole token in the subjects."
          (lambda (_mid info)
            (member (number-to-string (or (plist-get info :priority) 0))
                    vals))))
+      ((or "votes" "v")
+       (gnaw--query-number-matcher
+        val (lambda (info)
+              (when-let* ((v (plist-get info :votes)))
+                (gnaw--votes-number v)))))
+      ((or "msgs" "M")
+       (gnaw--query-number-matcher
+        val (lambda (info)   ; thread size, initial mail included
+              (when-let* ((n (plist-get info :replies))) (1+ n)))))
       ((or "urgent" "u") (gnaw--query-flag-matcher val 2))
       ((or "important" "i") (gnaw--query-flag-matcher val 1))
       ;; Glyph matches, mirroring the Flags and Att columns:
@@ -1817,8 +1860,8 @@ GROUPS comes from `gnaw--query-compile'."
 
 (defconst gnaw--query-keys
   '("from:" "subject:" "similar:" "topic:" "source:" "type:" "priority:"
-    "mid:" "acked:" "owned:" "closed:" "urgent:" "important:" "flags:"
-    "att:" "date:" "deadline:" "expired:")
+    "votes:" "msgs:" "mid:" "acked:" "owned:" "closed:" "urgent:"
+    "important:" "flags:" "att:" "date:" "deadline:" "expired:")
   "Long-form query keys completed in `gnaw-list-filter'.")
 
 (defconst gnaw--query-text-keys
@@ -1830,9 +1873,9 @@ holds their value back until it reaches
 `gnaw-list-filter-live-min-chars'.")
 
 (defconst gnaw--query-closed-keys
-  '("source" "S" "type" "priority" "p" "urgent" "u" "important" "i"
-    "flags" "F" "att" "attributes" "A" "date" "d" "deadline" "D"
-    "expired" "e")
+  '("source" "S" "type" "priority" "p" "votes" "v" "msgs" "M"
+    "urgent" "u" "important" "i" "flags" "F" "att" "attributes" "A"
+    "date" "d" "deadline" "D" "expired" "e")
   "Query keys taking closed-set or short values, aliases included.
 Keep in sync with `gnaw--query-compile-key'.  The live preview only
 waits for their value to be non-empty.")
@@ -1971,10 +2014,14 @@ filter (AND)."
           arg (>= (car arg) 64)))
   (if (and (not arg) (not gnaw-list--related-mids)
            (equal gnaw-list--query query))
-      (let ((saved gnaw-list--toggle-point))
+      (let ((saved gnaw-list--toggle-point)
+            (col (current-column)))
         (gnaw-list-filter "")
         (when saved
-          (gnaw-list--goto-mid-or-line (car saved) (cdr saved))))
+          ;; `gnaw-list--goto-mid-or-line' lands on column 0: put the
+          ;; cursor back on the column it was on, as a plain refresh does.
+          (gnaw-list--goto-mid-or-line (car saved) (cdr saved))
+          (move-to-column col)))
     (let ((saved (or gnaw-list--toggle-point
                      (cons (car (tabulated-list-get-id))
                            (line-number-at-pos)))))
@@ -2847,8 +2894,11 @@ names the reports two prefix arguments exclude."
 (defun gnaw-list-filter-cell (&optional add)
   "Toggle a filter built from the value of the cell at point.
 On the S column, keep the reports of that source; on From, the
-author's reports; on Type, the reports of that type; on Created,
-the reports created on or after that date;
+author's reports; on Type, the reports of that type; on Votes, the
+reports with at least that vote score; on Flags, the reports
+carrying all the cell's flags letters; on Att, the reports carrying
+all the cell's glyphs; on Msgs, the threads with at least as many
+messages; on Created, the reports created on or after that date;
 on Subject, the reports with a similar subject (at least three
 significant words in common, see `gnaw--query-similar-matcher') --
 signaling a `user-error' instead of filtering when no other report
@@ -2864,13 +2914,17 @@ instead of replacing it."
   (if (and gnaw-list--cell-filter
            (equal gnaw-list--query (car gnaw-list--cell-filter)))
       (pcase-let ((`(,_ ,query ,mids ,entries ,mid ,line)
-                   gnaw-list--cell-filter))
+                   gnaw-list--cell-filter)
+                  (col (current-column)))
         (setq gnaw-list--cell-filter nil)
         (setq-local gnaw-list--query query)
         (setq-local gnaw-list--related-mids mids)
         (setq-local gnaw-list--related-entries entries)
         (gnaw-list-refresh)
+        ;; `gnaw-list--goto-mid-or-line' lands on column 0: put the
+        ;; cursor back on the column it was on, as a plain refresh does.
         (gnaw-list--goto-mid-or-line mid line)
+        (move-to-column col)
         (message "gnaw: %s" (cond (mids "back to the related view")
                                   (query (format "filter %s" query))
                                   (t "filter cleared"))))
@@ -2900,6 +2954,25 @@ instead of replacing it."
                (user-error "No author on this row"))
              (format "from:%s" (gnaw--query-quote-val from))))
           ("Type" (format "type:%s" (or (plist-get info :type) "bug")))
+          ("Votes"
+           (let ((v (plist-get info :votes)))
+             (unless v (user-error "No votes on this row"))
+             (format "votes:%d.." (gnaw--votes-number v))))
+          ("Flags"
+           (let ((f (replace-regexp-in-string
+                     "-" "" (or (plist-get info :flags) ""))))
+             (when (string-empty-p f)
+               (user-error "No flags on this row"))
+             (format "flags:%s" f)))
+          ("Att"
+           (let ((glyphs (string-replace " " "" (gnaw--att-string info))))
+             (when (string-empty-p glyphs)
+               (user-error "No attributes on this row"))
+             (format "att:%s" glyphs)))
+          ("Msgs"
+           (let ((n (plist-get info :replies)))
+             (unless n (user-error "No messages on this row"))
+             (format "msgs:%d.." (1+ n))))
           ("Created"
            (let ((d (plist-get info :date)))
              (unless d (user-error "No creation date on this row"))
@@ -3719,7 +3792,7 @@ order."
      (gnaw-list-limit-awaiting "only the reports awaiting a reply (toggle)")
      (gnaw-list-limit-related "only the reports with related reports (toggle)")
      (gnaw-list-limit-attachments "only the reports with attachments (toggle)")
-     (gnaw-list-filter-cell "toggle a filter on the cell at point (source, author, type, date, subject)")
+     (gnaw-list-filter-cell "toggle a filter on the cell at point (source, author, type, votes, flags, att, msgs, date, subject)")
      "C-u on the keys above (also in the = menu) adds the condition"
      "to the active filter (AND).  On the fixed filter keys -- a, o,"
      "c, ., ~, + and the = menu flags -- C-u C-u excludes the matching"
