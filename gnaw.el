@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.20.2
+;; Version: 0.21.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -70,7 +70,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.20.2")
+(defconst gnaw-version (or (package-get-version) "0.21.0")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -1004,11 +1004,14 @@ Without a group, the Gnus registry is tried, then completion."
   "Major mode for a fetched BONE report message.")
 
 (defun gnaw-message-browse ()
-  "Open the current message's web archive page in a browser."
+  "Open the current message's web archive page in a browser.
+Only the `web' open method records that URL in its message buffer;
+called anywhere else -- the report list included -- fall back on
+the report at point, like \\<gnaw-list-mode-map>\\[gnaw-list-browse]."
   (interactive)
-  (if gnaw--message-archive-url
-      (browse-url gnaw--message-archive-url)
-    (user-error "No archive URL for this message")))
+  (cond (gnaw--message-archive-url (browse-url gnaw--message-archive-url))
+        ((derived-mode-p 'gnaw-list-mode) (gnaw-list-browse))
+        (t (user-error "No archive URL for this message"))))
 
 (declare-function quoted-printable-decode-string "qp")
 (declare-function rfc2047-decode-string "rfc2047")
@@ -1933,15 +1936,21 @@ LINE): the query the command set, then the view it replaced and the
 point position in it, restored when the command is called again
 while QUERY is still active.  `gnaw-list-filter' resets it.")
 
-(defun gnaw-list-filter-toggle (query &optional add)
+(defun gnaw-list-filter-toggle (query &optional arg)
   "Set the list filter to QUERY, clearing it when QUERY is already active.
 Clearing restores point to the report (or, failing that, the line)
 it was on when the toggle -- or the chain of toggles it replaced --
 set its filter.  In the related-reports view, whose entry query is
-not the toggle's doing, always set the filter.  With ADD non-nil,
-add QUERY to the active filter (AND) instead of replacing it,
-without toggling."
-  (if (and (not add) (not gnaw-list--related-mids)
+not the toggle's doing, always set the filter.  ARG is the raw
+prefix argument: with one \\[universal-argument], add QUERY to the
+active filter (AND) instead of replacing it, without toggling; with
+two, toggle the negation -QUERY, excluding the matching reports
+instead of keeping them; with three, add -QUERY to the active
+filter (AND)."
+  (when (and (consp arg) (>= (car arg) 16))
+    (setq query (concat "-" query)
+          arg (>= (car arg) 64)))
+  (if (and (not arg) (not gnaw-list--related-mids)
            (equal gnaw-list--query query))
       (let ((saved gnaw-list--toggle-point))
         (gnaw-list-filter "")
@@ -1950,20 +1959,23 @@ without toggling."
     (let ((saved (or gnaw-list--toggle-point
                      (cons (car (tabulated-list-get-id))
                            (line-number-at-pos)))))
-      (gnaw-list-filter (gnaw-list--query-add query add))
-      (unless add
+      (gnaw-list-filter (gnaw-list--query-add query arg))
+      (unless arg
         (setq gnaw-list--toggle-point saved)))))
 
-(defun gnaw-list-filter-by (key &optional add)
+(defun gnaw-list-filter-by (key &optional arg)
   "Limit the list to reports whose KEY field matches a read value.
 Read the value (completing types and topics), then set the query to
 `KEY:value'; an empty value clears the filter.  The flag fields
 \(acked, owned, closed, urgent, important) read no value and toggle:
 calling the command again while its filter is active clears it.
-With ADD non-nil, add the condition to the active filter (AND)
-instead of replacing it."
+ARG is the raw prefix argument: non-nil adds the condition to the
+active filter (AND) instead of replacing it, and on the flag fields
+two \\[universal-argument] toggle the negation (-KEY:*), excluding
+the matching reports instead of keeping them; three add that
+negation to the active filter (AND)."
   (if (member key '("acked" "owned" "closed" "urgent" "important"))
-      (gnaw-list-filter-toggle (concat key ":*") add)
+      (gnaw-list-filter-toggle (concat key ":*") arg)
     (let ((val (cond ((equal key "type")
                       (completing-read "Type: " gnaw-report-types))
                      ((equal key "topic")
@@ -1976,22 +1988,35 @@ instead of replacing it."
       (gnaw-list-filter
        (if (string-empty-p val) ""
          (gnaw-list--query-add
-          (format "%s:%s" key (gnaw--query-quote-val val)) add))))))
+          (format "%s:%s" key (gnaw--query-quote-val val)) arg))))))
+
+(eval-and-compile
+  (defun gnaw--filter-prefix-doc (excluded)
+    "Return the docstring paragraph on the filter prefix arguments.
+EXCLUDED names the reports two prefix arguments exclude."
+    (concat "With a prefix argument ARG, add the condition to the\n"
+            "active filter (AND) instead of replacing it; with two\n"
+            "prefix arguments, exclude " excluded "\n"
+            "instead of keeping them; with three, add that exclusion\n"
+            "to the active filter (AND).")))
 
 (defmacro gnaw--define-filter-commands (&rest fields)
   "Define a `gnaw-list-filter-FIELD' command for each of FIELDS."
   `(progn
      ,@(mapcar (lambda (f)
-                 `(defun ,(intern (concat "gnaw-list-filter-" f)) (&optional add)
+                 `(defun ,(intern (concat "gnaw-list-filter-" f)) (&optional arg)
                     ,(concat "Filter the report list by the " f " field.\n"
                              (if (member f '("acked" "owned" "closed"
                                              "urgent" "important"))
-                                 "Calling it again while its filter is active clears it.\n"
-                               "")
-                             "With a prefix argument ADD, add the condition to\n"
-                             "the active filter (AND) instead of replacing it.")
+                                 (concat
+                                  "Calling it again while its filter is active clears it.\n"
+                                  (gnaw--filter-prefix-doc
+                                   (concat "the " f " reports (-" f ":*)")))
+                               (concat
+                                "With a prefix argument ARG, add the condition to\n"
+                                "the active filter (AND) instead of replacing it.")))
                     (interactive "P")
-                    (gnaw-list-filter-by ,f add)))
+                    (gnaw-list-filter-by ,f arg)))
                fields)))
 
 (gnaw--define-filter-commands
@@ -2389,6 +2414,8 @@ is narrowed to related reports, delegate to
     (define-key map (kbd "RET") #'gnaw-list-open)
     (define-key map (kbd "SPC") #'gnaw-list-open-other-window)
     (define-key map "b" #'gnaw-list-browse)
+    (define-key map "w" #'gnaw-list-copy-archive-url)
+    (define-key map "L" #'gnaw-list-store-link)
     (define-key map [mouse-2] #'gnaw-list-mouse-open)
     ;; Let mouse-1 follow the rows, which carry mouse-face (the
     ;; package-menu convention).
@@ -2749,37 +2776,34 @@ filter (AND) instead of replacing it."
   (interactive "P")
   (gnaw-list-filter-by "type" add))
 
-(defun gnaw-list-limit-closed (&optional add)
-  "Limit the list to closed reports, whatever the close reason.
-Calling it again while its filter is active clears it.  With a
-prefix argument ADD, add the condition to the active filter (AND)
-instead of replacing it."
-  (interactive "P")
-  (gnaw-list-filter-toggle "flags:C,R,E,S" add))
+(defmacro gnaw--define-limit-commands (&rest specs)
+  "Define a `gnaw-list-limit-NAME' toggle command for each of SPECS.
+Each spec is (NAME QUERY SUMMARY EXCLUDED): the command toggles a
+filter on QUERY, SUMMARY is its docstring's first line, and EXCLUDED
+names the reports two prefix arguments exclude."
+  `(progn
+     ,@(mapcar (pcase-lambda (`(,name ,query ,summary ,excluded))
+                 `(defun ,(intern (concat "gnaw-list-limit-" name)) (&optional arg)
+                    ,(concat summary "\n"
+                             "Calling it again while its filter is active clears it.\n"
+                             (gnaw--filter-prefix-doc excluded))
+                    (interactive "P")
+                    (gnaw-list-filter-toggle ,query arg)))
+               specs)))
 
-(defun gnaw-list-limit-awaiting (&optional add)
-  "Limit the list to reports awaiting a reply.
-Calling it again while its filter is active clears it.  With a
-prefix argument ADD, add the condition to the active filter (AND)
-instead of replacing it."
-  (interactive "P")
-  (gnaw-list-filter-toggle "att:." add))
-
-(defun gnaw-list-limit-related (&optional add)
-  "Limit the list to reports with related reports.
-Calling it again while its filter is active clears it.  With a
-prefix argument ADD, add the condition to the active filter (AND)
-instead of replacing it."
-  (interactive "P")
-  (gnaw-list-filter-toggle "att:~" add))
-
-(defun gnaw-list-limit-attachments (&optional add)
-  "Limit the list to reports carrying at least one attachment.
-Calling it again while its filter is active clears it.  With a
-prefix argument ADD, add the condition to the active filter (AND)
-instead of replacing it."
-  (interactive "P")
-  (gnaw-list-filter-toggle "att:+,x,@,#" add))
+(gnaw--define-limit-commands
+ ("closed" "flags:C,R,E,S"
+  "Limit the list to closed reports, whatever the close reason."
+  "the closed reports")
+ ("awaiting" "att:."
+  "Limit the list to reports awaiting a reply."
+  "the awaiting reports")
+ ("related" "att:~"
+  "Limit the list to reports with related reports."
+  "the reports with related reports")
+ ("attachments" "att:+,x,@,#"
+  "Limit the list to reports carrying at least one attachment."
+  "the reports with attachments"))
 
 (defun gnaw-list-filter-cell (&optional add)
   "Toggle a filter built from the value of the cell at point.
@@ -2875,13 +2899,67 @@ instead of replacing it."
   (mouse-set-point event)
   (gnaw-list-open))
 
+(defun gnaw-list--archive-url ()
+  "Return the archive URL of the report at point, or signal a `user-error'."
+  (pcase-let ((`(,mid . ,info) (gnaw-list--current)))
+    (or (gnaw-message-archive-url mid info)
+        (user-error "No archive URL for this report"))))
+
 (defun gnaw-list-browse ()
   "Browse the archived web page of the report at point."
   (interactive)
-  (pcase-let ((`(,mid . ,info) (gnaw-list--current)))
-    (let ((url (gnaw-message-archive-url mid info)))
-      (unless url (user-error "No archive URL for this report"))
-      (browse-url url))))
+  (browse-url (gnaw-list--archive-url)))
+
+(defun gnaw-list-copy-archive-url ()
+  "Copy the archived web page URL of the report at point to the kill ring."
+  (interactive)
+  (let ((url (gnaw-list--archive-url)))
+    (kill-new url)
+    (message "gnaw: copied %s" url)))
+
+;; Org links: gnaw:MID opens the report's email with the method
+;; configured in `gnaw-open-message-method', wherever the link lives.
+
+(declare-function org-link-set-parameters "ol" (type &rest parameters))
+(declare-function org-link-store-props "ol" (&rest plist))
+(declare-function org-store-link "ol" (arg &optional interactive?))
+
+(defun gnaw-org-follow-link (mid _prefix)
+  "Open the email of the report with message-id MID, from a gnaw: link.
+Look MID up in the reports a live list buffer already holds in
+memory; without one, re-read the cached sources."
+  (let* ((mid (gnaw-normalize-mid mid))
+         (pair (or (seq-some
+                    (lambda (buf)
+                      (with-current-buffer buf
+                        (and (derived-mode-p 'gnaw-list-mode)
+                             (assoc mid gnaw-list--reports))))
+                    (buffer-list))
+                   (assoc mid (gnaw-reports)))))
+    (unless pair
+      (user-error "No report %s in the gnaw cache" mid))
+    (gnaw-read-message (car pair) (cdr pair))))
+
+(defun gnaw-org-store-link (&optional _interactive?)
+  "Store an Org link to the report at point in the gnaw list."
+  (when-let* (((derived-mode-p 'gnaw-list-mode))
+              (pair (tabulated-list-get-id)))
+    (org-link-store-props
+     :type "gnaw"
+     :link (concat "gnaw:" (gnaw--strip-mid (car pair)))
+     :description (plist-get (cdr pair) :subject))))
+
+(with-eval-after-load 'ol
+  (org-link-set-parameters "gnaw"
+                           :follow #'gnaw-org-follow-link
+                           :store #'gnaw-org-store-link))
+
+(defun gnaw-list-store-link ()
+  "Store an Org link to the report at point.
+Insert it in an Org buffer with `org-insert-link' (C-c C-l)."
+  (interactive)
+  (require 'ol)
+  (call-interactively #'org-store-link))
 
 (defun gnaw-list--open-below (pair)
   "Open PAIR's mail and arrange it below the list, point staying there.
@@ -3325,14 +3403,17 @@ away from where the user is working."
 When the refresh kept the row count, a report whose line changed
 was re-sorted away: stay at the same line rather than chase it (see
 `gnaw-list--restore-point').  When rows appeared or vanished, every
-line below them shifted: follow the report instead."
+line below them shifted: follow the report instead.  Point keeps
+its column either way."
   (let ((mid (car (tabulated-list-get-id)))
         (line (line-number-at-pos))
+        (col (current-column))
         (rows (count-lines (point-min) (point-max))))
     (gnaw-list-refresh)
     (if (= rows (count-lines (point-min) (point-max)))
         (gnaw-list--restore-point mid line)
-      (gnaw-list--goto-mid-or-line mid line))))
+      (gnaw-list--goto-mid-or-line mid line))
+    (move-to-column col)))
 
 (defun gnaw-list--toggle (action)
   "Toggle local mark ACTION on the report at point, then refresh.
@@ -3350,12 +3431,14 @@ Sticky reports are shown in bold and exported to todo.org by the gnaw CLI."
 (defun gnaw-list-toggle-dismiss ()
   "Toggle the dismiss mark (hide) on the report at point, immediately.
 Turn off `gnaw-list-follow-mode' first.  Then move to the following
-report, so a run of reports can be dismissed without chasing point.
-See `gnaw-list-flag-dismiss' for deferred dismissal."
+report, so a run of reports can be dismissed without chasing point;
+point keeps its column.  See `gnaw-list-flag-dismiss' for deferred
+dismissal."
   (interactive)
   (gnaw-list--follow-off)
   (let* ((p (gnaw-list--current))
          (line (line-number-at-pos))
+         (col (current-column))
          (next (save-excursion
                  (forward-line 1)
                  (car (tabulated-list-get-id))))
@@ -3365,6 +3448,7 @@ See `gnaw-list-flag-dismiss' for deferred dismissal."
     ;; place like the other mark commands.
     (unless (and next (gnaw-list--goto-mid next))
       (gnaw-list--restore-point (car p) line))
+    (move-to-column col)
     (message (if on
                  "gnaw: dismissed (type _ to include dismissed reports to the view)"
                "gnaw: dismiss mark removed"))))
@@ -3385,9 +3469,11 @@ every row: a flag toggle only changes this one cell."
   "Flag the report at point for dismissal (or unflag it), then move down.
 Flagged reports show D in the Mark column and are dismissed all at
 once by \\<gnaw-list-mode-map>\\[gnaw-list-execute-flags].  Flags live
-in memory only; nothing is written until then."
+in memory only; nothing is written until then.  Moving down keeps
+point on its column."
   (interactive)
-  (let ((mid (car (gnaw-list--current))))
+  (let ((mid (car (gnaw-list--current)))
+        (col (current-column)))
     (setq-local gnaw-list--flagged
                 (if (member mid gnaw-list--flagged)
                     (delete mid gnaw-list--flagged)
@@ -3395,7 +3481,8 @@ in memory only; nothing is written until then."
     (gnaw-list--set-mark-cell mid)
     (gnaw-list--update-mode-line)
     (forward-line 1)
-    (unless (tabulated-list-get-id) (forward-line -1))))
+    (unless (tabulated-list-get-id) (forward-line -1))
+    (move-to-column col)))
 
 (defun gnaw-list-execute-flags ()
   "Dismiss the reports flagged by \\<gnaw-list-mode-map>\\[gnaw-list-flag-dismiss].
@@ -3544,6 +3631,8 @@ order."
      (gnaw-list-open "open the report's mail")
      (gnaw-list-open-other-window "toggle the mail below the list")
      (gnaw-list-browse "browse the report's archived web page")
+     (gnaw-list-copy-archive-url "copy the archived web page URL")
+     (gnaw-list-store-link "store an Org link to the report (C-c C-l inserts it)")
      (gnaw-list-follow-mode "toggle follow mode (auto-show the mail at point)"))
     ("Marks\n—————"
      (gnaw-list-toggle-sticky "toggle the sticky mark (bold, exported to todo.org)")
@@ -3566,6 +3655,9 @@ order."
      (gnaw-list-limit-attachments "only the reports with attachments (toggle)")
      (gnaw-list-filter-cell "toggle a filter on the cell at point (source, author, type, date, subject)")
      "C-u on the keys above (also in the = menu) adds the condition"
+     "to the active filter (AND).  On the fixed filter keys -- a, o,"
+     "c, ., ~, + and the = menu flags -- C-u C-u excludes the matching"
+     "reports instead (-owned:*...) and C-u C-u C-u adds the exclusion"
      "to the active filter (AND)"
      (tabulated-list-sort "sort by the column at point")
      (gnaw-sort "sort by a criterion"))

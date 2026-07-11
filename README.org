@@ -59,6 +59,8 @@ only adds or updates a source.
 | =RET=   | open the report's email (see /Reading/ below)               |
 | =SPC=   | toggle the report's email in a window below the list      |
 | =b=     | browse the report's archived web page                     |
+| =w=     | copy the archived web page URL to the kill ring           |
+| =L=     | store an Org link to the report (=C-c C-l= inserts it)      |
 | =f=     | follow mode: auto-show the email of the report at point   |
 | =TAB=   | fold / unfold the series, or narrow to related reports    |
 | =q=     | leave the related view, clear the filter, or quit         |
@@ -97,7 +99,11 @@ on the report it was on.
 With a prefix argument, the filter keys -- =t=, =T=, =a=, =o=, =c=, =.=, =~=, =+=,
 =C-RET=, and the fields of the === menu -- add their condition to the
 active filter (AND) instead of replacing it: =a C-u o= keeps the reports
-both acked and owned.
+both acked and owned.  With two prefix arguments, the toggle keys
+negate their condition instead, excluding the matching reports:
+=C-u C-u o= keeps the reports nobody owns (=-owned:*=).  With three,
+they add the negated condition to the active filter: =a C-u C-u C-u o=
+keeps the acked reports nobody owns (=acked:* -owned:*=).
 
 Patch series are folded into a single row (cover letter or first
 patch) with a status summary like =(2 acked, 1 open)=; =TAB= unfolds the
