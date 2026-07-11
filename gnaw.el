@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.21.0
+;; Version: 0.21.1
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -70,7 +70,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.21.0")
+(defconst gnaw-version (or (package-get-version) "0.21.1")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -438,11 +438,21 @@ The body is read as raw bytes and decoded as UTF-8."
      (decode-coding-string (gnaw--http-body url) 'utf-8))))
 
 (defun gnaw--write-json-to-file (data file)
-  "Write JSON DATA to FILE as UTF-8."
+  "Write JSON DATA to FILE as UTF-8.
+Leave an already-identical FILE untouched; return non-nil when its
+content actually changed."
   (make-directory (file-name-directory file) t)
-  (let ((coding-system-for-write 'utf-8))
-    (with-temp-file file
-      (insert (json-encode data)))))
+  (let ((json (json-encode data)))
+    (unless (and (file-exists-p file)
+                 (equal json
+                        (with-temp-buffer
+                          (let ((coding-system-for-read 'utf-8))
+                            (insert-file-contents file))
+                          (buffer-string))))
+      (let ((coding-system-for-write 'utf-8))
+        (with-temp-file file
+          (insert json)))
+      t)))
 
 (defun gnaw--read-json (source)
   "Read JSON from SOURCE, using local cache for remote URLs if available."
@@ -603,21 +613,30 @@ reports (flags R, C, E or S) still present in reports.json."
 Run `gnaw-after-update-hook' when finished."
   (interactive)
   (let ((sources (gnaw-sources))
-        (count 0))
+        (changed 0)
+        (failed 0))
     (dolist (source sources)
       (when (gnaw--http-url-p source)
         (message "gnaw: updating cache for %s..." source)
         (condition-case err
             (let ((data (gnaw--fetch-json-from-url source))
                   (cache-file (gnaw--source-to-cache-file source)))
-              (gnaw--write-json-to-file data cache-file)
-              (setq count (1+ count))
+              (when (gnaw--write-json-to-file data cache-file)
+                (setq changed (1+ changed)))
               (message "gnaw: cache updated for %s" source))
           (error
+           (setq failed (1+ failed))
            (message "gnaw: failed updating %s: %s"
                     source (error-message-string err))))))
     (run-hooks 'gnaw-after-update-hook)
-    (message "gnaw: cache update finished (%d updated)." count)))
+    (message "gnaw: cache refreshed%s%s."
+             (if (zerop changed)
+                 ", no changes"
+               (format " (%d source%s changed)"
+                       changed (if (= changed 1) "" "s")))
+             (if (zerop failed)
+                 ""
+               (format ", %d failed" failed)))))
 
 ;;; State file (state.edn)
 
