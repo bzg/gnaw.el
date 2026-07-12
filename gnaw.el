@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.24.0
+;; Version: 0.24.1
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -70,7 +70,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.24.0")
+(defconst gnaw-version (or (package-get-version) "0.24.1")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -1745,7 +1745,7 @@ the whole token in the subjects."
       ((or "subject" "s")
        (gnaw--query-field-matcher val #'gnaw--query-text-matcher
                                   (gnaw--query-getter :subject)))
-      ((or "topic" "t" "T")
+      ((or "topic" "T")
        (gnaw--query-field-matcher val #'gnaw--query-text-matcher
                                   (gnaw--query-getter :topic)))
       ((or "mid" "m")
@@ -1761,7 +1761,7 @@ the whole token in the subjects."
       ((or "closed" "c")
        (gnaw--query-field-matcher val #'gnaw--query-actor-matcher
                                   (gnaw--query-getter :closed)))
-      ("type"
+      ((or "type" "t")
        ;; A closed set compared whole: no *, regexp or quotes here,
        ;; and type:* matches nothing.
        (let ((vals (mapcar #'downcase (gnaw--query-vals val))))
@@ -1865,7 +1865,7 @@ GROUPS comes from `gnaw--query-compile'."
   "Long-form query keys completed in `gnaw-list-filter'.")
 
 (defconst gnaw--query-text-keys
-  '("from" "f" "subject" "s" "similar" "topic" "t" "T" "mid" "m"
+  '("from" "f" "subject" "s" "similar" "topic" "T" "mid" "m"
     "acked" "a" "owned" "o" "closed" "c")
   "Query keys taking free text, aliases included.
 Keep in sync with `gnaw--query-compile-key'.  The live preview
@@ -1873,7 +1873,7 @@ holds their value back until it reaches
 `gnaw-list-filter-live-min-chars'.")
 
 (defconst gnaw--query-closed-keys
-  '("source" "S" "type" "priority" "p" "votes" "v" "msgs" "M"
+  '("source" "S" "type" "t" "priority" "p" "votes" "v" "msgs" "M"
     "urgent" "u" "important" "i" "flags" "F" "att" "attributes" "A"
     "date" "d" "deadline" "D" "expired" "e")
   "Query keys taking closed-set or short values, aliases included.
@@ -1893,7 +1893,7 @@ working query."
   (mapcar
    #'gnaw--query-quote-val
    (pcase key
-     ("type" gnaw-report-types)
+     ((or "type" "t") gnaw-report-types)
      ((or "source" "S")
       (let (cands)
         (dolist (p (buffer-local-value
@@ -1903,7 +1903,7 @@ working query."
             (when-let* ((v (plist-get (cdr p) k)))
               (cl-pushnew v cands :test #'equal))))
         (nreverse cands)))
-     ((or "topic" "t")
+     ((or "topic" "T")
       (gnaw-topics (buffer-local-value
                     'gnaw-list--reports
                     (window-buffer (minibuffer-selected-window))))))))

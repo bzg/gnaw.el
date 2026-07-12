@@ -177,9 +177,9 @@ clauses (=s:/a/ | s:/b/=).
 | =from:bzg=                   | =f:=       | from address or name                      |
 | =subject:crash,latex=        | =s:=       | subject (a bare word matches subject)     |
 | =similar:a+b+c=              |          | subjects sharing 3 of the =+=-joined words  |
-| =topic:agenda=               | =t:= =T:=    | topic                                     |
+| =topic:agenda=               | =T:=       | topic                                     |
 | =source:O= =source:emacs=      | =S:=       | source letter (one char) or name          |
-| =type:patch=                 |          | report type                               |
+| =type:patch=                 | =t:=       | report type                               |
 | =priority:2=                 | =p:=       | exact priority (0-3, shown A/B/C)         |
 | =votes:3..=                  | =v:=       | vote score (=N=, =N..=, =..N=, =A..B= ranges)     |
 | =msgs:10..=                  | =M:=       | thread size, initial mail included        |
