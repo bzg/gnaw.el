@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.24.1
+;; Version: 0.24.2
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -70,7 +70,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.24.1")
+(defconst gnaw-version (or (package-get-version) "0.24.2")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -597,14 +597,21 @@ reports (flags R, C, E or S) still present in reports.json."
     (nreverse result)))
 
 (defun gnaw-reports ()
-  "Collect open report pairs from all sources, tolerating failures."
+  "Collect open report pairs from all sources, tolerating failures.
+A source that fails to load is skipped and reported through
+`display-warning' -- a transient `message' would be clobbered by
+the rendering that follows, leaving an empty listing with no
+visible explanation."
   (mapcan
    (lambda (source)
      (condition-case err
          (gnaw--extract-open-reports source)
        (error
-        (message "gnaw: failed loading source %s: %s"
+        (display-warning
+         'gnaw
+         (format "failed loading source %s: %s"
                  source (error-message-string err))
+         :error)
         nil)))
    (gnaw-sources)))
 
