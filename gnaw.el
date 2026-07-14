@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.24.2
+;; Version: 0.25.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -50,7 +50,7 @@
 ;;
 ;;   `gnaw'              browse reports (interactive)
 ;;   `gnaw-reports'      collect open reports from all sources
-;;   `gnaw-update'       force-refresh the local cache (interactive)
+;;   `gnaw-update'       refresh the local cache; C-u forces a re-download
 ;;   `gnaw-toggle-mark'  toggle :sticky/:dismiss for a message-id
 ;;   `gnaw-read-state' / `gnaw-write-state'   state.edn I/O
 ;;   `gnaw-annotation'   fixed-width report annotation for MUA lines
@@ -58,6 +58,7 @@
 ;;; Code:
 
 (require 'json)
+(require 'url)
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
@@ -70,7 +71,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.24.2")
+(defconst gnaw-version (or (package-get-version) "0.25.0")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -410,32 +411,116 @@ answered so far, so they are not asked again."
   :type '(choice (const :tag "No timeout" nil) (integer :tag "Seconds"))
   :group 'gnaw)
 
-(defun gnaw--http-body (url)
-  "Return the raw HTTP body bytes of URL.
-Signal an error after `gnaw-http-timeout' seconds without a response."
+(defun gnaw--http-fetch (url &optional head)
+  "Fetch URL and return a plist (:status :body :etag).
+Non-nil HEAD sends a HEAD request instead of GET: the reply carries
+the same headers but no body, which is enough to read :etag cheaply.
+Signal an error on HTTP errors or after `gnaw-http-timeout' seconds
+without a response."
   (let* ((coding-system-for-read 'binary)
+         (url-request-method (if head "HEAD" url-request-method))
          (buf (url-retrieve-synchronously url t nil gnaw-http-timeout)))
     (unless buf (error "Failed to fetch %s" url))
     (unwind-protect
         (with-current-buffer buf
-          (goto-char (point-min))
-          (when (and (bound-and-true-p url-http-response-status)
-                     (>= url-http-response-status 400))
-            (error "HTTP error %d from %s" url-http-response-status url))
-          (unless (re-search-forward "\r?\n\r?\n" nil t)
-            (error "Malformed HTTP response from %s" url))
-          (buffer-substring-no-properties (point) (point-max)))
+          (let ((status (bound-and-true-p url-http-response-status)))
+            (when (and status (>= status 400))
+              (error "HTTP error %d from %s" status url))
+            (goto-char (point-min))
+            (unless (re-search-forward "\r?\n\r?\n" nil t)
+              (error "Malformed HTTP response from %s" url))
+            (let ((header-end (point)))
+              (list :status status
+                    :etag (save-excursion
+                            (goto-char (point-min))
+                            (let ((case-fold-search t))
+                              (when (re-search-forward
+                                     "^ETag:[ \t]*\\([^\r\n]*\\)"
+                                     header-end t)
+                                (match-string 1))))
+                    :body (buffer-substring-no-properties
+                           header-end (point-max))))))
       (kill-buffer buf))))
 
-(defun gnaw--fetch-json-from-url (url)
-  "Synchronously fetch JSON from URL.
-The body is read as raw bytes and decoded as UTF-8."
+(defun gnaw--http-body (url)
+  "Return the raw HTTP body bytes of URL.
+Signal an error after `gnaw-http-timeout' seconds without a response."
+  (plist-get (gnaw--http-fetch url) :body))
+
+(defun gnaw--parse-json-bytes (bytes)
+  "Parse BYTES, raw UTF-8 encoded JSON, into Lisp data."
   (let ((json-object-type 'alist)
         (json-array-type 'list)
         (json-key-type 'symbol)
         (json-false nil))
-    (json-read-from-string
-     (decode-coding-string (gnaw--http-body url) 'utf-8))))
+    (json-read-from-string (decode-coding-string bytes 'utf-8))))
+
+(defun gnaw--fetch-json-from-url (url)
+  "Synchronously fetch JSON from URL.
+The body is read as raw bytes and decoded as UTF-8."
+  (gnaw--parse-json-bytes (gnaw--http-body url)))
+
+(defun gnaw--validators-file (cache-file)
+  "Return the file storing HTTP validators for CACHE-FILE."
+  (concat cache-file ".headers"))
+
+(defun gnaw--read-validators (cache-file)
+  "Return the plist (:etag ...) saved for CACHE-FILE, or nil.
+Validators are only meaningful while CACHE-FILE itself exists."
+  (when (file-exists-p cache-file)
+    (let ((file (gnaw--validators-file cache-file)))
+      (when (file-exists-p file)
+        (ignore-errors
+          (with-temp-buffer
+            (insert-file-contents file)
+            (read (current-buffer))))))))
+
+(defun gnaw--save-validators (cache-file etag)
+  "Persist ETAG for CACHE-FILE, or drop the saved one when ETAG is nil."
+  (let ((file (gnaw--validators-file cache-file)))
+    (if etag
+        (progn
+          (make-directory (file-name-directory file) t)
+          (with-temp-file file
+            (prin1 (list :etag etag) (current-buffer))))
+      (when (file-exists-p file)
+        (delete-file file)))))
+
+(defun gnaw--etag-equal (a b)
+  "Weakly compare ETags A and B, ignoring the W/ prefix.
+The origin may weaken an ETag (gzip does) between two requests, so
+only the opaque value decides whether the content changed."
+  (and a b (equal (string-remove-prefix "W/" a)
+                  (string-remove-prefix "W/" b))))
+
+(defun gnaw--refresh-cache (url cache-file &optional force)
+  "Refresh CACHE-FILE from URL, revalidating with a HEAD request.
+When an ETag was saved by a previous refresh (and FORCE is nil),
+first ask the server for the headers only and compare ETags locally:
+an unchanged source costs a HEAD round-trip instead of a download.
+Otherwise download, write the parsed data to CACHE-FILE, then save
+the new ETag -- in that order, so a failed write leaves the old ETag
+and the next refresh still sees the stale cache.  Return `unchanged'
+when the saved ETag is still current, `changed' when the download
+altered CACHE-FILE, and `refetched' when it was byte-identical."
+  (let ((etag (unless force
+                (plist-get (gnaw--read-validators cache-file) :etag))))
+    (if (and etag
+             ;; Revalidation is only an optimization: when the HEAD
+             ;; fails (proxy rejecting the method, timeout), fall
+             ;; through to the full GET instead of failing the
+             ;; refresh.
+             (gnaw--etag-equal etag
+                               (plist-get (ignore-errors
+                                            (gnaw--http-fetch url 'head))
+                                          :etag)))
+        'unchanged
+      (let* ((resp (gnaw--http-fetch url))
+             (wrote (gnaw--write-json-to-file
+                     (gnaw--parse-json-bytes (plist-get resp :body))
+                     cache-file)))
+        (gnaw--save-validators cache-file (plist-get resp :etag))
+        (if wrote 'changed 'refetched)))))
 
 (defun gnaw--write-json-to-file (data file)
   "Write JSON DATA to FILE as UTF-8.
@@ -464,9 +549,10 @@ content actually changed."
         (let ((cache-file (gnaw--source-to-cache-file source)))
           (if (file-exists-p cache-file)
               (json-read-file cache-file)
-            (let ((data (gnaw--fetch-json-from-url source)))
-              (gnaw--write-json-to-file data cache-file)
-              data)))
+            ;; First read of this source: populate the cache (and its
+            ;; ETag), then read it back like any other cached source.
+            (gnaw--refresh-cache source cache-file)
+            (json-read-file cache-file)))
       (json-read-file source))))
 
 (defun gnaw-normalize-mid (mid)
@@ -615,10 +701,14 @@ visible explanation."
         nil)))
    (gnaw-sources)))
 
-(defun gnaw-update ()
-  "Force-refresh the local cache from remote JSON sources.
-Run `gnaw-after-update-hook' when finished."
-  (interactive)
+(defun gnaw-update (&optional force)
+  "Refresh the local cache from remote JSON sources.
+Each source is first revalidated with a HEAD request comparing the
+server's ETag to the saved one, so an unchanged source costs no
+download.  With a prefix argument FORCE, skip the revalidation and
+re-download every source.  Run `gnaw-after-update-hook' when
+finished."
+  (interactive "P")
   (let ((sources (gnaw-sources))
         (changed 0)
         (failed 0))
@@ -626,11 +716,15 @@ Run `gnaw-after-update-hook' when finished."
       (when (gnaw--http-url-p source)
         (message "gnaw: updating cache for %s..." source)
         (condition-case err
-            (let ((data (gnaw--fetch-json-from-url source))
-                  (cache-file (gnaw--source-to-cache-file source)))
-              (when (gnaw--write-json-to-file data cache-file)
-                (setq changed (1+ changed)))
-              (message "gnaw: cache updated for %s" source))
+            (let ((cache-file (gnaw--source-to-cache-file source)))
+              (pcase (gnaw--refresh-cache source cache-file force)
+                ('changed
+                 (setq changed (1+ changed))
+                 (message "gnaw: cache updated for %s" source))
+                ;; `unchanged' and `refetched' alike: the cache content
+                ;; is still current.
+                (_
+                 (message "gnaw: cache up to date for %s" source))))
           (error
            (setq failed (1+ failed))
            (message "gnaw: failed updating %s: %s"
@@ -2856,10 +2950,11 @@ prefix argument, clear the active filter without prompting."
       (message "gnaw: filter %s" gnaw-list--query)
     (message "gnaw: filter cleared")))
 
-(defun gnaw-list-update ()
-  "Refresh the remote cache, then reload the list."
-  (interactive)
-  (gnaw-update)
+(defun gnaw-list-update (&optional force)
+  "Refresh the remote cache, then reload the list.
+With a prefix argument FORCE, re-download sources unconditionally."
+  (interactive "P")
+  (gnaw-update force)
   (gnaw-list-reload))
 
 (defun gnaw-list-limit-type (&optional add)
