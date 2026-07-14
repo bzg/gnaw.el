@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.25.0
+;; Version: 0.26.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -57,7 +57,6 @@
 ;;
 ;;; Code:
 
-(require 'json)
 (require 'url)
 (require 'cl-lib)
 (require 'seq)
@@ -65,13 +64,18 @@
 (require 'time-date)
 (require 'transient)
 
+;; `json-parse-buffer' and friends only exist when Emacs was built
+;; with JSON support, which is optional before Emacs 30.
+(unless (json-available-p)
+  (error "gnaw.el needs an Emacs built with native JSON support"))
+
 (defvar url-http-response-status)
 
 (defgroup gnaw nil
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.25.0")
+(defconst gnaw-version (or (package-get-version) "0.26.0")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -447,18 +451,23 @@ without a response."
 Signal an error after `gnaw-http-timeout' seconds without a response."
   (plist-get (gnaw--http-fetch url) :body))
 
-(defun gnaw--parse-json-bytes (bytes)
-  "Parse BYTES, raw UTF-8 encoded JSON, into Lisp data."
-  (let ((json-object-type 'alist)
-        (json-array-type 'list)
-        (json-key-type 'symbol)
-        (json-false nil))
-    (json-read-from-string (decode-coding-string bytes 'utf-8))))
+(defconst gnaw--json-parse-args
+  '(:object-type alist :array-type list :false-object nil :null-object nil)
+  "Keyword arguments shaping how gnaw parses JSON into Lisp data.
+Objects become alists with symbol keys and arrays become lists.
+Both `false' and `null' map to nil: downstream code tests report
+fields with plain nil checks and cannot tell them apart.")
 
-(defun gnaw--fetch-json-from-url (url)
-  "Synchronously fetch JSON from URL.
-The body is read as raw bytes and decoded as UTF-8."
-  (gnaw--parse-json-bytes (gnaw--http-body url)))
+(defun gnaw--parse-json-string (string)
+  "Parse STRING, JSON text, into Lisp data."
+  (apply #'json-parse-string string gnaw--json-parse-args))
+
+(defun gnaw--parse-json-file (file)
+  "Parse FILE, UTF-8 encoded JSON, into Lisp data."
+  (with-temp-buffer
+    (let ((coding-system-for-read 'utf-8))
+      (insert-file-contents file))
+    (apply #'json-parse-buffer gnaw--json-parse-args)))
 
 (defun gnaw--validators-file (cache-file)
   "Return the file storing HTTP validators for CACHE-FILE."
@@ -498,7 +507,7 @@ only the opaque value decides whether the content changed."
 When an ETag was saved by a previous refresh (and FORCE is nil),
 first ask the server for the headers only and compare ETags locally:
 an unchanged source costs a HEAD round-trip instead of a download.
-Otherwise download, write the parsed data to CACHE-FILE, then save
+Otherwise download, write the JSON text to CACHE-FILE, then save
 the new ETag -- in that order, so a failed write leaves the old ETag
 and the next refresh still sees the stale cache.  Return `unchanged'
 when the saved ETag is still current, `changed' when the download
@@ -516,44 +525,40 @@ altered CACHE-FILE, and `refetched' when it was byte-identical."
                                           :etag)))
         'unchanged
       (let* ((resp (gnaw--http-fetch url))
-             (wrote (gnaw--write-json-to-file
-                     (gnaw--parse-json-bytes (plist-get resp :body))
-                     cache-file)))
-        (gnaw--save-validators cache-file (plist-get resp :etag))
-        (if wrote 'changed 'refetched)))))
+             (body (decode-coding-string (plist-get resp :body) 'utf-8)))
+        ;; Parse before writing: a malformed download (truncated
+        ;; body, error page) must not replace a valid cache.
+        (gnaw--parse-json-string body)
+        (let ((wrote (gnaw--write-json-to-file body cache-file)))
+          (gnaw--save-validators cache-file (plist-get resp :etag))
+          (if wrote 'changed 'refetched))))))
 
-(defun gnaw--write-json-to-file (data file)
-  "Write JSON DATA to FILE as UTF-8.
+(defun gnaw--write-json-to-file (json file)
+  "Write JSON, a string, to FILE as UTF-8.
 Leave an already-identical FILE untouched; return non-nil when its
 content actually changed."
   (make-directory (file-name-directory file) t)
-  (let ((json (json-encode data)))
-    (unless (and (file-exists-p file)
-                 (equal json
-                        (with-temp-buffer
-                          (let ((coding-system-for-read 'utf-8))
-                            (insert-file-contents file))
-                          (buffer-string))))
-      (let ((coding-system-for-write 'utf-8))
-        (with-temp-file file
-          (insert json)))
-      t)))
+  (unless (and (file-exists-p file)
+               (equal json
+                      (with-temp-buffer
+                        (let ((coding-system-for-read 'utf-8))
+                          (insert-file-contents file))
+                        (buffer-string))))
+    (let ((coding-system-for-write 'utf-8))
+      (with-temp-file file
+        (insert json)))
+    t))
 
 (defun gnaw--read-json (source)
   "Read JSON from SOURCE, using local cache for remote URLs if available."
-  (let ((json-object-type 'alist)
-        (json-array-type 'list)
-        (json-key-type 'symbol)
-        (json-false nil))
-    (if (gnaw--http-url-p source)
-        (let ((cache-file (gnaw--source-to-cache-file source)))
-          (if (file-exists-p cache-file)
-              (json-read-file cache-file)
-            ;; First read of this source: populate the cache (and its
-            ;; ETag), then read it back like any other cached source.
-            (gnaw--refresh-cache source cache-file)
-            (json-read-file cache-file)))
-      (json-read-file source))))
+  (if (gnaw--http-url-p source)
+      (let ((cache-file (gnaw--source-to-cache-file source)))
+        ;; First read of this source: populate the cache (and its
+        ;; ETag), then read it back like any other cached source.
+        (unless (file-exists-p cache-file)
+          (gnaw--refresh-cache source cache-file))
+        (gnaw--parse-json-file cache-file))
+    (gnaw--parse-json-file source)))
 
 (defun gnaw-normalize-mid (mid)
   "Ensure MID has angle brackets."
