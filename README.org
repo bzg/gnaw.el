@@ -281,6 +281,11 @@ same for several, overwriting silently.
 - =gnaw-preset-filters= (default nil): list of predefined filter query
   strings; =\= prompts to apply one (=gnaw-select-preset-filter=).
 
+Faces: the list cells inherit standard faces (=gnaw-type-bug=,
+=gnaw-type-patch=, =gnaw-date=, =gnaw-acked=, =gnaw-owned=,
+=gnaw-votes=...), so colors follow your theme; =M-x customize-group
+RET gnaw= lists them all.
+
 * API for front-ends
 
 | Function                        | Purpose                                                   |

@@ -1579,6 +1579,38 @@ Set by `gnaw--list-format'.  Buffer-local in use.")
 Their placeholder rows are built from the relation metadata only."
   :group 'gnaw)
 
+;; The cell faces below inherit standard faces instead of setting
+;; colors, so the list follows the user's theme.  Sticky and dismissed
+;; rows override them with their uniform whole-row face.
+
+(defface gnaw-type-bug '((t :inherit font-lock-warning-face))
+  "Face for the Type cell of bug reports."
+  :group 'gnaw)
+
+(defface gnaw-type-patch '((t :inherit font-lock-function-name-face))
+  "Face for the Type cell of patch reports."
+  :group 'gnaw)
+
+(defface gnaw-type-other '((t :inherit font-lock-doc-face))
+  "Face for the Type cell of reports of other types."
+  :group 'gnaw)
+
+(defface gnaw-date '((t :inherit shadow))
+  "Face for the Created and Activity cells."
+  :group 'gnaw)
+
+(defface gnaw-acked '((t :inherit success))
+  "Face for the A letter in the Flags cell."
+  :group 'gnaw)
+
+(defface gnaw-owned '((t :inherit warning))
+  "Face for the O letter in the Flags cell."
+  :group 'gnaw)
+
+(defface gnaw-votes '((t :inherit bold))
+  "Face for Votes cells with a non-zero score."
+  :group 'gnaw)
+
 (defun gnaw--query-delimited (needle delim)
   "Return NEEDLE's content when delimited by character DELIM, else nil.
 NEEDLE is delimited when it starts and ends with DELIM and holds at
@@ -2343,7 +2375,21 @@ of `gnaw-list-mode-map')."
             (if-let* ((help (gnaw--att-help info)))
                 (propertize s 'help-echo (concat "Att: " help))
               s)))
-    (:flags (let ((f (or (plist-get info :flags) "")))
+    (:type (let ((s (or (plist-get info :type) "")))
+             (propertize s 'face (pcase s
+                                   ("bug" 'gnaw-type-bug)
+                                   ("patch" 'gnaw-type-patch)
+                                   (_ 'gnaw-type-other)))))
+    (:votes (let* ((v (plist-get info :votes))
+                   (s (if v (format "%s" v) "")))
+              (if (> (gnaw--votes-number v) 0)
+                  (propertize s 'face 'gnaw-votes)
+                s)))
+    (:flags (let ((f (copy-sequence (or (plist-get info :flags) ""))))
+              (dotimes (i (length f))
+                (pcase (aref f i)
+                  (?A (put-text-property i (1+ i) 'face 'gnaw-acked f))
+                  (?O (put-text-property i (1+ i) 'face 'gnaw-owned f))))
               (if-let* ((help (gnaw--flags-help info)))
                   (propertize f 'help-echo (concat "Flags: " help))
                 f)))
@@ -2356,7 +2402,13 @@ of `gnaw-list-mode-map')."
              (if n (number-to-string (1+ n)) "")))
     (:priority (gnaw-priority-letter (plist-get info :priority)))
     (:date (let ((d (plist-get info :date)))   ; keep the YYYY-MM-DD part only
-             (if d (substring d 0 (min 10 (length d))) "")))
+             (if d (propertize (substring d 0 (min 10 (length d)))
+                               'face 'gnaw-date)
+               "")))
+    (:last-activity (let ((d (plist-get info :last-activity)))
+                      (if d (propertize (substring d 0 (min 10 (length d)))
+                                        'face 'gnaw-date)
+                        "")))
     (:subject (let ((s (or (plist-get info :subject) "")))
                 (cond ((plist-get info :series-head) (concat "▾ " s))
                       ((plist-get info :series-child) (concat "  " s))
