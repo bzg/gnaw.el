@@ -68,7 +68,7 @@ only adds or updates a source.
 | =TAB=   | fold / unfold the series, or narrow to related reports    |
 | =q=     | leave the related view, clear the filter, or quit         |
 | =v=     | view an attachment (patches in =diff-mode=)                 |
-| =S=     | save an attachment (proposes the configured =:repo=)        |
+| =V=     | save an attachment (proposes the configured =:repo=)        |
 | =A=     | apply the report's patches with =git apply= (=C-u A=: =git am=) |
 | =:=     | menu acting on the patches and attachments                |
 | =/=     | filter the list by a query (see /Searching/)                |
@@ -223,7 +223,7 @@ Gnus group when =gnus= is selected.
 
 * Patches and attachments
 
-=v= views an attachment and =S= saves one: with a single attachment they
+=v= views an attachment and =V= saves one: with a single attachment they
 act right away, otherwise they ask which one (with an /all patches/
 candidate on multi-patch reports). =A= applies the report's patches with
 =git apply= (patch the working tree) and =C-u A= with =git am= (apply as
@@ -276,7 +276,7 @@ same for several, overwriting silently.
   docstring shows how to re-add the left-out Pri (priority),
   Activity (last activity) and Topic columns.
 - =gnaw-list-sort-key= (default =("Created" . t)=): initial sort column
-  and direction, most recently created first; =S= on a column re-sorts
+  and direction, most recently created first; =s= (or =S=) on a column re-sorts
   interactively.
 - =gnaw-preset-filters= (default nil): list of predefined filter query
   strings; =\= prompts to apply one (=gnaw-select-preset-filter=).
