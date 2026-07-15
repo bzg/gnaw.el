@@ -3065,7 +3065,7 @@ names the reports two prefix arguments exclude."
   "Limit the list to reports carrying at least one attachment."
   "the reports with attachments"))
 
-(defun gnaw-list-filter-cell (&optional add)
+(defun gnaw-list-filter-cell (&optional arg)
   "Toggle a filter built from the value of the cell at point.
 On the S column, keep the reports of that source; on From, the
 author's reports; on Type, the reports of that type; on Votes, the
@@ -3079,13 +3079,16 @@ signaling a `user-error' instead of filtering when no other report
 has a similar subject.
 Outside any cell (the leading padding or past the last column, where
 point commonly rests), fall back on the Subject column.  While the
-filter set by this command is active, calling it again restores the
-view the filter replaced (a query, a related-reports narrowing, or
-the full list) and puts point back on the report it was on.  With a
-prefix argument ADD, add the condition to the active filter (AND)
-instead of replacing it."
+filter set by this command is active, calling it again without a
+prefix argument restores the view the filter replaced (a query, a
+related-reports narrowing, or the full list) and puts point back on
+the report it was on.  ARG is the raw prefix argument: with
+one \\[universal-argument], add the condition to the active
+filter (AND) instead of replacing it; with two, filter on the
+negated condition, excluding the matching reports instead of keeping
+them; with three, add that exclusion to the active filter (AND)."
   (interactive "P")
-  (if (and gnaw-list--cell-filter
+  (if (and (not arg) gnaw-list--cell-filter
            (equal gnaw-list--query (car gnaw-list--cell-filter)))
       (pcase-let ((`(,_ ,query ,mids ,entries ,mid ,line)
                    gnaw-list--cell-filter)
@@ -3102,7 +3105,11 @@ instead of replacing it."
         (message "gnaw: %s" (cond (mids "back to the related view")
                                   (query (format "filter %s" query))
                                   (t "filter cleared"))))
-    (let ((info (cdr (gnaw-list--current)))
+    (let ((negate (and (consp arg) (>= (car arg) 16)))
+          (add (if (and (consp arg) (>= (car arg) 16))
+                   (>= (car arg) 64)
+                 arg))
+          (info (cdr (gnaw-list--current)))
           (col (or (get-text-property (point) 'tabulated-list-column-name)
                    ;; End of line: the cell just before point.
                    (and (> (point) (line-beginning-position))
@@ -3115,57 +3122,59 @@ instead of replacing it."
                       (line-number-at-pos))))
       (gnaw-list-filter
        (gnaw-list--query-add
-        (pcase col
-          ("S"
-           (let ((l (plist-get info :source-letter)))
-             (when (member l '(nil ""))
-               (user-error "No source letter on this row"))
-             (format "S:%s" l)))
-          ("From"
-           (let ((from (or (plist-get info :from)
-                           (plist-get info :from-name))))
-             (when (member from '(nil ""))
-               (user-error "No author on this row"))
-             (format "from:%s" (gnaw--query-quote-val from))))
-          ("Type" (format "type:%s" (or (plist-get info :type) "bug")))
-          ("Votes"
-           (let ((v (plist-get info :votes)))
-             (unless v (user-error "No votes on this row"))
-             (format "votes:%d.." (gnaw--votes-number v))))
-          ("Flags"
-           (let ((f (replace-regexp-in-string
-                     "-" "" (or (plist-get info :flags) ""))))
-             (when (string-empty-p f)
-               (user-error "No flags on this row"))
-             (format "flags:%s" f)))
-          ("Att"
-           (let ((glyphs (string-replace " " "" (gnaw--att-string info))))
-             (when (string-empty-p glyphs)
-               (user-error "No attributes on this row"))
-             (format "att:%s" glyphs)))
-          ("Msgs"
-           (let ((n (plist-get info :replies)))
-             (unless n (user-error "No messages on this row"))
-             (format "msgs:%d.." (1+ n))))
-          ("Created"
-           (let ((d (plist-get info :date)))
-             (unless d (user-error "No creation date on this row"))
-             (format "date:%s.." (substring d 0 (min 10 (length d))))))
-          ("Subject"
-           (let ((words (gnaw--subject-words (plist-get info :subject))))
-             (unless words (user-error "No significant word in this subject"))
-             (let* ((val (string-join words "+"))
-                    (m (gnaw--query-similar-matcher val)))
-               ;; The report always matches its own words: fewer than
-               ;; two matches means filtering would leave it alone.
-               (when (< (seq-count
-                         (lambda (p)
-                           (funcall m (plist-get (cdr p) :subject)))
-                         gnaw-list--reports)
-                        2)
-                 (user-error "No other report with a similar subject"))
-               (format "similar:%s" val))))
-          (_ (user-error "No cell filter for the %s column" col)))
+        (concat
+         (and negate "-")
+         (pcase col
+           ("S"
+            (let ((l (plist-get info :source-letter)))
+              (when (member l '(nil ""))
+                (user-error "No source letter on this row"))
+              (format "S:%s" l)))
+           ("From"
+            (let ((from (or (plist-get info :from)
+                            (plist-get info :from-name))))
+              (when (member from '(nil ""))
+                (user-error "No author on this row"))
+              (format "from:%s" (gnaw--query-quote-val from))))
+           ("Type" (format "type:%s" (or (plist-get info :type) "bug")))
+           ("Votes"
+            (let ((v (plist-get info :votes)))
+              (unless v (user-error "No votes on this row"))
+              (format "votes:%d.." (gnaw--votes-number v))))
+           ("Flags"
+            (let ((f (replace-regexp-in-string
+                      "-" "" (or (plist-get info :flags) ""))))
+              (when (string-empty-p f)
+                (user-error "No flags on this row"))
+              (format "flags:%s" f)))
+           ("Att"
+            (let ((glyphs (string-replace " " "" (gnaw--att-string info))))
+              (when (string-empty-p glyphs)
+                (user-error "No attributes on this row"))
+              (format "att:%s" glyphs)))
+           ("Msgs"
+            (let ((n (plist-get info :replies)))
+              (unless n (user-error "No messages on this row"))
+              (format "msgs:%d.." (1+ n))))
+           ("Created"
+            (let ((d (plist-get info :date)))
+              (unless d (user-error "No creation date on this row"))
+              (format "date:%s.." (substring d 0 (min 10 (length d))))))
+           ("Subject"
+            (let ((words (gnaw--subject-words (plist-get info :subject))))
+              (unless words (user-error "No significant word in this subject"))
+              (let* ((val (string-join words "+"))
+                     (m (gnaw--query-similar-matcher val)))
+                ;; The report always matches its own words: fewer than
+                ;; two matches means filtering would leave it alone.
+                (when (< (seq-count
+                          (lambda (p)
+                            (funcall m (plist-get (cdr p) :subject)))
+                          gnaw-list--reports)
+                         2)
+                  (user-error "No other report with a similar subject"))
+                (format "similar:%s" val))))
+           (_ (user-error "No cell filter for the %s column" col))))
         add))
       (setq gnaw-list--cell-filter (cons gnaw-list--query prev)))))
 

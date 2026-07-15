@@ -103,10 +103,11 @@ With a prefix argument, the filter keys -- =t=, =T=, =a=, =o=, =c=, =.=, =~=, =+
 =C-RET=, and the fields of the === menu -- add their condition to the
 active filter (AND) instead of replacing it: =a C-u o= keeps the reports
 both acked and owned.  With two prefix arguments, the toggle keys
-negate their condition instead, excluding the matching reports:
-=C-u C-u o= keeps the reports nobody owns (=-owned:*=).  With three,
-they add the negated condition to the active filter: =a C-u C-u C-u o=
-keeps the acked reports nobody owns (=acked:* -owned:*=).
+and =C-RET= negate their condition instead, excluding the matching
+reports: =C-u C-u o= keeps the reports nobody owns (=-owned:*=).  With
+three, they add the negated condition to the active filter:
+=a C-u C-u C-u o= keeps the acked reports nobody owns
+(=acked:* -owned:*=).
 
 Patch series are folded into a single row (cover letter or first
 patch) with a status summary like =(2 acked, 1 open)=; =TAB= unfolds the
@@ -203,8 +204,9 @@ Created, and
 =similar:= on Subject -- subjects sharing at least three significant
 words with the one at point (four letters or more, a hyphenated name
 like =org-element= counting as one word, bracketed tags like =[PATCH v2]=
-ignored). =C-RET= again restores the view the filter replaced: the
-previous query, a related-reports narrowing, or the full list.
+ignored). =C-RET= again, without a prefix argument, restores the view
+the filter replaced: the previous query, a related-reports narrowing,
+or the full list.
 
 * Reading messages
 
