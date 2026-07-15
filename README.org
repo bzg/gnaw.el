@@ -240,9 +240,9 @@ are patches.
 Git runs in the source's =:repo= (falling back to =gnaw-apply-repo= or a
 prompt), warning when a patch series looks incomplete. See =*gnaw-git*=
 for the output; on a failed =git am=, run =git am --abort=. Saving
-proposes the source's =:repo= as the target directory; a single patch is
-saved there without prompting, and a prefix argument (=C-u S=) does the
-same for several, overwriting silently.
+proposes the source's =:repo= as the target directory and asks before
+overwriting; set =gnaw-save-no-confirm= to skip both prompts, and a
+prefix argument (=C-u V=) inverts that setting for one call.
 
 * =config.edn=
 
@@ -262,15 +262,31 @@ same for several, overwriting silently.
 - =:my-addresses= -- your email addresses.
 - =:skip-columns= -- browser columns to hide (by name, case-insensitive).
 
-* Configuration
+* Options
 
+All the =defcustom= options, by theme (=M-x customize-group RET gnaw=):
+
+General:
 - =gnaw-config-dir= (default =~/.config/gnaw=): holds =config.edn=,
   =state.edn= and =cache/=. Sources always come from =config.edn=.
-- =gnaw-open-message-method= / =gnaw-gnus-group=: per-source open method
-  and Gnus group (see /Reading/).
-- =gnaw-apply-repo=: fallback git repo for =git am=.
 - =gnaw-http-timeout= (default 30): seconds before a fetch gives up.
 - =gnaw-after-update-hook=: run after =M-x gnaw-update=.
+
+Reading:
+- =gnaw-open-message-method= / =gnaw-gnus-group=: per-source open method
+  and Gnus group (see /Reading/).
+
+Patches and attachments:
+- =gnaw-apply-repo=: fallback git repo when the source has no =:repo=.
+- =gnaw-git-apply-options= / =gnaw-git-am-options= (default =--3way=):
+  extra arguments for =git apply= and =git am=.
+- =gnaw-checkout-base= (default =ask=): whether to check out a patch's
+  recorded =base-commit:= before applying (=ask=, =nil= or =t=).
+- =gnaw-save-no-confirm= (default nil): when non-nil, the save
+  commands write into the configured =:repo= and overwrite without
+  asking; a prefix argument inverts the setting for one call.
+
+Report list:
 - =gnaw-list-columns=: columns of the report list -- by default Mark,
   Type, Votes, Flags, Att, Msgs, From, Subject and Created. The
   docstring shows how to re-add the left-out Pri (priority),
@@ -278,8 +294,18 @@ same for several, overwriting silently.
 - =gnaw-list-sort-key= (default =("Created" . t)=): initial sort column
   and direction, most recently created first; =s= (or =S=) on a column re-sorts
   interactively.
+- =gnaw-list-follow-delay= (default 0.3): idle seconds before follow
+  mode (=f=) shows the report at point.
+
+Filtering:
 - =gnaw-preset-filters= (default nil): list of predefined filter query
   strings; =\= prompts to apply one (=gnaw-select-preset-filter=).
+- =gnaw-list-filter-live= (default t): whether =/= previews its results
+  while typing.
+- =gnaw-list-filter-live-delay= (default 0.2): idle seconds before the
+  live preview refreshes.
+- =gnaw-list-filter-live-min-chars= (default 3): minimum needle length
+  before it takes part in the live preview.
 
 Faces: the list cells inherit standard faces (=gnaw-type-bug=,
 =gnaw-type-patch=, =gnaw-date=, =gnaw-acked=, =gnaw-owned=,

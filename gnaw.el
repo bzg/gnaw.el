@@ -1364,6 +1364,21 @@ Values: `ask' prompts, nil never, t always."
                  (const :tag "Always" t))
   :group 'gnaw)
 
+(defcustom gnaw-save-no-confirm nil
+  "When non-nil, the save commands write their files without asking.
+They save into the source's configured `:repo' (or `gnaw-apply-repo')
+without prompting for a directory, and overwrite existing files
+silently.  A prefix argument on a save command inverts this setting
+for that call: it silences the prompts when this is nil, and restores
+them when it is non-nil."
+  :type 'boolean
+  :group 'gnaw)
+
+(defun gnaw--save-no-confirm-p (arg)
+  "Return the effective no-confirm flag for a save command.
+ARG, the command's prefix argument, inverts `gnaw-save-no-confirm'."
+  (xor gnaw-save-no-confirm arg))
+
 (defun gnaw--series-complete-p (info)
   "Return non-nil unless INFO has an explicitly incomplete `:series'."
   (let ((series (plist-get info :series)))
@@ -1511,14 +1526,13 @@ PATCHES restricts the operation to these `:patches' entries."
 (defun gnaw-save-patches (info &optional no-confirm patches)
   "Save INFO's patch files to a directory.
 Prompt for the target directory, proposing the source's `:repo'
-\(or `gnaw-apply-repo') when one is configured.  A single patch is
-saved to the configured repo without prompting; so are several when
-NO-CONFIRM is non-nil, which also overwrites existing files
-silently.  PATCHES restricts the operation to these `:patches'
-entries."
+\(or `gnaw-apply-repo') when one is configured, and ask before
+overwriting.  When NO-CONFIRM is non-nil, save to the configured
+repo without prompting and overwrite silently.  PATCHES restricts
+the operation to these `:patches' entries."
   (let* ((files (gnaw--patch-files info "saving" patches))
          (repo (or (gnaw--source-repo info) gnaw-apply-repo))
-         (dir (if (and repo (or no-confirm (null (cdr files))))
+         (dir (if (and repo no-confirm)
                   (file-name-as-directory repo)
                 (read-directory-name "Save patch(es) in: " repo))))
     (dolist (f files)
@@ -3366,13 +3380,15 @@ With a prefix argument AM, apply them as commits with `git am'."
   (pcase-let ((`(,info . ,patches) (gnaw--patch-target)))
     (gnaw-am-patches info patches)))
 
-(defun gnaw-list-patch-save (&optional no-confirm)
+(defun gnaw-list-patch-save (&optional arg)
   "Save the target patch files to a directory.
-With a prefix argument NO-CONFIRM, save into the source's
-configured repo without asking."
+The directory prompt proposes the source's configured `:repo' (or
+`gnaw-apply-repo'), and existing files ask before being overwritten,
+unless `gnaw-save-no-confirm' says otherwise; a prefix argument ARG
+inverts that setting for this call."
   (interactive "P")
   (pcase-let ((`(,info . ,patches) (gnaw--patch-target)))
-    (gnaw-save-patches info no-confirm patches)))
+    (gnaw-save-patches info (gnaw--save-no-confirm-p arg) patches)))
 
 (transient-define-prefix gnaw-list-patch-transient (info &optional patches)
   "Act on PATCHES of report INFO -- all of its patches when nil."
@@ -3446,15 +3462,17 @@ Patches are shown in `diff-mode', other files in a read-only buffer."
       ('all-patches (gnaw-view-patches info nil))
       (_            (gnaw--show-attachment info att)))))
 
-(defun gnaw-list-attachment-save (&optional no-confirm)
+(defun gnaw-list-attachment-save (&optional arg)
   "Save an attachment of the report at point, asking which when several.
 The target directory prompt proposes the source's configured `:repo'
-\(or `gnaw-apply-repo').  With a prefix argument NO-CONFIRM, save
-there without asking and overwrite silently.  Patches go through
+\(or `gnaw-apply-repo'), and existing files ask before being
+overwritten, unless `gnaw-save-no-confirm' says otherwise; a prefix
+argument ARG inverts that setting for this call.  Patches go through
 `gnaw-save-patches'."
   (interactive "P")
   (let* ((info (cdr (gnaw-list--current)))
-         (att (gnaw--choose-attachment info "Save attachment: ")))
+         (att (gnaw--choose-attachment info "Save attachment: "))
+         (no-confirm (gnaw--save-no-confirm-p arg)))
     (pcase (car att)
       ('patch       (gnaw-save-patches info no-confirm (list (cdr att))))
       ('all-patches (gnaw-save-patches info no-confirm nil))
