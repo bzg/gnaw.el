@@ -120,9 +120,11 @@ responsive meanwhile.
 and asking, the cache files gnaw no longer needs: the report caches
 of sources no longer configured, and -- when
 ~gnaw-cache-attachments-max-age~ is set to a number of days, nil by
-default -- the attachments untouched for that long.  With a prefix
-argument it also empties the configured sources' report caches,
-re-downloaded on the next update.  =state.edn= is never touched.
+default -- the attachments untouched for that long.  Attachments
+hold most of the disk weight: with the default nil they are all
+kept.  With a prefix argument it also empties the configured
+sources' report caches, re-downloaded on the next update.
+=state.edn= is never touched.
 
 * The Report Browser
 :PROPERTIES:
