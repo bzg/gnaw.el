@@ -3159,7 +3159,12 @@ preview), since a row then only ever appears or disappears whole."
   (let* ((win (get-buffer-window nil t))
          (start (and win (window-start win)))
          ;; From bol to bol: `count-lines' counts a partial line as one.
-         (wline (and win (count-lines start (line-beginning-position)))))
+         (wline (and win (count-lines start (line-beginning-position))))
+         ;; `tabulated-list-print' only restores the column when the
+         ;; current row survives the reprint; when a filter removes it,
+         ;; point lands on the first row at column 0.  Landing on the
+         ;; first row is expected -- losing the column is not.
+         (col (current-column)))
     (setq tabulated-list-format (gnaw--list-format))
     ;; The S column comes and goes with the number of sources: a sort
     ;; key naming a gone column would abort `tabulated-list-print',
@@ -3175,6 +3180,7 @@ preview), since a row then only ever appears or disappears whole."
     (gnaw-list--update-mode-line)
     (setq tabulated-list-entries (gnaw--anchor-cells (gnaw--list-entries)))
     (tabulated-list-print t update)
+    (move-to-column col)
     (force-mode-line-update)
     (when win
       ;; Reprinting moved the window's own point; put it back on the
