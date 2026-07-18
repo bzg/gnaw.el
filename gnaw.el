@@ -296,11 +296,22 @@ Matched by URL or by `:name'."
            (and name (equal name (alist-get :name s)))))
      (plist-get (gnaw-load-config) :source-configs))))
 
+(defun gnaw--entry-repos (entry)
+  "Return config.edn source ENTRY's `:repo' as a list of directories.
+The entry holds a directory string or a vector of them."
+  (mapcar #'expand-file-name (ensure-list (alist-get :repo entry))))
+
+(defun gnaw--source-repos (info)
+  "Return the local git repos for report INFO's source, as a list.
+Reads `:repo' from the matching config.edn `:sources' entry, which
+holds a directory string or a vector of them."
+  (gnaw--entry-repos (gnaw--source-config-entry info)))
+
 (defun gnaw--source-repo (info)
-  "Return the local git repo for report INFO's source, or nil.
-Reads `:repo' from the matching config.edn `:sources' entry."
-  (when-let* ((repo (alist-get :repo (gnaw--source-config-entry info))))
-    (expand-file-name repo)))
+  "Return the first local git repo for report INFO's source, or nil.
+The directory the save commands propose; `gnaw--target-repo' asks
+which repo to apply in when the source lists several."
+  (car (gnaw--source-repos info)))
 
 (defun gnaw--multi-source-p ()
   "Return non-nil when config.edn defines more than one source."
@@ -1438,11 +1449,11 @@ creates.)"
 
 (defcustom gnaw-save-no-confirm nil
   "When non-nil, the save commands write their files without asking.
-They save into the source's configured `:repo' (or `gnaw-apply-repo')
-without prompting for a directory, and overwrite existing files
-silently.  A prefix argument on a save command inverts this setting
-for that call: it silences the prompts when this is nil, and restores
-them when it is non-nil."
+They save into the source's first configured `:repo' (or
+`gnaw-apply-repo') without prompting for a directory, and
+overwrite existing files silently.  A prefix argument on a save
+command inverts this setting for that call: it silences the prompts
+when this is nil, and restores them when it is non-nil."
   :type 'boolean
   :group 'gnaw)
 
@@ -1721,11 +1732,15 @@ signals a `user-error' if the checkout fails."
 
 (defun gnaw--target-repo (info)
   "Return the git repo directory in which to apply INFO's patches.
-The source's configured `:repo', else `gnaw-apply-repo', else a
-prompt."
+The source's configured `:repo' -- asking which one when it lists
+several -- else `gnaw-apply-repo', else a prompt."
   (file-name-as-directory
-   (or (gnaw--source-repo info) gnaw-apply-repo
-       (read-directory-name "Apply in git repo: "))))
+   (let ((repos (gnaw--source-repos info)))
+     (cond ((cdr repos) (completing-read "Apply in git repo: " repos nil t
+                                         nil nil (car repos)))
+           (repos (car repos))
+           (gnaw-apply-repo gnaw-apply-repo)
+           (t (read-directory-name "Apply in git repo: "))))))
 
 (defun gnaw--confirm-incomplete-series (info patches)
   "Ask before applying when INFO's series is explicitly incomplete.
@@ -1836,9 +1851,9 @@ operation to these `:patches' entries."
 
 (defun gnaw-save-patches (info &optional no-confirm patches)
   "Save INFO's patch files to a directory.
-Prompt for the target directory, proposing the source's `:repo'
-\(or `gnaw-apply-repo') when one is configured, and ask before
-overwriting.  When NO-CONFIRM is non-nil, save to the configured
+Prompt for the target directory, proposing the source's first
+`:repo' (or `gnaw-apply-repo') when one is configured, and ask
+before overwriting.  When NO-CONFIRM is non-nil, save to that
 repo without prompting and overwrite silently.  PATCHES restricts
 the operation to these `:patches' entries."
   (let* ((files (gnaw--patch-files info "saving" patches))
@@ -3786,8 +3801,8 @@ Patches are shown in `diff-mode', other files in a read-only buffer."
 
 (defun gnaw-list-attachment-save (&optional arg)
   "Save an attachment of the report at point, asking which when several.
-The target directory prompt proposes the source's configured `:repo'
-\(or `gnaw-apply-repo'), and existing files ask before being
+The target directory prompt proposes the source's first configured
+`:repo' (or `gnaw-apply-repo'), and existing files ask before being
 overwritten, unless `gnaw-save-no-confirm' says otherwise; a prefix
 argument ARG inverts that setting for this call.  Patches go through
 `gnaw-save-patches'."
@@ -4364,12 +4379,15 @@ rewriting a misread config would drop its other settings."
 
 (defun gnaw--config-add-source (config urls name repo &optional letter)
   "Return CONFIG alist with a source (URLS, NAME, REPO, LETTER) added.
-URLS is a list of reports.json URLs; LETTER identifies the source in
-the browser's S column, and defaults to the letter of the entry
-being replaced, so a letterless update keeps it.  An existing
-source sharing any URL or the NAME is replaced; a LETTER already
-identifying a kept entry signals a `user-error'."
-  (let* ((sources (alist-get :sources config))
+URLS is a list of reports.json URLs; REPO a git directory or a list
+of them (a single one is stored as a plain string); LETTER
+identifies the source in the browser's S column, and defaults to
+the letter of the entry being replaced, so a letterless update
+keeps it.  An existing source sharing any URL or the NAME is
+replaced; a LETTER already identifying a kept entry signals a
+`user-error'."
+  (let* ((repo (if (and (consp repo) (null (cdr repo))) (car repo) repo))
+         (sources (alist-get :sources config))
          (others (cl-remove-if (lambda (s) (gnaw--source-match-p s urls name))
                                sources))
          (letter (or letter
@@ -4397,15 +4415,30 @@ identifying a kept entry signals a `user-error'."
 
 (declare-function completing-read-multiple "crm")
 
+(defun gnaw--read-repos (repos)
+  "Read git repo directories for a source, extending the kept REPOS.
+With no REPOS, first ask whether to link one at all.  Return the
+list, the save-target default first."
+  (when (or repos (y-or-n-p "Link a local git repo (for patches)? "))
+    (unless repos
+      (setq repos (list (expand-file-name (read-directory-name "Git repo: ")))))
+    (while (y-or-n-p (format "Linked: %s.  Link another git repo? "
+                             (mapconcat #'abbreviate-file-name repos ", ")))
+      (setq repos (append repos
+                          (list (expand-file-name
+                                 (read-directory-name "Git repo: ")))))))
+  (delete-dups repos))
+
 ;;;###autoload
 (defun gnaw-add-source (urls &optional name repo letter)
   "Add a source (URLS, NAME, REPO, LETTER) to config.edn.
-URLS is a list of reports.json URLs; LETTER identifies the source in
-the browser's S column, shown when several sources are configured.
-Interactively, give a base, meta.json or reports.json URL, then pick
-the report files listed in meta.json, the source NAME, its LETTER
-\(suggesting the first free one of NAME) and its local git REPO for
-patches."
+URLS is a list of reports.json URLs; REPO a git directory or a list
+of them; LETTER identifies the source in the browser's S column,
+shown when several sources are configured.  Interactively, give
+a base, meta.json or reports.json URL, then pick the report files
+listed in meta.json, the source NAME, its LETTER \(suggesting the
+first free one of NAME) and its local git repo(s) for patches; an
+updated source hands down its repos and offers to link more."
   (interactive
    (let* ((input (read-string "Report source URL (base, meta.json or .json): "))
           (_ (when (string-empty-p (string-trim input)) (user-error "No URL given")))
@@ -4424,21 +4457,19 @@ patches."
                  (format "Source name%s: " (if sname (format " (default %s)" sname) ""))
                  nil nil sname))
           (urls (mapcar (lambda (f) (concat dir f)) chosen))
+          (cfgs (alist-get :sources (gnaw--read-config-raw)))
+          (old (seq-find (lambda (s) (gnaw--source-match-p s urls name)) cfgs))
           (letter
            ;; Letters taken by the sources this add does not replace;
            ;; a replaced entry hands down its letter as the default.
-           (let* ((cfgs (alist-get :sources (gnaw--read-config-raw)))
-                  (old (seq-find (lambda (s)
-                                   (gnaw--source-match-p s urls name))
-                                 cfgs))
-                  (taken (gnaw--taken-source-letters
-                          (cl-remove-if (lambda (s)
-                                          (gnaw--source-match-p s urls name))
-                                        cfgs))))
+           (let ((taken (gnaw--taken-source-letters
+                         (cl-remove-if (lambda (s)
+                                         (gnaw--source-match-p s urls name))
+                                       cfgs))))
              (gnaw--read-source-letter (or name (car urls)) taken
                                        (alist-get :letter old))))
-          (repo (when (y-or-n-p "Link a local git repo (for patches)? ")
-                  (expand-file-name (read-directory-name "Git repo: ")))))
+          ;; A replaced entry hands down its repos; more can be linked.
+          (repo (gnaw--read-repos (gnaw--entry-repos old))))
      (list urls name repo letter)))
   (let ((urls (if (listp urls) urls (list urls)))
         (name (and name (not (string-empty-p (string-trim name))) name)))

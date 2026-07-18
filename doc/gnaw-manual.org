@@ -82,7 +82,8 @@ configured, it runs the full interactive setup:
 4. a letter identifying the source in the browser's =S= column
    (suggesting the first free letter of the name, so /Org mode ML/
    suggests =O=);
-5. a local git repository for that source, used to apply patches;
+5. one or more local git repositories for that source, used to
+   apply patches;
 6. how to open report mail (=auto=, =mua=, =gnus=, =notmuch=, =mu4e=
    or =web=);
 7. when =gnus= is chosen, the Gnus group where the mails are stored.
@@ -93,7 +94,9 @@ The source, its letter and the patch repository are written to
 #+findex: gnaw-configure
 #+findex: gnaw-add-source
 {{{kbd(M-x gnaw-configure)}}} reruns the full setup later on;
-{{{kbd(M-x gnaw-add-source)}}} only adds or updates a source.
+{{{kbd(M-x gnaw-add-source)}}} only adds or updates a source.  An
+updated source keeps the repositories it is linked to, and the
+setup offers to link more.
 
 #+findex: gnaw-update
 #+cindex: cache, refreshing
@@ -564,10 +567,10 @@ attachment at point, with an extra first row acting on all the patches
 at once when several are patches.
 
 #+vindex: gnaw-save-no-confirm
-Saving proposes the source's =:repo= as the target directory and asks
-before overwriting; set ~gnaw-save-no-confirm~ to skip both prompts,
-and a prefix argument ({{{kbd(C-u V)}}}) inverts that setting for one
-call.
+Saving proposes the source's =:repo= (the first one, when it lists
+several) as the target directory and asks before overwriting; set
+~gnaw-save-no-confirm~ to skip both prompts, and a prefix argument
+({{{kbd(C-u V)}}}) inverts that setting for one call.
 
 ** Applying patches
 :PROPERTIES:
@@ -583,7 +586,9 @@ a branch it offers to create).
 
 #+vindex: gnaw-apply-repo
 Git runs in the source's =:repo= (falling back to ~gnaw-apply-repo~ or
-a prompt), warning when a patch series looks incomplete.
+a prompt), warning when a patch series looks incomplete.  When the
+source lists several repos, the apply commands first ask which one
+to use, with completion.
 
 #+vindex: gnaw-am-branch-function
 #+cindex: branch, for git am
@@ -646,7 +651,9 @@ output; on a failed =git am=, run =git am --abort=.
   Each has =:urls= (a vector of reports.json URLs), an optional
   =:name=, a =:letter= identifying the source in the =S= column when
   several sources are configured (asked interactively when missing)
-  and a =:repo= for =git am=.
+  and a =:repo= where patches apply -- a directory, or a vector of
+  them (=:repo ["~/src/org-mode" "~/src/org-contrib"]=): applying
+  then asks which repo to use, and saving proposes the first.
 - =:my-addresses= ::
   Your email addresses.
 - =:skip-columns= ::
@@ -737,8 +744,8 @@ All the ~defcustom~ options, by theme
 - ~gnaw-save-no-confirm~ ::
   #+vindex: gnaw-save-no-confirm
   Default: nil.  When non-nil, the save commands write into the
-  configured =:repo= and overwrite without asking; a prefix argument
-  inverts the setting for one call.
+  first configured =:repo= and overwrite without asking; a prefix
+  argument inverts the setting for one call.
 
 *** Report list options
 :PROPERTIES:
