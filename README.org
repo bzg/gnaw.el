@@ -41,8 +41,9 @@ Update later with =M-x package-vc-upgrade RET gnaw RET=.
 * Getting started
 
 =M-x gnaw= opens the =*gnaw*= report browser. With no source configured,
-it runs the full interactive setup, asking for a source URL and how
-to open report mail; =M-x gnaw-configure= reruns it later on.
+it runs the full interactive setup, asking for a source URL, one or
+more local git repositories where its patches apply, and how to open
+report mail; =M-x gnaw-configure= reruns it later on.
 
 In the browser, =h= (or =?=) lists all the key bindings; =/= filters the
 list with =key:value= tokens.
