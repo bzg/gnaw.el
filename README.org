@@ -19,14 +19,20 @@ read the associated email and to view/apply patches and attachments.
 gnaw.el requires Emacs 28.1 or later.
 
 =gnaw.el= is not on MELPA yet. On Emacs 30 or later, install it straight
-from its git repository with the built-in =package-vc=:
+from its git repository with the built-in =package-vc=; the =:doc= spec
+also builds and installs the Info manual (=C-h i m gnaw RET=):
 
 #+begin_src emacs-lisp
 (use-package gnaw
-  :vc (:url "https://codeberg.org/bzg/gnaw.el" :rev :newest))
+  :init
+  (unless (package-installed-p 'gnaw)
+    (package-vc-install
+     '(gnaw :url "https://codeberg.org/bzg/gnaw.el"
+            :doc "doc/gnaw-manual.org"))))
 #+end_src
 
-Or interactively, without =use-package=:
+The =:init= form is needed because the =:vc= keyword of =use-package= does
+not support =:doc=. Interactively, without the manual:
 
 : M-x package-vc-install RET https://codeberg.org/bzg/gnaw.el RET
 
@@ -35,334 +41,25 @@ Update later with =M-x package-vc-upgrade RET gnaw RET=.
 * Getting started
 
 =M-x gnaw= opens the =*gnaw*= report browser. With no source configured,
-it runs the full interactive setup.
+it runs the full interactive setup, asking for a source URL and how
+to open report mail; =M-x gnaw-configure= reruns it later on.
 
-1. a source URL -- a base URL, a =reports/meta.json=, or a
-   =reports/...json= file (all resolve to the =reports/= directory);
-2. which report files to track, chosen from =meta.json='s =reports-files=
-   (default =all-open.json=; several may be picked);
-3. a source name (defaults to =meta.json='s =:source=);
-4. a letter identifying the source in the browser's =S= column
-   (suggesting the first free letter of the name, so /Org mode ML/
-   suggests =O=);
-5. a local git repository for that source, used to apply patches;
-6. how to open report mail (=auto=, =mua=, =gnus=, =notmuch=, =mu4e= or =web=);
-7. when =gnus= is chosen, the Gnus group where the mails are stored.
+In the browser, =h= (or =?=) lists all the key bindings; =/= filters the
+list with =key:value= tokens.
 
-The source, its letter and the patch repository are written to
-=config.edn=.
+* Documentation
 
-=M-x gnaw-configure= reruns the full setup later on; =M-x gnaw-add-source=
-only adds or updates a source.
+The [[file:doc/gnaw-manual.org][Gnaw manual]] covers everything else: the report browser and its
+key bindings, the search query language, reading messages, applying
+patches, =config.edn=, all the options and the API for front-ends.
 
-* The =*gnaw*= browser
+Build it as Info or PDF from the top of the repository:
 
-| Key   | Action                                                    |
-|-------+-----------------------------------------------------------|
-| =RET=   | open the report's email (see /Reading/ below)               |
-| =SPC=   | toggle the report's email in a window below the list      |
-| =b=     | browse the report's archived web page                     |
-| =w=     | copy the archived web page URL to the kill ring           |
-| =L=     | store an Org link to the report (=C-c C-l= inserts it)      |
-| =f=     | follow mode: auto-show the email of the report at point   |
-| =TAB=   | fold / unfold the series, or narrow to related reports    |
-| =q=     | leave the related view, clear the filter, or quit         |
-| =v=     | view an attachment (patches in =diff-mode=)                 |
-| =V=     | save an attachment (proposes the configured =:repo=)        |
-| =A=     | apply the report's patches with =git apply= (=C-u A=: =git am=) |
-| =:=     | menu acting on the patches and attachments                |
-| =/=     | filter the list by a query (see /Searching/)                |
-| ===     | filter by one field (a =transient= menu)                    |
-| =t=     | limit to a report type (bug, patch, request...)           |
-| =T=     | filter by a topic, with completion                        |
-| =a=     | only the acked reports (=acked:*=)                          |
-| =o=     | only the owned reports (=owned:*=)                          |
-| =c=     | only the closed reports (canceled, resolved...)           |
-| =.=     | only the reports awaiting a reply                         |
-| =~=     | only the reports with related reports                     |
-| =+=     | only the reports with attachments                         |
-| =C-RET= | toggle a filter on the cell at point (see /Searching/)      |
-| =s=     | sort by the column at point; on Mark, by sticky/dismiss   |
-| =^=     | sort by a criterion chosen from a menu (=gnaw-sort=)        |
-| =!=     | mark sticky: bold + exported to todo.org, shown =!=         |
-| =d=     | flag the report for dismissal, shown =D=                    |
-| =x=     | dismiss all the flagged reports                           |
-| =D=     | dismiss immediately: hide the report, shown =d=             |
-| =u=     | remove the sticky/dismiss mark or the flag                |
-| =_=     | show / hide dismissed reports                             |
-| =h= =?=   | list these bindings in a help window                      |
-| =\=     | apply a preset filter (see =gnaw-preset-filters=)           |
-| =g=     | reload from the local cache                               |
-| =G=     | refresh the remote cache, then reload                     |
+: make info
+: make pdf
 
-The fixed filter keys -- =a=, =o=, =c=, =.=, =~=, =+= -- are toggles: typing the
-key again while its filter is active clears it and puts point back
-on the report it was on.
-
-With a prefix argument, the filter keys -- =t=, =T=, =a=, =o=, =c=, =.=, =~=, =+=,
-=C-RET=, and the fields of the === menu -- add their condition to the
-active filter (AND) instead of replacing it: =a C-u o= keeps the reports
-both acked and owned.  With two prefix arguments, the toggle keys
-and =C-RET= negate their condition instead, excluding the matching
-reports: =C-u C-u o= keeps the reports nobody owns (=-owned:*=).  With
-three, they add the negated condition to the active filter:
-=a C-u C-u C-u o= keeps the acked reports nobody owns
-(=acked:* -owned:*=).
-
-Patch series are folded into a single row (cover letter or first
-patch) with a status summary like =(2 acked, 1 open)=; =TAB= unfolds the
-series to list each patch, =TAB= again folds it back.
-
-The =Att= column has three positions: =.= when the report awaits a reply,
-=~= when it has related reports, then one attachment glyph -- =+= a single
-patch, =x= several, =@= calendar events (=.ics=), =#= plain-text files, in
-that priority order. The help echo of the Flags and Att cells (=C-h .=,
-or hovering) spells them out.
-
-With several sources configured, a leading =S= column identifies each
-report's source by its letter (the =:letter= of its =config.edn= entry,
-asked on the first reload when missing); its help echo shows the full
-source name. With a single source, the column is not added.
-
-On a report with related reports, =TAB= narrows the list to the report
-and its relations, closed ones in italic; =TAB= or =q= restores the full
-list, and so does setting or clearing a filter. 
-
-Two mutually exclusive local marks drive the view: *sticky* promotes a
-report (=!= in bold in the Mark column, exported to =todo.org= by the gnaw
-CLI), *dismiss* hides it until =_= reveals them (=d= in italics). Like in
-dired, =d= only *flags* a report (shown =D=) and =x= dismisses all the flagged
-ones at once; =D= dismisses right away; =u= clears the mark or flag; each
-of =!=, =d=, =D= and =u= then moves point to the next row, keeping the column.
-=D= and =x= turn off the follow mode first. Marks live in =state.edn=, shared with
-the gnaw CLI and the front-ends.
-
-* Searching
-
-=/= filters the list with =key:value= tokens.
-
-For example, "type:bug subject:latex acked:bzg" will look for a bug
-report whose subject matches "latex" and acked by someone whose email
-matches "bzg".
-
-While you type, the list previews what the query matches, refreshing
-at each pause (=gnaw-list-filter-live-delay=, 0.2 seconds).  A
-half-typed trailing token stays out of the preview until it can match
-something sensible: a key awaiting its value (=subject:=), an open
-=/regexp/= or ="quote=, or a free-text word shorter than
-=gnaw-list-filter-live-min-chars= (3).  =C-g= restores the view the
-preview replaced; set =gnaw-list-filter-live= to nil to disable the
-preview altogether.
-
-Operator =|= is OR between clauses, space is AND between tokens, and a
-comma inside a value is OR (=acked:alice,bob=). So =a b c | d= reads as =(a
-b c) | d=. A leading =-= negates its whole token, comma alternatives
-included: =-type:patch=, =-latex=, =-acked:alice,bob= (acked by neither), or
-=acked:* -acked:bzg= (acked, but not by bzg).
-
-Double quotes make a value literal and keep it whole -- ="preamble
-shuffling"= and =subject:"preamble shuffling"= match that phrase, spaces,
-commas, =|= and slashes losing their meaning inside the quotes.
-
-An empty value matches nothing, whatever the key.
-
-A value in slashes is matched as a case-insensitive Emacs regexp on
-the text fields (=from:=, =subject:= and bare words, =topic:=, =mid:=, and the
-person fields =acked:= =owned:= =closed:=): =subject:/v[0-9]+/=. The regexp is
-always the whole value -- a =,= loses its meaning inside, and =|= being a
-clause separator, =\|= cannot appear either: to OR two regexps, use two
-clauses (=s:/a/ | s:/b/=).
-
-| Long                       | Short    | Matches                                   |
-|----------------------------+----------+-------------------------------------------|
-| =from:bzg=                   | =f:=       | from address or name                      |
-| =subject:crash,latex=        | =s:=       | subject (a bare word matches subject)     |
-| =similar:a+b+c=              |          | subjects sharing 3 of the =+=-joined words  |
-| =topic:agenda=               | =T:=       | topic                                     |
-| =source:O= =source:emacs=      | =S:=       | source letter (one char) or name          |
-| =type:patch=                 | =t:=       | report type                               |
-| =priority:2=                 | =p:=       | exact priority (0-3, shown A/B/C)         |
-| =votes:3..=                  | =v:=       | vote score (=N=, =N..=, =..N=, =A..B= ranges)     |
-| =msgs:10..=                  | =M:=       | thread size, initial mail included        |
-| =mid:<...>=                  | =m:=       | message-id                                |
-| =acked:bzg= =owned:*= =closed:*= | =a: o: c:= | by person (or =*= for any)                  |
-| =urgent:*= =important:false=   | =u: i:=    | priority bits (set or not)                |
-| =flags:AO=                   | =F:=       | Flags letters, all required (A O C R E S) |
-| =att:~+=                     | =A:=       | Att glyphs, all required (. ~ + x @ #)    |
-| =date:3d= =date:A..B=          | =d:=       | created (durations =Nd/Nw/Nm=, ranges)      |
-| =deadline:2m=                | =D:=       | due within / on (forward)                 |
-| =expired:10d=                | =e:=       | expiring within (forward)                 |
-
-The active query shows in the mode line; =q= (or =C-u /=, or =/= then =RET=)
-clears it.
-
-=C-RET= builds the query from the cell at point: the source on S, the
-author on From, the report type on Type, at least that vote score on
-Votes, all the cell's letters on Flags, all its glyphs on Att, at
-least as many messages on Msgs, created on or after that date on
-Created, and
-=similar:= on Subject -- subjects sharing at least three significant
-words with the one at point (four letters or more, a hyphenated name
-like =org-element= counting as one word, bracketed tags like =[PATCH v2]=
-ignored). =C-RET= again, without a prefix argument, restores the view
-the filter replaced: the previous query, a related-reports narrowing,
-or the full list.
-
-* Reading messages
-
-=gnaw-open-message-method= selects how =RET= opens a report, per source:
-an alist mapping a source name to =auto=, =mua=, =gnus=, =notmuch=, =mu4e= or
-=web= (the entry keyed by =t= is the default). =gnus= reads the group from
-=gnaw-gnus-group= (an alist; asked with completion otherwise); =notmuch=
-and =mu4e= open by message-id; =web= fetches the public-inbox archive. =SPC=
-toggles the mail in a window below the list, keeping point in the
-list; =f= (=gnaw-list-follow-mode=) does this automatically as point
-moves.
-
-Front-ends set =gnaw-open-message-function= to handle =auto=/=mua=. =M-x
-gnaw-configure-email-client= configures this per source, including the
-Gnus group when =gnus= is selected.
-
-* Patches and attachments
-
-=v= views an attachment and =V= saves one: with a single attachment they
-act right away, otherwise they ask which one (with an /all patches/
-candidate on multi-patch reports). =A= applies the report's patches with
-=git apply= (patch the working tree) and =C-u A= with =git am= (apply as
-commits on a branch it offers to create).
-
-=:= opens the generic menu on the attachments of the report at point. A
-single patch opens the patch menu: =v= view in =diff-mode=, =a= runs =git
-apply=, =m= =git am=, =s= save to a directory. A single calendar (=.ics=) or
-text attachment is displayed right away; several are listed in a
-buffer where =+= (or =RET=) acts the same way on the attachment at point,
-with an extra first row acting on all the patches at once when several
-are patches.
-
-Git runs in the source's =:repo= (falling back to =gnaw-apply-repo= or a
-prompt), warning when a patch series looks incomplete. =git am= first
-asks for a branch to create -- proposing a name built from the sender
-and subject, like =ec/fix-tangle__v2= (=gnaw-am-branch-function=); empty
-input keeps a detached HEAD -- and for its start point, proposing the
-patches' recorded =base-commit:= when the repo has it. Set
-=gnaw-am-create-worktree= to apply in a new worktree instead, leaving
-the repo's checkout untouched; a prefix argument on the am commands
-(=C-u m= in the menu) inverts that setting for one call. The review
-trailers BONE collects from replies (=Acked-by:=, =Reviewed-by:=...)
-are folded into the commit messages, b4-style, through temporary
-copies of the patch files -- the cached originals are never touched;
-set =gnaw-am-fold-trailers= to nil to disable. On lists where review
-acts are BONE commands instead (=Acked.=, =Confirmed.=, =Reviewed.=,
-=Reviewed-by:=...), the report state is turned into synthetic
-trailers (=gnaw-am-synthetic-trailers=): the acked state -- BONE's
-strong review approval -- yields =Reviewed-by:= and the archived page
-a =Link:= line; add =owned= to also turn the owner into a
-=Reviewed-by:=. A literal =Acked-by:= collected from the thread is
-never upgraded: it suppresses the synthetic line instead. A successful
-=git am= pops =magit-status= (or =dired= when magit is not loaded) on
-the directory it applied in; set =gnaw-am-show-repo= to nil to keep
-the plain message. See =*gnaw-git*= for the output; on a failed
-=git am=, run =git am --abort=. Saving proposes the source's =:repo= as
-the target directory and asks before overwriting; set
-=gnaw-save-no-confirm= to skip both prompts, and a prefix argument
-(=C-u V=) inverts that setting for one call.
-
-* =config.edn=
-
-#+begin_src clojure
-{:sources [{:urls ["https://tracker.orgmode.org/reports/all-open.json"]
-            :name "Org mode ML"
-            :letter "O"
-            :repo "~/src/org-mode"}]
- :my-addresses ["me@example.org"]
- :skip-columns ["owner"]}
-#+end_src
-
-- =:sources= -- each has =:urls= (a vector of reports.json URLs), an
-  optional =:name=, a =:letter= identifying the source in the =S= column
-  when several sources are configured (asked interactively when
-  missing) and a =:repo= for =git am=.
-- =:my-addresses= -- your email addresses.
-- =:skip-columns= -- browser columns to hide (by name, case-insensitive).
-
-* Options
-
-All the =defcustom= options, by theme (=M-x customize-group RET gnaw=):
-
-General:
-- =gnaw-config-dir= (default =~/.config/gnaw=): holds =config.edn=,
-  =state.edn= and =cache/=. Sources always come from =config.edn=.
-- =gnaw-http-timeout= (default 30): seconds before a fetch gives up.
-- =gnaw-after-update-hook=: run after =M-x gnaw-update=.
-
-Reading:
-- =gnaw-open-message-method= / =gnaw-gnus-group=: per-source open method
-  and Gnus group (see /Reading/).
-
-Patches and attachments:
-- =gnaw-apply-repo=: fallback git repo when the source has no =:repo=.
-- =gnaw-git-apply-options= / =gnaw-git-am-options= (default =--3way=):
-  extra arguments for =git apply= and =git am=.
-- =gnaw-am-branch-function=: proposes the branch name for =git am=.
-- =gnaw-am-create-worktree= (default nil): apply =git am= in a new
-  worktree, read by =gnaw-am-read-worktree-function=.
-- =gnaw-am-fold-trailers= (default t): fold the review trailers
-  collected by BONE into the commits created by =git am=.
-- =gnaw-am-show-repo= (default t): show the directory (=magit-status=
-  or =dired=) after a successful =git am=.
-- =gnaw-am-synthetic-trailers= (default =(acked link)=): trailers
-  synthesized from the report state -- acked state, archived page,
-  optionally the owner -- and folded along the collected ones.
-- =gnaw-checkout-base= (default =ask=): whether =git apply= checks out a
-  patch's recorded =base-commit:= first (=ask=, =nil= or =t=).
-- =gnaw-save-no-confirm= (default nil): when non-nil, the save
-  commands write into the configured =:repo= and overwrite without
-  asking; a prefix argument inverts the setting for one call.
-
-Report list:
-- =gnaw-list-columns=: columns of the report list -- by default Mark,
-  Type, Votes, Flags, Att, Msgs, From, Subject and Created. The
-  docstring shows how to re-add the left-out Pri (priority),
-  Activity (last activity) and Topic columns.
-- =gnaw-list-sort-key= (default =("Created" . t)=): initial sort column
-  and direction, most recently created first; =s= (or =S=) on a column re-sorts
-  interactively.
-- =gnaw-list-follow-delay= (default 0.3): idle seconds before follow
-  mode (=f=) shows the report at point.
-
-Filtering:
-- =gnaw-preset-filters= (default nil): list of predefined filter query
-  strings; =\= prompts to apply one (=gnaw-select-preset-filter=).
-- =gnaw-list-filter-live= (default t): whether =/= previews its results
-  while typing.
-- =gnaw-list-filter-live-delay= (default 0.2): idle seconds before the
-  live preview refreshes.
-- =gnaw-list-filter-live-min-chars= (default 3): minimum needle length
-  before it takes part in the live preview.
-
-Faces: the list cells inherit standard faces (=gnaw-type-bug=,
-=gnaw-type-patch=, =gnaw-date=, =gnaw-acked=, =gnaw-owned=,
-=gnaw-votes=...), so colors follow your theme; =M-x customize-group
-RET gnaw= lists them all.
-
-* API for front-ends
-
-| Function                        | Purpose                                                   |
-|---------------------------------+-----------------------------------------------------------|
-| =(gnaw-reports)=                  | collect open reports as =(MID . INFO)= pairs                |
-| =(gnaw-sources)=                  | resolved report URLs/paths from config.edn                |
-| =(gnaw-load-config)=              | plist =(:addresses :skip-columns :source-configs :sources)= |
-| =(gnaw-read-state)=               | read =state.edn= into an alist                              |
-| =(gnaw-write-state STATE)=        | serialize an alist to =state.edn=                           |
-| =(gnaw-toggle-mark MID INFO ACT)= | toggle =:sticky=/=:dismiss=, persist                        |
-| =(gnaw-action-on-p ST MID ACT)=   | is a mark currently set?                                  |
-| =(gnaw-normalize-mid MID)=        | ensure angle brackets around a message-id                 |
-
-INFO is a plist with =:type :subject :date :from :from-name= (used to
-enrich state) plus display and action keys =:flags :priority :votes
-:deadline :expiry :last-activity :replies :topic :source :source-name
-:source-letter :archived-at :patches :events :texts :awaiting :related :series
-:patch-seq :acked :owned :owned-name :closed=.
+Building the manual needs Emacs 29 or later (the export relies on
+Org 9.6), =makeinfo= for the Info output and =texi2pdf= for the PDF.
 
 * Contributing
 
