@@ -1354,11 +1354,45 @@ The default `--3way' 3-way-merges patches that do not apply cleanly
   :type '(repeat string)
   :group 'gnaw)
 
+(defcustom gnaw-am-branch-function #'gnaw-branch-who-what-v
+  "Function proposing a branch name to `gnaw-am-patches'.
+Called with the report INFO plist; the returned string (or nil)
+pre-fills the new-branch prompt."
+  :type 'function
+  :group 'gnaw)
+
+(defcustom gnaw-am-create-worktree nil
+  "When non-nil, `gnaw-am-patches' applies patches in a new worktree.
+The worktree shares the repo's git store but leaves its current
+checkout untouched; its directory is read by
+`gnaw-am-read-worktree-function'.  A prefix argument on the am
+commands inverts this setting for one call."
+  :type 'boolean
+  :group 'gnaw)
+
+(defcustom gnaw-am-read-worktree-function
+  #'gnaw-am-read-worktree-sibling-named-by-branch
+  "Function reading the to-be-created worktree of `gnaw-am-patches'.
+Called with two arguments: the code repository, and the name of the
+branch to create there -- nil for a detached HEAD."
+  :type 'function
+  :group 'gnaw)
+
+(defcustom gnaw-am-show-repo t
+  "Whether to show the repository after a successful `git am'.
+Non-nil pops a `magit-status' buffer on the directory the patches
+were applied in -- the worktree, when one was created -- falling
+back on `dired' when magit is not loaded."
+  :type 'boolean
+  :group 'gnaw)
+
 (defcustom gnaw-checkout-base 'ask
-  "Whether to check out a patch's recorded base commit before applying.
+  "Whether `gnaw-apply-patches' checks out the base commit first.
 When a patch carries a `base-commit:' trailer (`git format-patch
 --base') that exists in the target repo, gnaw can check it out first.
-Values: `ask' prompts, nil never, t always."
+Values: `ask' prompts, nil never, t always.  (`gnaw-am-patches'
+instead proposes the base commit as the start of the branch it
+creates.)"
   :type '(choice (const :tag "Ask" ask)
                  (const :tag "Never" nil)
                  (const :tag "Always" t))
@@ -1458,6 +1492,76 @@ PATCHES restricts the display to these `:patches' entries."
           (when (re-search-forward "^base-commit: \\([0-9a-f]\\{7,40\\}\\)$" nil t)
             (throw 'found (match-string 1))))))))
 
+(defun gnaw--shorten-subject (subject)
+  "Shorten SUBJECT into a branch-name fragment like \"fix-tangle-noweb\".
+Drops any quote characters, then the leading \"Re:\" and
+\"[PATCH ...]\"-style tags, then keeps words (except a, an and the)
+until exceeding five words or twenty characters, joined with dashes."
+  (let ((words (split-string
+                (downcase (replace-regexp-in-string
+                           "\\`\\(?:[Rr][Ee]:\\|\\[[^]\n]*\\]\\|[ \t]\\)*"
+                           ""
+                           (replace-regexp-in-string "['\"]" "" subject)))
+                "\\W+" t))
+        (num-words 0) (num-chars 0) kept)
+    (catch 'stop
+      (dolist (word words)
+        (unless (member word '("a" "an" "the"))
+          (cl-incf num-words)
+          (cl-incf num-chars (length word))
+          (push word kept)
+          (when (or (> num-words 5) (> num-chars 20))
+            (throw 'stop nil)))))
+    (string-join (nreverse kept) "-")))
+
+(defun gnaw-branch-who-what-v (info)
+  "Return a branch name like \"ec/fix-tangle-noweb__v2\" for report INFO.
+\"e\" and \"c\" are the initials of the sender's first two names,
+\"fix-tangle-noweb\" a shortened subject and \"v2\" the series
+version announced in the subject, when present.  Return nil when
+INFO's subject yields no words to name the branch after."
+  (when-let* ((subject (plist-get info :subject))
+              (what (gnaw--shorten-subject subject))
+              ((not (string-empty-p what))))
+    (let* ((sender (replace-regexp-in-string
+                    "['\"]" ""
+                    (let ((n (plist-get info :from-name)))
+                      (if (and n (not (string-empty-p n))) n
+                        (car (split-string (or (plist-get info :from) "") "@"))))))
+           (initials (mapconcat (lambda (w) (downcase (substring w 0 1)))
+                                (seq-take (split-string sender) 2)
+                                ""))
+           (version (and (string-match "\\[[^]\n]*PATCH \\(v[0-9]+\\)" subject)
+                         (match-string 1 subject))))
+      (concat (and (not (string-empty-p initials)) (concat initials "/"))
+              what
+              (and version (concat "__" version))))))
+
+(defun gnaw-am-read-worktree-sibling-named-by-branch (repo branch)
+  "Read a to-be-created worktree directory, proposed as a sibling of REPO.
+The proposed name is REPO's name plus BRANCH, when one is given."
+  (let ((fname (directory-file-name repo)))
+    (read-directory-name
+     "Create worktree: " (file-name-directory fname) nil nil
+     (and branch (concat (file-name-nondirectory fname) "-"
+                         (string-replace "/" "-" branch))))))
+
+(defun gnaw--git (dir &rest args)
+  "Run git ARGS in DIR and return the exit status.
+The output replaces the contents of the *gnaw-git* buffer, which
+callers display on failure."
+  (with-current-buffer (get-buffer-create "*gnaw-git*")
+    ;; An existing buffer keeps the default-directory of its first
+    ;; use; re-point it at the current repo.
+    (setq default-directory (file-name-as-directory dir))
+    (let ((inhibit-read-only t)) (erase-buffer))
+    (apply #'call-process "git" nil t nil args)))
+
+(defun gnaw--commit-in-repo-p (commit)
+  "Non-nil when COMMIT exists in the git repo of `default-directory'."
+  (zerop (call-process "git" nil nil nil
+                       "cat-file" "-e" (concat commit "^{commit}"))))
+
 (defun gnaw--maybe-checkout-base (files)
   "Offer to check out the base commit recorded in patch FILES.
 Runs in `default-directory' (the target repo) per `gnaw-checkout-base',
@@ -1466,62 +1570,105 @@ signals a `user-error' if the checkout fails."
   (when gnaw-checkout-base
     (let ((base (gnaw--patch-base-commit files)))
       (when (and base
-                 (zerop (call-process "git" nil nil nil
-                                      "cat-file" "-e" (concat base "^{commit}")))
+                 (gnaw--commit-in-repo-p base)
                  (or (eq gnaw-checkout-base t)
                      (y-or-n-p
                       (format "Check out base commit %s (detached HEAD) first? "
                               (substring base 0 (min 12 (length base)))))))
-        ;; An existing *gnaw-git* buffer keeps the default-directory of
-        ;; its first use; re-point it at the current repo.
-        (let ((dir default-directory))
-          (with-current-buffer (get-buffer-create "*gnaw-git*")
-            (setq default-directory dir)
-            (let ((inhibit-read-only t)) (erase-buffer))
-            (unless (zerop (call-process "git" nil t nil "checkout" base))
-              (display-buffer (current-buffer))
-              (user-error "Git checkout %s failed" base))))))))
+        (unless (zerop (gnaw--git default-directory "checkout" base))
+          (display-buffer "*gnaw-git*")
+          (user-error "Git checkout %s failed" base))))))
 
-(defun gnaw--run-git-patches (info subcommand options hint &optional patches)
-  "Apply INFO's patches in its repo via git SUBCOMMAND (\"apply\" or \"am\").
-OPTIONS is a list of extra arguments inserted before the patch files.
-HINT is shown on failure.  PATCHES restricts the operation to these
-`:patches' entries."
-  (let ((files (gnaw--patch-files info "applying" patches)))
-    ;; PATCHES is a deliberate subset: no incomplete-series warning then.
-    (when (and (not patches)
-               (not (gnaw--series-complete-p info))
-               (not (yes-or-no-p "Patch series looks incomplete; apply anyway? ")))
-      (user-error "Aborted"))
-    (let* ((repo (or (gnaw--source-repo info)
-                     gnaw-apply-repo
-                     (read-directory-name "Apply in git repo: ")))
-           (default-directory (file-name-as-directory repo)))
-      (gnaw--maybe-checkout-base files)
-      (let ((args (append (list subcommand) options (list "--") files)))
-        (with-current-buffer (get-buffer-create "*gnaw-git*")
-          ;; An existing buffer keeps the default-directory of its first
-          ;; use; re-point it at the current repo.
-          (setq default-directory (file-name-as-directory repo))
-          (let ((inhibit-read-only t)) (erase-buffer))
-          (let ((status (apply #'call-process "git" nil t nil args)))
-            (if (zerop status)
-                (message "gnaw: git %s applied %d patch(es) in %s"
-                         subcommand (length files) repo)
-              (display-buffer (current-buffer))
-              (message "gnaw: git %s failed in %s (%s)" subcommand repo hint))))))))
+(defun gnaw--target-repo (info)
+  "Return the git repo directory in which to apply INFO's patches.
+The source's configured `:repo', else `gnaw-apply-repo', else a
+prompt."
+  (file-name-as-directory
+   (or (gnaw--source-repo info) gnaw-apply-repo
+       (read-directory-name "Apply in git repo: "))))
+
+(defun gnaw--confirm-incomplete-series (info patches)
+  "Ask before applying when INFO's series is explicitly incomplete.
+A non-nil PATCHES is a deliberate subset: no confirmation then."
+  (when (and (not patches)
+             (not (gnaw--series-complete-p info))
+             (not (yes-or-no-p "Patch series looks incomplete; apply anyway? ")))
+    (user-error "Aborted")))
 
 (defun gnaw-apply-patches (info &optional patches)
   "Apply INFO's patches to the working tree with `git apply'.
 PATCHES restricts the operation to these `:patches' entries."
-  (gnaw--run-git-patches info "apply" gnaw-git-apply-options
-                         "rejects left as .rej" patches))
+  (let ((files (gnaw--patch-files info "applying" patches)))
+    (gnaw--confirm-incomplete-series info patches)
+    (let ((default-directory (gnaw--target-repo info)))
+      (gnaw--maybe-checkout-base files)
+      (if (zerop (apply #'gnaw--git default-directory
+                        (append (list "apply") gnaw-git-apply-options
+                                (list "--") files)))
+          (message "gnaw: git apply applied %d patch(es) in %s"
+                   (length files) default-directory)
+        (display-buffer "*gnaw-git*")
+        (message "gnaw: git apply failed in %s (rejects left as .rej)"
+                 default-directory)))))
 
-(defun gnaw-am-patches (info &optional patches)
+(declare-function magit-status-setup-buffer "magit-status" (&optional directory))
+
+(defun gnaw-am-patches (info &optional patches toggle-worktree)
   "Apply INFO's patches as commits with `git am'.
-PATCHES restricts the operation to these `:patches' entries."
-  (gnaw--run-git-patches info "am" gnaw-git-am-options
-                         "run `git am --abort' to undo" patches))
+First prompt for a branch to create (empty input keeps a detached
+HEAD) and for its start point (empty input starts from the current
+HEAD; the patches' recorded `base-commit:' is proposed when the
+repo has it).  When `gnaw-am-create-worktree', inverted by
+TOGGLE-WORKTREE, is non-nil, branch and apply in a new worktree
+read by `gnaw-am-read-worktree-function', leaving the repo's
+checkout untouched.  A successful run shows the directory applied
+in, per `gnaw-am-show-repo'.  PATCHES restricts the operation to
+these `:patches' entries."
+  (let ((files (gnaw--patch-files info "applying" patches)))
+    (gnaw--confirm-incomplete-series info patches)
+    (let* ((repo (gnaw--target-repo info))
+           (default-directory repo)
+           (use-worktree (xor gnaw-am-create-worktree toggle-worktree))
+           (branch (let ((b (read-string "New branch (empty for detached): "
+                                         (funcall gnaw-am-branch-function info))))
+                     (and (not (string-blank-p b)) b)))
+           (base (completing-read
+                  "Base commit (empty for HEAD): "
+                  (let ((b (gnaw--patch-base-commit files)))
+                    (and b (gnaw--commit-in-repo-p b) (list b)))))
+           (am-dir (if use-worktree
+                       (file-name-as-directory
+                        (expand-file-name
+                         (funcall gnaw-am-read-worktree-function repo branch)))
+                     repo)))
+      (when (and use-worktree (file-exists-p am-dir))
+        (user-error "Worktree directory %s already exists" am-dir))
+      (unless (zerop (apply #'gnaw--git repo
+                            (append (if use-worktree
+                                        (list "worktree" "add")
+                                      (list "checkout"))
+                                    (if branch (list "-b" branch) (list "--detach"))
+                                    (and use-worktree (list am-dir))
+                                    (and (not (string-blank-p base))
+                                         (list base)))))
+        (display-buffer "*gnaw-git*")
+        (user-error "Git %s failed"
+                    (if use-worktree "worktree add" "checkout")))
+      (if (zerop (apply #'gnaw--git am-dir
+                        (append (list "am") gnaw-git-am-options
+                                (list "--") files)))
+          (progn
+            (message "gnaw: git am applied %d patch(es) in %s%s"
+                     (length files) am-dir
+                     (if branch (format " on branch %s" branch)
+                       " (detached HEAD)"))
+            (when gnaw-am-show-repo
+              (if (fboundp 'magit-status-setup-buffer)
+                  (magit-status-setup-buffer am-dir)
+                (dired am-dir))))
+        (display-buffer "*gnaw-git*")
+        (message "gnaw: git am failed in %s (run `git am --abort' to undo)"
+                 am-dir)))))
 
 (defun gnaw-save-patches (info &optional no-confirm patches)
   "Save INFO's patch files to a directory.
@@ -3383,11 +3530,13 @@ With a prefix argument AM, apply them as commits with `git am'."
         (gnaw-am-patches info patches)
       (gnaw-apply-patches info patches))))
 
-(defun gnaw-list-patch-am ()
-  "Apply the target patches with `git am'."
-  (interactive)
+(defun gnaw-list-patch-am (&optional toggle-worktree)
+  "Apply the target patches with `git am', on a branch it offers to create.
+A prefix argument TOGGLE-WORKTREE inverts `gnaw-am-create-worktree'
+for this call."
+  (interactive "P")
   (pcase-let ((`(,info . ,patches) (gnaw--patch-target)))
-    (gnaw-am-patches info patches)))
+    (gnaw-am-patches info patches toggle-worktree)))
 
 (defun gnaw-list-patch-save (&optional arg)
   "Save the target patch files to a directory.
@@ -3404,7 +3553,7 @@ inverts that setting for this call."
   [["Patches"
     ("v" "View in diff-mode" gnaw-list-patch-view)
     ("a" "Apply (git apply)" gnaw-list-patch-apply)
-    ("m" "Apply as commits (git am)" gnaw-list-patch-am)
+    ("m" "Apply as commits (git am; C-u: worktree)" gnaw-list-patch-am)
     ("s" "Save to a directory" gnaw-list-patch-save)]]
   (interactive (list (cdr (gnaw-list--current))))
   (transient-setup 'gnaw-list-patch-transient nil nil
@@ -3993,7 +4142,10 @@ order."
      (gnaw-list-attachment-view "view an attachment (patches in diff-mode)")
      (gnaw-list-attachment-save "save an attachment (proposes the configured repo)")
      (gnaw-list-patch-apply "apply the patches with git apply (C-u: git am)")
-     (gnaw-list-attachments "menu acting on patches and attachments"))
+     (gnaw-list-attachments "menu acting on patches and attachments")
+     "git am asks for a branch to create and its base commit; C-u on"
+     "the menu's m key inverts gnaw-am-create-worktree (apply in a"
+     "new worktree, leaving the repo's checkout untouched)")
     ("Refresh\n———————"
      (gnaw-list-reload "re-read the local cache")
      (gnaw-list-update "refresh the remote cache, then reload"))

@@ -229,7 +229,7 @@ Gnus group when =gnus= is selected.
 act right away, otherwise they ask which one (with an /all patches/
 candidate on multi-patch reports). =A= applies the report's patches with
 =git apply= (patch the working tree) and =C-u A= with =git am= (apply as
-commits).
+commits on a branch it offers to create).
 
 =:= opens the generic menu on the attachments of the report at point. A
 single patch opens the patch menu: =v= view in =diff-mode=, =a= runs =git
@@ -240,11 +240,21 @@ with an extra first row acting on all the patches at once when several
 are patches.
 
 Git runs in the source's =:repo= (falling back to =gnaw-apply-repo= or a
-prompt), warning when a patch series looks incomplete. See =*gnaw-git*=
-for the output; on a failed =git am=, run =git am --abort=. Saving
-proposes the source's =:repo= as the target directory and asks before
-overwriting; set =gnaw-save-no-confirm= to skip both prompts, and a
-prefix argument (=C-u V=) inverts that setting for one call.
+prompt), warning when a patch series looks incomplete. =git am= first
+asks for a branch to create -- proposing a name built from the sender
+and subject, like =ec/fix-tangle__v2= (=gnaw-am-branch-function=); empty
+input keeps a detached HEAD -- and for its start point, proposing the
+patches' recorded =base-commit:= when the repo has it. Set
+=gnaw-am-create-worktree= to apply in a new worktree instead, leaving
+the repo's checkout untouched; a prefix argument on the am commands
+(=C-u m= in the menu) inverts that setting for one call. A successful
+=git am= pops =magit-status= (or =dired= when magit is not loaded) on
+the directory it applied in; set =gnaw-am-show-repo= to nil to keep
+the plain message. See =*gnaw-git*= for the output; on a failed
+=git am=, run =git am --abort=. Saving proposes the source's =:repo= as
+the target directory and asks before overwriting; set
+=gnaw-save-no-confirm= to skip both prompts, and a prefix argument
+(=C-u V=) inverts that setting for one call.
 
 * =config.edn=
 
@@ -282,8 +292,13 @@ Patches and attachments:
 - =gnaw-apply-repo=: fallback git repo when the source has no =:repo=.
 - =gnaw-git-apply-options= / =gnaw-git-am-options= (default =--3way=):
   extra arguments for =git apply= and =git am=.
-- =gnaw-checkout-base= (default =ask=): whether to check out a patch's
-  recorded =base-commit:= before applying (=ask=, =nil= or =t=).
+- =gnaw-am-branch-function=: proposes the branch name for =git am=.
+- =gnaw-am-create-worktree= (default nil): apply =git am= in a new
+  worktree, read by =gnaw-am-read-worktree-function=.
+- =gnaw-am-show-repo= (default t): show the directory (=magit-status=
+  or =dired=) after a successful =git am=.
+- =gnaw-checkout-base= (default =ask=): whether =git apply= checks out a
+  patch's recorded =base-commit:= first (=ask=, =nil= or =t=).
 - =gnaw-save-no-confirm= (default nil): when non-nil, the save
   commands write into the configured =:repo= and overwrite without
   asking; a prefix argument inverts the setting for one call.
