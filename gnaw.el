@@ -433,6 +433,13 @@ answered so far, so they are not asked again."
   :type '(choice (const :tag "No timeout" nil) (integer :tag "Seconds"))
   :group 'gnaw)
 
+(defcustom gnaw-cache-attachments-max-age nil
+  "Days before `gnaw-cache-cleanup' discards a cached attachment.
+An attachment directory is discarded once every file in it is older.
+Nil, the default, keeps attachments forever."
+  :type '(choice (const :tag "Keep forever" nil) (integer :tag "Days"))
+  :group 'gnaw)
+
 (defun gnaw--http-parse-reply (url)
   "Parse the `url-retrieve' reply in the current buffer.
 Return a plist (:status :body :etag); signal an error on HTTP
@@ -912,6 +919,90 @@ then CALLBACK when non-nil."
            (message "gnaw: failed updating %s: %s"
                     source (error-message-string err))
            (funcall finish 'failed)))))))
+
+(defun gnaw--tree-size (path)
+  "Return the total byte size of PATH, a file or a directory."
+  (if (file-directory-p path)
+      (apply #'+ (mapcar (lambda (f)
+                           (or (file-attribute-size (file-attributes f)) 0))
+                         (directory-files-recursively path "")))
+    (or (file-attribute-size (file-attributes path)) 0)))
+
+(defun gnaw--cache-report-files (&optional all)
+  "Return the files under cache/reports/ that no configured source owns.
+Non-nil ALL returns every file there, the configured sources' own
+caches and validators included."
+  (let ((dir (expand-file-name "cache/reports" gnaw-config-dir))
+        (keep (mapcan (lambda (s)
+                        (when (gnaw--http-url-p s)
+                          (let ((f (gnaw--source-to-cache-file s)))
+                            (list f (gnaw--validators-file f)))))
+                      (gnaw-sources))))
+    (when (file-directory-p dir)
+      (cl-remove-if (lambda (f) (and (not all) (member f keep)))
+                    (directory-files dir t
+                                     directory-files-no-dot-files-regexp)))))
+
+(defun gnaw--cache-stale-attachment-dirs ()
+  "Return the cached attachment directories the max age discards.
+A directory under cache/patches/, cache/events/ or cache/text/ is
+stale when every file in it is older than
+`gnaw-cache-attachments-max-age' days (see `gnaw-cache-cleanup')."
+  (when gnaw-cache-attachments-max-age
+    (let ((cutoff (time-subtract (current-time)
+                                 (days-to-time
+                                  gnaw-cache-attachments-max-age)))
+          stale)
+      (dolist (subdir '("patches" "events" "text") (nreverse stale))
+        (let ((base (expand-file-name (concat "cache/" subdir)
+                                      gnaw-config-dir)))
+          (when (file-directory-p base)
+            (dolist (srcdir (directory-files
+                             base t directory-files-no-dot-files-regexp))
+              (when (file-directory-p srcdir)
+                (dolist (d (directory-files
+                            srcdir t directory-files-no-dot-files-regexp))
+                  (when (and (file-directory-p d)
+                             (cl-every (lambda (f)
+                                         (time-less-p (gnaw--file-mtime f)
+                                                      cutoff))
+                                       (directory-files-recursively d "")))
+                    (push d stale)))))))))))
+
+(defun gnaw-cache-cleanup (&optional all)
+  "Delete the cache files gnaw no longer needs, after confirming.
+Candidates are the report caches of sources config.edn no longer
+lists -- their file names hash the source URL, so a changed or
+removed source strands its old cache forever -- and the attachments
+untouched for `gnaw-cache-attachments-max-age' days.  With a prefix
+argument ALL, also delete the configured sources' report caches;
+the next update re-downloads them.  State.edn is never touched: it
+is user data shared with the gnaw CLI, not a cache."
+  (interactive "P")
+  (let* ((files (gnaw--cache-report-files all))
+         (dirs (gnaw--cache-stale-attachment-dirs))
+         (bytes (apply #'+ (mapcar #'gnaw--tree-size (append files dirs)))))
+    (if (not (or files dirs))
+        (message "gnaw: cache clean, nothing to delete")
+      (if (not (y-or-n-p
+                (format "gnaw: delete %d source cache file(s) and %d attachment dir(s), freeing %s? "
+                        (length files) (length dirs)
+                        (file-size-human-readable bytes))))
+          (message "gnaw: cache kept")
+        (dolist (f files) (delete-file f))
+        (dolist (d dirs)
+          (delete-directory d t)
+          ;; Drop the per-source parent when it just emptied.
+          (let ((parent (file-name-directory (directory-file-name d))))
+            (when (directory-empty-p parent)
+              (delete-directory parent))))
+        ;; Drop the in-memory extractions the deletions orphaned.
+        (let ((sources (gnaw-sources)))
+          (maphash (lambda (k _)
+                     (unless (and (not all) (member k sources))
+                       (remhash k gnaw--reports-cache)))
+                   gnaw--reports-cache))
+        (message "gnaw: freed %s" (file-size-human-readable bytes))))))
 
 ;;; State file (state.edn)
 

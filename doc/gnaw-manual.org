@@ -114,6 +114,16 @@ setup offers to link more.
 The sources download in parallel in the background, so Emacs stays
 responsive meanwhile.
 
+#+findex: gnaw-cache-cleanup
+#+cindex: cache, cleaning
+{{{kbd(M-x gnaw-cache-cleanup)}}} deletes, after showing the tally
+and asking, the cache files gnaw no longer needs: the report caches
+of sources no longer configured, and -- when
+~gnaw-cache-attachments-max-age~ is set to a number of days, nil by
+default -- the attachments untouched for that long.  With a prefix
+argument it also empties the configured sources' report caches,
+re-downloaded on the next update.  =state.edn= is never touched.
+
 * The Report Browser
 :PROPERTIES:
 :DESCRIPTION: The *gnaw* buffer and its key bindings.
@@ -711,6 +721,11 @@ All the ~defcustom~ options, by theme
 - ~gnaw-http-timeout~ ::
   #+vindex: gnaw-http-timeout
   Default: 30.  Seconds before a fetch gives up.
+
+- ~gnaw-cache-attachments-max-age~ ::
+  #+vindex: gnaw-cache-attachments-max-age
+  Default: nil (keep forever).  Days after which
+  {{{kbd(M-x gnaw-cache-cleanup)}}} discards a cached attachment.
 
 - ~gnaw-after-update-hook~ ::
   #+vindex: gnaw-after-update-hook
