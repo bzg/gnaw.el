@@ -882,6 +882,8 @@ ISO timestamp at which it was set."
 Persist the new state and return non-nil if ACTION is now on."
   (let* ((state (gnaw--read-state-for-update))
          (new   (gnaw--apply-transition state action mid info)))
+    (gnaw--undo-push (format "%s toggle" (substring (symbol-name action) 1))
+                     (list (cons mid (cdr (assoc mid state)))))
     (gnaw-write-state new)
     (gnaw-action-on-p new mid action)))
 
@@ -893,6 +895,7 @@ Return non-nil if a mark was actually cleared."
     (when (and entry
                (or (alist-get :sticky entry)
                    (alist-get :dismiss entry)))
+      (gnaw--undo-push "mark removal" (list (cons mid entry)))
       (let ((new (gnaw--alist-dissoc (gnaw--alist-dissoc entry :sticky)
                                      :dismiss)))
         (gnaw-write-state
@@ -900,6 +903,51 @@ Return non-nil if a mark was actually cleared."
              (gnaw--state-delete state mid)
            (gnaw--state-put state mid new))))
       t)))
+
+;;; Undo of mark changes
+
+(defvar gnaw--undo-log nil
+  "Session log of mark changes, most recent first.
+Each element is (LABEL . PAIRS) where LABEL describes the change and
+PAIRS lists (MID . ENTRY) with each entry as it was in state.edn
+before the change, nil when the report had none.")
+
+(defun gnaw--undo-push (label pairs)
+  "Record LABEL and PAIRS, a list of (MID . ENTRY-BEFORE), for `gnaw-undo'."
+  (push (cons label pairs) gnaw--undo-log))
+
+(defun gnaw--undo-restore (state mid before)
+  "Return STATE with MID's entry restored to BEFORE.
+Only the keys owned by gnaw.el are taken from BEFORE; keys another
+program wrote to the current entry since (such as the CLI's
+`:skip-since') survive the restoration."
+  (let* ((current (cdr (assoc mid state)))
+         (entry (append
+                 (cl-remove-if-not (lambda (kv)
+                                     (memq (car kv) gnaw--own-entry-keys))
+                                   before)
+                 (cl-remove-if (lambda (kv)
+                                 (memq (car kv) gnaw--own-entry-keys))
+                               current))))
+    (if (or (null entry) (gnaw--entry-removable-p entry))
+        (gnaw--state-delete state mid)
+      (gnaw--state-put state mid entry))))
+
+(defun gnaw-undo ()
+  "Undo the last mark change made from this Emacs session.
+Restore the affected state.edn entries as they were before the
+change, original timestamps included -- something re-toggling a
+mark cannot do.  Repeated calls walk further back.  Marks written
+by another program since the change are left untouched."
+  (interactive)
+  (unless gnaw--undo-log
+    (user-error "gnaw: no mark change to undo in this session"))
+  (let ((op (pop gnaw--undo-log))
+        (state (gnaw--read-state-for-update)))
+    (dolist (pair (cdr op))
+      (setq state (gnaw--undo-restore state (car pair) (cdr pair))))
+    (gnaw-write-state state)
+    (message "gnaw: undid %s" (car op))))
 
 ;;; Presentation helpers shared by the MUA front-ends
 
@@ -3009,6 +3057,8 @@ is narrowed to related reports, delegate to
     (define-key map "D" #'gnaw-list-toggle-dismiss)
     (define-key map "x" #'gnaw-list-execute-flags)
     (define-key map "u" #'gnaw-list-remove-marks)
+    (define-key map (kbd "C-/") #'gnaw-list-undo)
+    (define-key map (kbd "C-_") #'gnaw-list-undo)
     (define-key map "h" #'gnaw-show-help)
     (define-key map "s" #'gnaw-list-sort)
     (define-key map "S" #'gnaw-list-sort)
@@ -4127,16 +4177,20 @@ Turn off `gnaw-list-follow-mode' first; write state.edn only once."
     (user-error "No report flagged for dismissal"))
   (gnaw-list--follow-off)
   (let ((state (gnaw--read-state-for-update))
-        (count 0))
+        (count 0)
+        befores)
     (dolist (fmid gnaw-list--flagged)
       (let ((pair (assoc fmid gnaw-list--reports)))
         (when (and pair (not (gnaw-action-on-p state fmid :dismiss)))
+          (push (cons fmid (cdr (assoc fmid state))) befores)
           (setq state (gnaw--apply-transition state :dismiss fmid (cdr pair)))
           (setq count (1+ count)))))
+    (when befores
+      (gnaw--undo-push (format "dismissal of %d report(s)" count) befores))
     (gnaw-write-state state)
     (setq-local gnaw-list--flagged nil)
     (gnaw-list--refresh-keeping-point)
-    (message "gnaw: dismissed %d report(s) (type _ to include dismissed reports to the view)"
+    (message "gnaw: dismissed %d report(s) (type _ to include dismissed reports to the view, C-/ to undo)"
              count)))
 
 (defun gnaw-list-remove-marks ()
@@ -4155,6 +4209,13 @@ Moving down keeps point on its column."
       (gnaw-list--refresh-keeping-point)
       (gnaw-list--forward-row col))
      (t (message "gnaw: no mark on this report")))))
+
+(defun gnaw-list-undo ()
+  "Undo the last mark change of this session, then refresh the list.
+See `gnaw-undo' for what is restored."
+  (interactive)
+  (gnaw-undo)
+  (gnaw-list--refresh-keeping-point))
 
 (defun gnaw-list-toggle-dismissed ()
   "Toggle whether dismissed reports are shown."
@@ -4294,6 +4355,7 @@ order."
      (gnaw-list-execute-flags "dismiss the flagged reports")
      (gnaw-list-toggle-dismiss "dismiss immediately (toggle)")
      (gnaw-list-remove-marks "remove the mark or flag at point")
+     (gnaw-list-undo "undo the last mark change (timestamps restored)")
      (gnaw-list-toggle-dismissed "show / hide dismissed reports"))
     ("Filter and sort\n———————————————"
      (gnaw-list-filter "filter with key:value tokens (C-u: clear the filter)")
