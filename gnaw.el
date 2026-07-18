@@ -1262,12 +1262,14 @@ and charset; multipart bodies are decoded as UTF-8."
 (declare-function mu4e-headers-search "mu4e-headers")
 (defvar gnus-registry-enabled)
 
-(defun gnaw--read-gnus-group (prompt)
+(defun gnaw--read-gnus-group (prompt &optional default)
   "Read a Gnus group with PROMPT, completing over all known groups.
-Start Gnus first when needed so the group list is populated."
+Start Gnus first when needed so the group list is populated.
+Empty input returns DEFAULT; completion appends the default and a
+colon to PROMPT, so PROMPT must end with neither."
   (require 'gnus)
   (unless (gnus-alive-p) (gnus))
-  (gnus-group-completing-read prompt))
+  (gnus-group-completing-read prompt nil nil nil nil default))
 
 (defun gnaw--gnus-return-to (buffer)
   "Switch back to BUFFER once the next Gnus summary is exited."
@@ -1324,11 +1326,12 @@ return to the calling buffer on summary exit."
   (cons (cons key val)
         (assoc-delete-all key (copy-alist (if (listp alist) alist nil)))))
 
-(defun gnaw--read-open-message-method ()
-  "Read an open-message method interactively."
-  (intern (completing-read
-           "Open messages with: "
-           gnaw--open-message-method-choices nil t nil nil "auto")))
+(defun gnaw--read-open-message-method (&optional default)
+  "Read an open-message method interactively, DEFAULT preselected."
+  (let ((def (symbol-name (or default 'auto))))
+    (intern (completing-read (format-prompt "Open messages with" def)
+                             gnaw--open-message-method-choices
+                             nil t nil nil def))))
 
 (defun gnaw--configured-source-names ()
   "Return source names from config.edn without fetching metadata."
@@ -1360,6 +1363,27 @@ SOURCE is a source name string, or t for the default entry."
                             (gnaw--known-source-names))))
     (if (string-empty-p s) t s)))
 
+(defun gnaw--configured-value (alist source)
+  "Return the ALIST value configured for SOURCE, a name or t.
+A source without an entry of its own falls back to the default
+entry, the one keyed by t."
+  (cdr (or (and (stringp source) (assoc source alist))
+           (assq t alist))))
+
+(defun gnaw--method-string (method group)
+  "Return METHOD as a string, GROUP appended when METHOD is `gnus'."
+  (format "%s%s" method
+          (if (and (eq method 'gnus) group (not (string-empty-p group)))
+              (format " in %s" group)
+            "")))
+
+(defun gnaw--read-source-gnus-group (source)
+  "Read the Gnus group for SOURCE, defaulting to the configured one.
+SOURCE is a source name string, or t for the default entry."
+  (let ((def (gnaw--configured-value gnaw-gnus-group source)))
+    (gnaw--read-gnus-group
+     (if def "Gnus group" "Gnus group (empty = ask each time)") def)))
+
 ;;;###autoload
 (defun gnaw-configure-email-client (source method &optional group)
   "Configure how SOURCE messages are opened.
@@ -1368,17 +1392,15 @@ one of `auto', `mua', `gnus', `notmuch', `mu4e' or `web'.  When METHOD is
 `gnus', GROUP stores the Gnus group to search first."
   (interactive
    (let* ((source (gnaw--read-email-client-source))
-          (method (gnaw--read-open-message-method))
+          (method (gnaw--read-open-message-method
+                   (gnaw--configured-value gnaw-open-message-method source)))
           (group (when (eq method 'gnus)
-                   (gnaw--read-gnus-group "Gnus group (empty = ask each time): "))))
+                   (gnaw--read-source-gnus-group source))))
      (list source method group)))
   (gnaw--save-source-open-method source method group)
-  (message "gnaw: %s messages open with %s%s"
+  (message "gnaw: %s messages open with %s"
            (if (eq source t) "all sources" source)
-           method
-           (if (and (eq method 'gnus) group (not (string-empty-p group)))
-               (format " in %s" group)
-             ""))
+           (gnaw--method-string method group))
   method)
 
 (defun gnaw-read-message (mid info)
@@ -4559,9 +4581,10 @@ updated source hands down its repos and offers to link more."
 (defun gnaw--configure-email-client-for-source (source)
   "Read and save the message-opening setup for SOURCE.
 SOURCE may be a source name string or t for the global default."
-  (let* ((method (gnaw--read-open-message-method))
+  (let* ((method (gnaw--read-open-message-method
+                  (gnaw--configured-value gnaw-open-message-method source)))
          (group (when (eq method 'gnus)
-                  (gnaw--read-gnus-group "Gnus group (empty = ask each time): "))))
+                  (gnaw--read-source-gnus-group source))))
     (gnaw-configure-email-client source method group)))
 
 (defun gnaw--configure-one-source ()
@@ -4571,25 +4594,85 @@ SOURCE may be a source name string or t for the global default."
     (gnaw--configure-email-client-for-source source)
     urls))
 
+(defun gnaw--source-summary (entry)
+  "Return a description of config.edn source ENTRY, one item per line."
+  (let* ((name (alist-get :name entry))
+         (urls (append (alist-get :urls entry) nil))
+         (letter (alist-get :letter entry))
+         (repos (gnaw--entry-repos entry))
+         (method (and name (cdr (assoc name gnaw-open-message-method))))
+         (group (and name (gnaw--configured-value gnaw-gnus-group name))))
+    (concat
+     (format "  %s%s\n" (if letter (format "[%s] " letter) "")
+             (or name "(unnamed source)"))
+     (mapconcat (lambda (u) (format "    %s\n" u)) urls "")
+     (and repos
+          (format "    repo: %s\n"
+                  (mapconcat #'abbreviate-file-name repos ", ")))
+     (and method
+          (format "    messages open with: %s\n"
+                  (gnaw--method-string method group))))))
+
+(defun gnaw--config-summary ()
+  "Return a description of the configured sources and open methods."
+  (let ((sources (plist-get (gnaw-load-config) :source-configs))
+        (method (or (alist-get t gnaw-open-message-method) 'auto))
+        (group (alist-get t gnaw-gnus-group)))
+    (concat
+     (format "Current configuration (%s)\n\n"
+             (abbreviate-file-name
+              (expand-file-name "config.edn" gnaw-config-dir)))
+     (if sources
+         (mapconcat #'gnaw--source-summary sources "\n")
+       "No source configured.\n")
+     (format "\nBy default, messages open with: %s\n"
+             (gnaw--method-string method group)))))
+
+(defun gnaw--show-config-summary ()
+  "Display the current configuration in a window; return its buffer.
+`gnaw-configure' keeps the window around so each prompt is answered
+with the existing configuration in sight."
+  (let ((buf (get-buffer-create "*gnaw configuration*")))
+    (with-current-buffer buf
+      (unless (derived-mode-p 'special-mode) (special-mode))
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (gnaw--config-summary))
+        (goto-char (point-min))))
+    (display-buffer buf)
+    buf))
+
 ;;;###autoload
 (defun gnaw-configure ()
   "Run interactive gnaw setup.
 Configure a report source, its local patch repository and the mail
 client used to open report messages; with existing sources, optionally
-only the mail client."
+only the mail client.  The existing configuration stays displayed in
+a window while the prompts run, refreshed after each change."
   (interactive)
-  (let ((added-source nil))
-    (if (gnaw-sources)
-        (if (y-or-n-p "Add or update a report source? ")
-            (progn
+  (let ((added-source nil)
+        (summary nil))
+    (unwind-protect
+        (progn
+          (if (gnaw-sources)
+              (progn
+                (setq summary (gnaw--show-config-summary))
+                (if (y-or-n-p "Add or update Gnaw sources? ")
+                    (progn
+                      (gnaw--configure-one-source)
+                      (setq added-source t))
+                  (call-interactively #'gnaw-configure-email-client)))
+            (gnaw--configure-one-source)
+            (setq added-source t))
+          (when added-source
+            (setq summary (gnaw--show-config-summary))
+            (while (y-or-n-p "Add another source? ")
               (gnaw--configure-one-source)
-              (setq added-source t))
-          (call-interactively #'gnaw-configure-email-client))
-      (gnaw--configure-one-source)
-      (setq added-source t))
-    (when added-source
-      (while (y-or-n-p "Add another source? ")
-        (gnaw--configure-one-source)))))
+              (setq summary (gnaw--show-config-summary)))))
+      (when (buffer-live-p summary)
+        (if-let* ((win (get-buffer-window summary t)))
+            (quit-window t win)
+          (kill-buffer summary))))))
 
 (defcustom gnaw-inhibit-startup-tip nil
   "When non-nil, `gnaw' does not display its startup tip.

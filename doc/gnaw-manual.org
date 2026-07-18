@@ -99,7 +99,10 @@ start silently.
 
 #+findex: gnaw-configure
 #+findex: gnaw-add-source
-{{{kbd(M-x gnaw-configure)}}} reruns the full setup later on;
+{{{kbd(M-x gnaw-configure)}}} reruns the full setup later on,
+keeping the existing configuration---sources, repositories and mail
+setup---displayed in a window while the prompts run, each prompt
+defaulting to the configured value.
 {{{kbd(M-x gnaw-add-source)}}} only adds or updates a source.  An
 updated source keeps the repositories it is linked to, and the
 setup offers to link more.
