@@ -615,10 +615,11 @@ resolving it, and so on."
     ('duplicated-by "duplicates it")
     (_ (and kind (format "%s" kind)))))
 
-(defun gnaw--extract-open-reports (source)
+(defun gnaw--extract-reports (source)
   "Extract published reports from SOURCE as (MID . INFO) pairs.
-A report is kept when its status is at least 4, which includes closed
-reports (flags R, C, E or S) still present in reports.json."
+Closed reports (status below 4, flags C, R, E or S) are kept when
+SOURCE lists them, as an all.json does; the list hides them until
+a query asks for them (see `gnaw-list--display-reports')."
   (let* ((data (gnaw--read-json source))
          (fv (alist-get 'bone-format data))
          (sname (alist-get 'source data))
@@ -659,7 +660,7 @@ reports (flags R, C, E or S) still present in reports.json."
             (series       (alist-get 'series r))
             (patch-seq    (alist-get 'patch-seq r))
             (trailers     (alist-get 'trailers r)))
-        (when (and mid (numberp status) (>= status 4))
+        (when (and mid (numberp status))
           (let ((flags (concat (if acked "A" "-")
                                (if owned "O" "-")
                                (pcase close-reason
@@ -703,7 +704,7 @@ reports (flags R, C, E or S) still present in reports.json."
     (nreverse result)))
 
 (defun gnaw-reports ()
-  "Collect open report pairs from all sources, tolerating failures.
+  "Collect report pairs from all sources, tolerating failures.
 A source that fails to load is skipped and reported through
 `display-warning' -- a transient `message' would be clobbered by
 the rendering that follows, leaving an empty listing with no
@@ -711,7 +712,7 @@ visible explanation."
   (mapcan
    (lambda (source)
      (condition-case err
-         (gnaw--extract-open-reports source)
+         (gnaw--extract-reports source)
        (error
         (display-warning
          'gnaw
@@ -1966,7 +1967,9 @@ related reports absent from the loaded sources.  Set by
 
 (defvar gnaw-list--reports nil
   "Cached (MID . INFO) pairs for the current `gnaw-list' buffer.
-Set by `gnaw-list-reload'.  Buffer-local in use.")
+Set by `gnaw-list-reload'.  Buffer-local in use.  Closed reports
+are included when a source lists them, but stay hidden until a
+query asks for them (see `gnaw-list--display-reports').")
 
 (defvar gnaw-list--mark-index nil
   "Index of the Mark column among the active columns, nil when hidden.
@@ -2405,6 +2408,27 @@ GROUPS comes from `gnaw--query-compile'."
   (seq-some (lambda (preds)
               (seq-every-p (lambda (p) (funcall p mid info)) preds))
             groups))
+
+(defun gnaw--query-reveals-closed-p (query)
+  "Non-nil when QUERY explicitly asks for closed reports.
+That is, when an unnegated token filters on a closing flag (a
+flags: value naming C, R, E or S) or on the closed: key -- the
+tokens `gnaw-list-limit-closed' and the Flags cell filter produce.
+`gnaw-list--display-reports' hides closed reports otherwise."
+  (seq-some
+   (lambda (tokens)
+     (seq-some
+      (lambda (token)
+        (and (not (string-prefix-p "-" token))
+             (let* ((i (string-search ":" token))
+                    (key (and i (substring token 0 i)))
+                    (val (and i (substring token (1+ i)))))
+               (and val (not (string-empty-p val))
+                    (or (member key '("closed" "c"))
+                        (and (member key '("flags" "F"))
+                             (string-match-p "[CRES]" (upcase val))))))))
+      tokens))
+   (gnaw--query-parse query)))
 
 (defconst gnaw--query-keys
   '("from:" "subject:" "similar:" "topic:" "source:" "type:" "priority:"
@@ -2977,12 +3001,25 @@ is narrowed to related reports, delegate to
       (gnaw--list-entries-related)
     (gnaw--list-entries-full)))
 
+(defun gnaw-list--display-reports ()
+  "Return the loaded pairs the list may display under the current query.
+Open reports always; closed ones only when the query asks for
+them (see `gnaw--query-reveals-closed-p'), as `gnaw-list-limit-closed'
+or a flags: filter naming a close flag does."
+  (if (and gnaw-list--query
+           (gnaw--query-reveals-closed-p gnaw-list--query))
+      gnaw-list--reports
+    (cl-remove-if (lambda (p) (gnaw--closed-p (cdr p)))
+                  gnaw-list--reports)))
+
 (defun gnaw--list-entries-full ()
-  "Return `tabulated-list-entries' for the full report list."
+  "Return `tabulated-list-entries' for the full report list.
+Closed reports enter the list only through a query asking for
+them (see `gnaw-list--display-reports')."
   (let ((state (gnaw-read-state))
         (cols (gnaw--active-columns))
         (qgroups (and gnaw-list--query (gnaw--query-compile gnaw-list--query)))
-        (pairs gnaw-list--reports)
+        (pairs (gnaw-list--display-reports))
         (groups (make-hash-table :test 'equal))
         (seen (make-hash-table :test 'equal))
         (rows nil))
@@ -3574,7 +3611,7 @@ them; with three, add that exclusion to the active filter (AND)."
                 (when (< (seq-count
                           (lambda (p)
                             (funcall m (plist-get (cdr p) :subject)))
-                          gnaw-list--reports)
+                          (gnaw-list--display-reports))
                          2)
                   (user-error "No other report with a similar subject"))
                 (format "similar:%s" val))))
@@ -3974,7 +4011,7 @@ at once."
          (sid (gnaw--series-id (cdr pair)))
          (mid (car pair)))
     (unless sid (user-error "Not part of a patch series"))
-    (when (< (cl-count sid gnaw-list--reports
+    (when (< (cl-count sid (gnaw-list--display-reports)
                        :key (lambda (p) (gnaw--series-id (cdr p)))
                        :test #'equal)
              2)
@@ -4051,7 +4088,7 @@ member.  When the list is already narrowed, restore it."
            (sid (gnaw--series-id info)))
       (cond ((and related (plist-get info :related))
              (gnaw-list-related-narrow))
-            ((and sid (>= (cl-count sid gnaw-list--reports
+            ((and sid (>= (cl-count sid (gnaw-list--display-reports)
                                     :key (lambda (p) (gnaw--series-id (cdr p)))
                                     :test #'equal)
                           2))

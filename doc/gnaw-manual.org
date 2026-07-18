@@ -263,7 +263,10 @@ Filtering and sorting (see [[*Searching]]):
 - {{{kbd(c)}}} (~gnaw-list-limit-closed~) ::
   #+kindex: c
   #+findex: gnaw-list-limit-closed
-  Only the closed reports (canceled, resolved...).
+  Only the closed reports (canceled, resolved...).  Closed reports
+  are loaded when a source lists them (e.g. an =all.json= report
+  file) and stay out of the list until a query names a close
+  flag (=flags:E=) or the =closed:= key, as this command does.
 
 - {{{kbd(.)}}} (~gnaw-list-limit-awaiting~) ::
   #+kindex: .
