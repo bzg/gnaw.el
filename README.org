@@ -46,7 +46,9 @@ more local git repositories where its patches apply, and how to open
 report mail; =M-x gnaw-configure= reruns it later on.
 
 In the browser, =h= (or =?=) lists all the key bindings; =/= filters the
-list with =key:value= tokens.
+list with =key:value= tokens. Each launch displays a tip presenting a
+random command; set =gnaw-inhibit-startup-tip= to a non-nil value to
+disable it.
 
 * Documentation
 

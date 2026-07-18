@@ -4591,6 +4591,25 @@ only the mail client."
       (while (y-or-n-p "Add another source? ")
         (gnaw--configure-one-source)))))
 
+(defcustom gnaw-inhibit-startup-tip nil
+  "When non-nil, `gnaw' does not display its startup tip.
+The tip presents a randomly chosen report list command."
+  :type 'boolean
+  :group 'gnaw)
+
+(defun gnaw--startup-tip ()
+  "Return a startup message presenting a random report list command.
+The command is drawn from `gnaw-list--help-sections', skipping the
+Help section, whose \"h\" key the message always mentions."
+  (let* ((cmds (cl-loop for (title . entries) in gnaw-list--help-sections
+                        unless (string-prefix-p "Help" title)
+                        append (cl-remove-if-not #'consp entries)))
+         (cmd (nth (random (length cmds)) cmds))
+         (key (where-is-internal (car cmd) gnaw-list-mode-map t)))
+    (format "gnaw some bone! Tip: \"%s\" — %s (\"h\" for the full help)"
+            (if key (key-description key) (format "M-x %s" (car cmd)))
+            (cadr cmd))))
+
 ;;;###autoload
 (defun gnaw ()
   "Browse open BONE reports in a tabulated list filling the frame.
@@ -4603,7 +4622,8 @@ Prompt for full interactive configuration when no source is configured."
     (delete-other-windows)
     (gnaw-list-mode)
     (gnaw-list-reload)
-    (message "gnaw some bone! \"f\" to toggle the follow mode and \"h\" to get help")))
+    (unless gnaw-inhibit-startup-tip
+      (message "%s" (gnaw--startup-tip)))))
 
 (provide 'gnaw)
 ;;; gnaw.el ends here

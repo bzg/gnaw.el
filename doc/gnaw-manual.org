@@ -91,6 +91,12 @@ configured, it runs the full interactive setup:
 The source, its letter and the patch repository are written to
 =config.edn= (see [[*The configuration file]]).
 
+#+vindex: gnaw-inhibit-startup-tip
+#+cindex: startup tip
+Each launch ends with a tip presenting a randomly chosen command of
+the report list; set ~gnaw-inhibit-startup-tip~ to a non-nil value to
+start silently.
+
 #+findex: gnaw-configure
 #+findex: gnaw-add-source
 {{{kbd(M-x gnaw-configure)}}} reruns the full setup later on;
@@ -782,6 +788,11 @@ All the ~defcustom~ options, by theme
   #+vindex: gnaw-list-follow-delay
   Default: 0.3.  Idle seconds before follow mode ({{{kbd(f)}}}) shows
   the report at point.
+
+- ~gnaw-inhibit-startup-tip~ ::
+  #+vindex: gnaw-inhibit-startup-tip
+  Default: nil.  When non-nil, {{{kbd(M-x gnaw)}}} starts silently
+  instead of displaying a tip presenting a random command.
 
 *** Filtering options
 :PROPERTIES:
