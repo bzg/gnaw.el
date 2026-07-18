@@ -623,6 +623,7 @@ reports (flags R, C, E or S) still present in reports.json."
             (status       (alist-get 'status r))
             (type         (alist-get 'type r))
             (acked        (alist-get 'acked r))
+            (acked-name   (alist-get 'acked-name r))
             (owned        (alist-get 'owned r))
             (closed       (alist-get 'closed r))
             (owned-name   (alist-get 'owned-name r))
@@ -645,7 +646,8 @@ reports (flags R, C, E or S) still present in reports.json."
             (awaiting     (alist-get 'awaiting r))
             (related      (gnaw--report-related r))
             (series       (alist-get 'series r))
-            (patch-seq    (alist-get 'patch-seq r)))
+            (patch-seq    (alist-get 'patch-seq r))
+            (trailers     (alist-get 'trailers r)))
         (when (and mid (numberp status) (>= status 4))
           (let ((flags (concat (if acked "A" "-")
                                (if owned "O" "-")
@@ -680,7 +682,9 @@ reports (flags R, C, E or S) still present in reports.json."
                                        :related related
                                        :series series
                                        :patch-seq patch-seq
+                                       :trailers trailers
                                        :acked acked
+                                       :acked-name acked-name
                                        :owned owned
                                        :owned-name owned-name
                                        :closed closed))
@@ -1386,6 +1390,40 @@ back on `dired' when magit is not loaded."
   :type 'boolean
   :group 'gnaw)
 
+(defcustom gnaw-am-fold-trailers t
+  "Whether `gnaw-am-patches' folds the collected trailers into commits.
+BONE collects the review trailers (Acked-by:, Reviewed-by:, ...)
+posted in reply to a patch and publishes them in the report's
+`trailers' field.  When non-nil, `git am' receives a temporary copy
+of each patch file with the missing trailers appended to the commit
+message, the way b4 does; the cached patch files are never modified.
+This is also the master switch for `gnaw-am-synthetic-trailers'."
+  :type 'boolean
+  :group 'gnaw)
+
+(defcustom gnaw-am-synthetic-trailers '(acked link)
+  "Trailers derived from the report state by `gnaw-am-patches'.
+On mailing lists where review acts are BONE commands (\"Acked.\",
+\"Confirmed.\", \"Reviewed.\") rather than kernel-style reply
+trailers, the report state itself carries the review information.
+Each element synthesizes one trailer, folded like the collected
+ones (and only when `gnaw-am-fold-trailers' is non-nil):
+ - `acked': \"Reviewed-by: Name <address>\" from the acked state --
+   BONE's acked is the strong review approval, so Reviewed-by is
+   its kernel-language translation;
+ - `owned': \"Reviewed-by: Name <address>\" from the owned state;
+ - `link':  \"Link: <url>\" to the report's archived web page.
+`owned' is not in the default: an owner has not necessarily
+reviewed -- enable it only if that shortcut holds on your source.
+A synthetic trailer is dropped when BONE already collected one
+with the same address and an equivalent key -- Acked-by and
+Reviewed-by count as one approval family, so a literal
+\"Acked-by:\" posted in the thread is never upgraded."
+  :type '(set (const :tag "Acked. as Reviewed-by:" acked)
+              (const :tag "Owned. as Reviewed-by:" owned)
+              (const :tag "Archived page as Link:" link))
+  :group 'gnaw)
+
 (defcustom gnaw-checkout-base 'ask
   "Whether `gnaw-apply-patches' checks out the base commit first.
 When a patch carries a `base-commit:' trailer (`git format-patch
@@ -1491,6 +1529,108 @@ PATCHES restricts the display to these `:patches' entries."
           (goto-char (point-min))
           (when (re-search-forward "^base-commit: \\([0-9a-f]\\{7,40\\}\\)$" nil t)
             (throw 'found (match-string 1))))))))
+
+(defun gnaw--person-trailer (key addr name)
+  "Return \"KEY: NAME <ADDR>\", without NAME when nil or empty.
+Return nil without ADDR."
+  (and (stringp addr) (not (string-empty-p addr))
+       (format "%s: %s" key
+               (if (and name (not (string-empty-p name)))
+                   (format "%s <%s>" name addr)
+                 addr))))
+
+(defun gnaw--synthetic-trailers (info)
+  "Return the trailers derived from report INFO's state.
+Per `gnaw-am-synthetic-trailers': the addresses posted by the
+Acked. and Owned. commands become Reviewed-by: lines, and the
+report's archived web page a Link: line."
+  (let ((wanted gnaw-am-synthetic-trailers))
+    (delq nil
+          (list (and (memq 'acked wanted)
+                     (gnaw--person-trailer "Reviewed-by"
+                                           (plist-get info :acked)
+                                           (plist-get info :acked-name)))
+                (and (memq 'owned wanted)
+                     (gnaw--person-trailer "Reviewed-by"
+                                           (plist-get info :owned)
+                                           (plist-get info :owned-name)))
+                (and (memq 'link wanted)
+                     (let ((url (plist-get info :archived-at)))
+                       (and (stringp url) (not (string-empty-p url))
+                            (concat "Link: " url))))))))
+
+(defun gnaw--trailer-key-family (key)
+  "Return trailer KEY's comparison family, downcased.
+Acked-by and Reviewed-by are one approval family: a collected ack
+covers a synthetic review of the same address, and vice versa."
+  (let ((k (downcase key)))
+    (if (member k '("acked-by" "reviewed-by")) "approval" k)))
+
+(defun gnaw--trailer-addr (trailer)
+  "Return TRAILER's address -- its <...> part, else its whole value --
+downcased, or nil when TRAILER has no colon."
+  (when-let* ((colon (string-search ":" trailer)))
+    (let ((val (string-trim (substring trailer (1+ colon)))))
+      (downcase (if (string-match "<\\([^>]+\\)>" val)
+                    (match-string 1 val)
+                  val)))))
+
+(defun gnaw--merge-trailers (collected synthetic)
+  "Append the SYNTHETIC trailers not already covered by COLLECTED.
+A synthetic trailer is covered when a collected one carries the
+same address or URL (compared whole, case-insensitively) under a
+key of the same family (see `gnaw--trailer-key-family'), so an
+\"Acked-by: Admin <a@x>\" collected from a reply suppresses the
+state-derived \"Reviewed-by: a@x\" instead of being upgraded by
+it."
+  (append collected
+          (seq-remove
+           (lambda (tr)
+             (let ((fam (gnaw--trailer-key-family
+                         (substring tr 0 (string-search ":" tr))))
+                   (addr (gnaw--trailer-addr tr)))
+               (seq-some
+                (lambda (c)
+                  (when-let* ((ccolon (string-search ":" c)))
+                    (and (equal fam (gnaw--trailer-key-family
+                                     (substring c 0 ccolon)))
+                         (equal addr (gnaw--trailer-addr c)))))
+                collected)))
+           synthetic)))
+
+(defun gnaw--fold-trailers-file (file trailers)
+  "Return a temp copy of patch FILE with TRAILERS folded in.
+TRAILERS are \"Key: Name <addr>\" strings; those already present in
+the commit message (case-insensitively) are skipped.  The missing
+ones are inserted just before the \"---\" separator that ends the
+message.  Return FILE itself when nothing is missing or the file has
+no separator (then there is no commit message to extend safely)."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (goto-char (point-min))
+    (if (not (re-search-forward "^---$" nil t))
+        file
+      (let* ((sep (match-beginning 0))
+             (msg (buffer-substring (point-min) sep))
+             (case-fold-search t)
+             ;; Whitespace-insensitive dedup: "Reviewed-by:  Bob <b@x>"
+             ;; and "Reviewed-by: Bob <b@x>" are the same trailer.
+             (missing (seq-remove
+                       (lambda (tr)
+                         (string-match-p
+                          (concat "^"
+                                  (mapconcat #'regexp-quote (split-string tr)
+                                             "[ \t]+")
+                                  "[ \t]*$")
+                          msg))
+                       trailers)))
+        (if (not missing)
+            file
+          (goto-char sep)
+          (dolist (tr missing) (insert tr "\n"))
+          (let ((tmp (make-temp-file "gnaw-am-" nil ".patch")))
+            (write-region nil nil tmp nil 'silent)
+            tmp))))))
 
 (defun gnaw--shorten-subject (subject)
   "Shorten SUBJECT into a branch-name fragment like \"fix-tangle-noweb\".
@@ -1621,9 +1761,12 @@ HEAD; the patches' recorded `base-commit:' is proposed when the
 repo has it).  When `gnaw-am-create-worktree', inverted by
 TOGGLE-WORKTREE, is non-nil, branch and apply in a new worktree
 read by `gnaw-am-read-worktree-function', leaving the repo's
-checkout untouched.  A successful run shows the directory applied
-in, per `gnaw-am-show-repo'.  PATCHES restricts the operation to
-these `:patches' entries."
+checkout untouched.  The review trailers collected by BONE, plus
+those synthesized from the report state per
+`gnaw-am-synthetic-trailers', are folded into the commits per
+`gnaw-am-fold-trailers'.  A successful run shows the directory
+applied in, per `gnaw-am-show-repo'.  PATCHES restricts the
+operation to these `:patches' entries."
   (let ((files (gnaw--patch-files info "applying" patches)))
     (gnaw--confirm-incomplete-series info patches)
     (let* ((repo (gnaw--target-repo info))
@@ -1654,21 +1797,42 @@ these `:patches' entries."
         (display-buffer "*gnaw-git*")
         (user-error "Git %s failed"
                     (if use-worktree "worktree add" "checkout")))
-      (if (zerop (apply #'gnaw--git am-dir
-                        (append (list "am") gnaw-git-am-options
-                                (list "--") files)))
-          (progn
-            (message "gnaw: git am applied %d patch(es) in %s%s"
-                     (length files) am-dir
-                     (if branch (format " on branch %s" branch)
-                       " (detached HEAD)"))
-            (when gnaw-am-show-repo
-              (if (fboundp 'magit-status-setup-buffer)
-                  (magit-status-setup-buffer am-dir)
-                (dired am-dir))))
-        (display-buffer "*gnaw-git*")
-        (message "gnaw: git am failed in %s (run `git am --abort' to undo)"
-                 am-dir)))))
+      (let ((trailers (and gnaw-am-fold-trailers
+                           (delete-dups
+                            (gnaw--merge-trailers
+                             (plist-get info :trailers)
+                             (gnaw--synthetic-trailers info)))))
+            am-files)
+        (unwind-protect
+            (progn
+              ;; Fold file by file, extending am-files as we go: should
+              ;; a copy fail midway, the cleanup below still sees the
+              ;; copies made before the error.
+              (if (null trailers)
+                  (setq am-files files)
+                (dolist (f files)
+                  (setq am-files
+                        (cons (gnaw--fold-trailers-file f trailers) am-files)))
+                (setq am-files (nreverse am-files)))
+              (if (zerop (apply #'gnaw--git am-dir
+                                (append (list "am") gnaw-git-am-options
+                                        (list "--") am-files)))
+                  (progn
+                    (message "gnaw: git am applied %d patch(es) in %s%s%s"
+                             (length files) am-dir
+                             (if branch (format " on branch %s" branch)
+                               " (detached HEAD)")
+                             (if (equal am-files files) "" ", trailers folded"))
+                    (when gnaw-am-show-repo
+                      (if (fboundp 'magit-status-setup-buffer)
+                          (magit-status-setup-buffer am-dir)
+                        (dired am-dir))))
+                (display-buffer "*gnaw-git*")
+                (message "gnaw: git am failed in %s (run `git am --abort' to undo)"
+                         am-dir)))
+          ;; The folded files are temp copies; the cached originals stay.
+          (dolist (f am-files)
+            (unless (member f files) (delete-file f))))))))
 
 (defun gnaw-save-patches (info &optional no-confirm patches)
   "Save INFO's patch files to a directory.

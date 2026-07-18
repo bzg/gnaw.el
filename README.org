@@ -247,7 +247,18 @@ input keeps a detached HEAD -- and for its start point, proposing the
 patches' recorded =base-commit:= when the repo has it. Set
 =gnaw-am-create-worktree= to apply in a new worktree instead, leaving
 the repo's checkout untouched; a prefix argument on the am commands
-(=C-u m= in the menu) inverts that setting for one call. A successful
+(=C-u m= in the menu) inverts that setting for one call. The review
+trailers BONE collects from replies (=Acked-by:=, =Reviewed-by:=...)
+are folded into the commit messages, b4-style, through temporary
+copies of the patch files -- the cached originals are never touched;
+set =gnaw-am-fold-trailers= to nil to disable. On lists where review
+acts are BONE commands instead (=Acked.=, =Confirmed.=, =Reviewed.=,
+=Reviewed-by:=...), the report state is turned into synthetic
+trailers (=gnaw-am-synthetic-trailers=): the acked state -- BONE's
+strong review approval -- yields =Reviewed-by:= and the archived page
+a =Link:= line; add =owned= to also turn the owner into a
+=Reviewed-by:=. A literal =Acked-by:= collected from the thread is
+never upgraded: it suppresses the synthetic line instead. A successful
 =git am= pops =magit-status= (or =dired= when magit is not loaded) on
 the directory it applied in; set =gnaw-am-show-repo= to nil to keep
 the plain message. See =*gnaw-git*= for the output; on a failed
@@ -295,8 +306,13 @@ Patches and attachments:
 - =gnaw-am-branch-function=: proposes the branch name for =git am=.
 - =gnaw-am-create-worktree= (default nil): apply =git am= in a new
   worktree, read by =gnaw-am-read-worktree-function=.
+- =gnaw-am-fold-trailers= (default t): fold the review trailers
+  collected by BONE into the commits created by =git am=.
 - =gnaw-am-show-repo= (default t): show the directory (=magit-status=
   or =dired=) after a successful =git am=.
+- =gnaw-am-synthetic-trailers= (default =(acked link)=): trailers
+  synthesized from the report state -- acked state, archived page,
+  optionally the owner -- and folded along the collected ones.
 - =gnaw-checkout-base= (default =ask=): whether =git apply= checks out a
   patch's recorded =base-commit:= first (=ask=, =nil= or =t=).
 - =gnaw-save-no-confirm= (default nil): when non-nil, the save
