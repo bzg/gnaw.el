@@ -111,6 +111,8 @@ setup offers to link more.
 #+cindex: cache, refreshing
 {{{kbd(M-x gnaw-update)}}} refreshes the local cache of the remote
 =reports.json= files; with a prefix argument it forces a re-download.
+The sources download in parallel in the background, so Emacs stays
+responsive meanwhile.
 
 * The Report Browser
 :PROPERTIES:
@@ -352,7 +354,8 @@ Refreshing and help:
 - {{{kbd(G)}}} (~gnaw-list-update~) ::
   #+kindex: G
   #+findex: gnaw-list-update
-  Refresh the remote cache, then reload.
+  Refresh the remote cache in the background, then reload once the
+  download finished; Emacs stays responsive meanwhile.
 
 - {{{kbd(h)}}}, {{{kbd(?)}}} (~gnaw-show-help~) ::
   #+kindex: h
@@ -711,7 +714,8 @@ All the ~defcustom~ options, by theme
 
 - ~gnaw-after-update-hook~ ::
   #+vindex: gnaw-after-update-hook
-  Run after {{{kbd(M-x gnaw-update)}}}.
+  Run once {{{kbd(M-x gnaw-update)}}} finished its background
+  downloads (after the command itself returned).
 
 *** Reading options
 :PROPERTIES:

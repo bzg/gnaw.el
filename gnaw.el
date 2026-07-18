@@ -90,8 +90,10 @@
   :group 'gnaw)
 
 (defcustom gnaw-after-update-hook nil
-  "Functions run after `gnaw-update' refreshes the local cache.
-Front-ends can use this to re-apply their display."
+  "Functions run once `gnaw-update' finished refreshing the local cache.
+The update downloads in the background, so the hook runs from its
+callbacks, after `gnaw-update' itself returned.  Front-ends can use
+this to re-apply their display."
   :type 'hook
   :group 'gnaw)
 
@@ -243,6 +245,11 @@ misread file would silently drop its existing contents."
       (url-unhex-string (substring uri 7))
     uri))
 
+(defun gnaw--file-mtime (file)
+  "Return FILE's modification time, or nil when FILE is absent.
+The mtime caches below compare it with `equal' to decide freshness."
+  (file-attribute-modification-time (file-attributes file)))
+
 (defvar gnaw--config-cache nil
   "Cons (MTIME . PLIST) caching the last `gnaw-load-config' result.")
 
@@ -252,7 +259,7 @@ Keys: :addresses :skip-columns :source-configs (raw `:sources' maps)
 and :sources (their URLs).  The result is cached until config.edn
 changes."
   (let* ((file (expand-file-name "config.edn" gnaw-config-dir))
-         (mtime (file-attribute-modification-time (file-attributes file))))
+         (mtime (gnaw--file-mtime file)))
     (if (and gnaw--config-cache (equal (car gnaw--config-cache) mtime))
         (cdr gnaw--config-cache)
       (let* ((cfg (gnaw--read-edn-file file))
@@ -426,6 +433,28 @@ answered so far, so they are not asked again."
   :type '(choice (const :tag "No timeout" nil) (integer :tag "Seconds"))
   :group 'gnaw)
 
+(defun gnaw--http-parse-reply (url)
+  "Parse the `url-retrieve' reply in the current buffer.
+Return a plist (:status :body :etag); signal an error on HTTP
+errors or a malformed reply, naming URL."
+  (let ((status (bound-and-true-p url-http-response-status)))
+    (when (and status (>= status 400))
+      (error "HTTP error %d from %s" status url))
+    (goto-char (point-min))
+    (unless (re-search-forward "\r?\n\r?\n" nil t)
+      (error "Malformed HTTP response from %s" url))
+    (let ((header-end (point)))
+      (list :status status
+            :etag (save-excursion
+                    (goto-char (point-min))
+                    (let ((case-fold-search t))
+                      (when (re-search-forward
+                             "^ETag:[ \t]*\\([^\r\n]*\\)"
+                             header-end t)
+                        (match-string 1))))
+            :body (buffer-substring-no-properties
+                   header-end (point-max))))))
+
 (defun gnaw--http-fetch (url &optional head)
   "Fetch URL and return a plist (:status :body :etag).
 Non-nil HEAD sends a HEAD request instead of GET: the reply carries
@@ -437,25 +466,49 @@ without a response."
          (buf (url-retrieve-synchronously url t nil gnaw-http-timeout)))
     (unless buf (error "Failed to fetch %s" url))
     (unwind-protect
-        (with-current-buffer buf
-          (let ((status (bound-and-true-p url-http-response-status)))
-            (when (and status (>= status 400))
-              (error "HTTP error %d from %s" status url))
-            (goto-char (point-min))
-            (unless (re-search-forward "\r?\n\r?\n" nil t)
-              (error "Malformed HTTP response from %s" url))
-            (let ((header-end (point)))
-              (list :status status
-                    :etag (save-excursion
-                            (goto-char (point-min))
-                            (let ((case-fold-search t))
-                              (when (re-search-forward
-                                     "^ETag:[ \t]*\\([^\r\n]*\\)"
-                                     header-end t)
-                                (match-string 1))))
-                    :body (buffer-substring-no-properties
-                           header-end (point-max))))))
+        (with-current-buffer buf (gnaw--http-parse-reply url))
       (kill-buffer buf))))
+
+(defun gnaw--http-fetch-async (url head callback)
+  "Fetch URL in the background, then pass CALLBACK one reply plist.
+The plist carries :status :body :etag like `gnaw--http-fetch', or
+just :error with a description when the fetch failed.  Non-nil HEAD
+sends a HEAD request.  A watchdog enforces `gnaw-http-timeout':
+`url-retrieve' alone would wait on a hung connection forever."
+  (let* ((coding-system-for-read 'binary)
+         (url-request-method (if head "HEAD" "GET"))
+         (finished nil)
+         timer buf)
+    (cl-flet ((finish (reply)
+                (unless finished
+                  (setq finished t)
+                  (when (timerp timer) (cancel-timer timer))
+                  (funcall callback reply))))
+      (setq buf (url-retrieve
+                 url
+                 (lambda (status)
+                   (let ((reply (condition-case err
+                                    (if-let* ((e (plist-get status :error)))
+                                        (list :error (error-message-string e))
+                                      (gnaw--http-parse-reply url))
+                                  (error (list :error (error-message-string
+                                                       err))))))
+                     (kill-buffer (current-buffer))
+                     (finish reply)))
+                 nil t))
+      ;; `run-at-time' fires a nil delay immediately: no timeout
+      ;; configured means no watchdog at all.
+      (setq timer (and gnaw-http-timeout
+                       (run-at-time
+                        gnaw-http-timeout nil
+                        (lambda ()
+                          (when (buffer-live-p buf)
+                            (when-let* ((proc (get-buffer-process buf)))
+                              (delete-process proc))
+                            (kill-buffer buf))
+                          (finish (list :error
+                                        (format "no response after %ss"
+                                                gnaw-http-timeout))))))))))
 
 (defun gnaw--http-body (url)
   "Return the raw HTTP body bytes of URL.
@@ -513,16 +566,27 @@ only the opaque value decides whether the content changed."
   (and a b (equal (string-remove-prefix "W/" a)
                   (string-remove-prefix "W/" b))))
 
+(defun gnaw--commit-json-reply (reply cache-file)
+  "Write the JSON body of HTTP REPLY to CACHE-FILE, then its ETag.
+Parse before writing -- a malformed download (truncated body, error
+page) must not replace a valid cache -- and save the ETag only
+after, so a failed write leaves the old one and the next refresh
+still sees the stale cache.  Return `changed' when CACHE-FILE's
+content changed, `refetched' when it was byte-identical."
+  (let ((body (decode-coding-string (plist-get reply :body) 'utf-8)))
+    (gnaw--parse-json-string body)
+    (let ((wrote (gnaw--write-json-to-file body cache-file)))
+      (gnaw--save-validators cache-file (plist-get reply :etag))
+      (if wrote 'changed 'refetched))))
+
 (defun gnaw--refresh-cache (url cache-file &optional force)
   "Refresh CACHE-FILE from URL, revalidating with a HEAD request.
 When an ETag was saved by a previous refresh (and FORCE is nil),
 first ask the server for the headers only and compare ETags locally:
 an unchanged source costs a HEAD round-trip instead of a download.
-Otherwise download, write the JSON text to CACHE-FILE, then save
-the new ETag -- in that order, so a failed write leaves the old ETag
-and the next refresh still sees the stale cache.  Return `unchanged'
-when the saved ETag is still current, `changed' when the download
-altered CACHE-FILE, and `refetched' when it was byte-identical."
+Otherwise download and commit (see `gnaw--commit-json-reply').
+Return `unchanged' when the saved ETag is still current, else the
+commit's outcome."
   (let ((etag (unless force
                 (plist-get (gnaw--read-validators cache-file) :etag))))
     (if (and etag
@@ -535,14 +599,53 @@ altered CACHE-FILE, and `refetched' when it was byte-identical."
                                             (gnaw--http-fetch url 'head))
                                           :etag)))
         'unchanged
-      (let* ((resp (gnaw--http-fetch url))
-             (body (decode-coding-string (plist-get resp :body) 'utf-8)))
-        ;; Parse before writing: a malformed download (truncated
-        ;; body, error page) must not replace a valid cache.
-        (gnaw--parse-json-string body)
-        (let ((wrote (gnaw--write-json-to-file body cache-file)))
-          (gnaw--save-validators cache-file (plist-get resp :etag))
-          (if wrote 'changed 'refetched))))))
+      (gnaw--commit-json-reply (gnaw--http-fetch url) cache-file))))
+
+(defun gnaw--update-source (source force callback)
+  "Refresh SOURCE's cache in the background; CALLBACK gets the outcome.
+The outcome is `changed', `unchanged', `refetched' as in
+`gnaw--refresh-cache', or `failed' -- the failure is also messaged.
+Follows the same sequence asynchronously: HEAD revalidation by saved
+ETag unless FORCE, then a download parsed before it may overwrite
+the cache."
+  (let* ((cache-file (gnaw--source-to-cache-file source))
+         (etag (unless force
+                 (plist-get (gnaw--read-validators cache-file) :etag))))
+    (cl-flet ((download ()
+                (gnaw--http-fetch-async
+                 source nil
+                 (lambda (reply)
+                   (funcall
+                    callback
+                    (condition-case err
+                        (if-let* ((e (plist-get reply :error)))
+                            (error "%s" e)
+                          (gnaw--commit-json-reply reply cache-file))
+                      (error
+                       (message "gnaw: failed updating %s: %s"
+                                source (error-message-string err))
+                       'failed)))))))
+      (if etag
+          ;; Revalidation is only an optimization: when the HEAD fails
+          ;; (proxy rejecting the method, timeout), fall through to the
+          ;; full GET instead of failing the refresh.
+          (gnaw--http-fetch-async
+           source 'head
+           (lambda (reply)
+             (if (and (not (plist-get reply :error))
+                      (gnaw--etag-equal etag (plist-get reply :etag)))
+                 (funcall callback 'unchanged)
+               ;; This runs from an async callback, outside the
+               ;; dispatch guard of `gnaw-update': a synchronous error
+               ;; here must still reach CALLBACK, or the pending
+               ;; counter never comes down.
+               (condition-case err
+                   (download)
+                 (error
+                  (message "gnaw: failed updating %s: %s"
+                           source (error-message-string err))
+                  (funcall callback 'failed))))))
+        (download)))))
 
 (defun gnaw--write-json-to-file (json file)
   "Write JSON, a string, to FILE as UTF-8.
@@ -615,11 +718,44 @@ resolving it, and so on."
     ('duplicated-by "duplicates it")
     (_ (and kind (format "%s" kind)))))
 
+(defvar gnaw--reports-cache (make-hash-table :test 'equal)
+  "Cache of `gnaw--extract-reports' results, keyed by source.
+Each value is (FILE-MTIME CONFIG-MTIME PAIRS), the modification
+times of the source's file and of config.edn (which carries the
+source letters) when PAIRS was extracted.")
+
+(defun gnaw--config-mtime ()
+  "Return config.edn's modification time, or nil when absent."
+  (gnaw--file-mtime (expand-file-name "config.edn" gnaw-config-dir)))
+
 (defun gnaw--extract-reports (source)
   "Extract published reports from SOURCE as (MID . INFO) pairs.
 Closed reports (status below 4, flags C, R, E or S) are kept when
 SOURCE lists them, as an all.json does; the list hides them until
-a query asks for them (see `gnaw-list--display-reports')."
+a query asks for them (see `gnaw-list--display-reports').
+The result is cached until the source's file or config.edn changes
+on disk, so a reload does not re-parse unchanged JSON.  Callers get
+the cached list itself: copy before mutating (as `gnaw-reports'
+does for `mapcan')."
+  (let* ((file (if (gnaw--http-url-p source)
+                   (gnaw--source-to-cache-file source)
+                 source))
+         (mtime (gnaw--file-mtime file))
+         (cmtime (gnaw--config-mtime))
+         (cached (gethash source gnaw--reports-cache)))
+    (if (and mtime
+             (equal (nth 0 cached) mtime)
+             (equal (nth 1 cached) cmtime))
+        (nth 2 cached)
+      (let ((pairs (gnaw--extract-reports-1 source)))
+        ;; Re-stat: `gnaw--read-json' populates a missing cache file.
+        (puthash source
+                 (list (gnaw--file-mtime file) cmtime pairs)
+                 gnaw--reports-cache)
+        pairs))))
+
+(defun gnaw--extract-reports-1 (source)
+  "Parse SOURCE and extract its report pairs (see `gnaw--extract-reports')."
   (let* ((data (gnaw--read-json source))
          (fv (alist-get 'bone-format data))
          (sname (alist-get 'source data))
@@ -712,7 +848,10 @@ visible explanation."
   (mapcan
    (lambda (source)
      (condition-case err
-         (gnaw--extract-reports source)
+         ;; Copy: `mapcan' splices destructively, and the extracted
+         ;; list belongs to `gnaw--reports-cache' -- nconc'ing it in
+         ;; place would chain the caches together, then loop them.
+         (append (gnaw--extract-reports source) nil)
        (error
         (display-warning
          'gnaw
@@ -722,49 +861,91 @@ visible explanation."
         nil)))
    (gnaw-sources)))
 
-(defun gnaw-update (&optional force)
-  "Refresh the local cache from remote JSON sources.
-Each source is first revalidated with a HEAD request comparing the
-server's ETag to the saved one, so an unchanged source costs no
-download.  With a prefix argument FORCE, skip the revalidation and
-re-download every source.  Run `gnaw-after-update-hook' when
-finished."
+(defvar gnaw--update-pending nil
+  "Number of sources the running `gnaw-update' still waits on, or nil.")
+
+(defun gnaw-update (&optional force callback)
+  "Refresh the local cache from remote JSON sources, in the background.
+The sources download in parallel while Emacs stays responsive; each
+is first revalidated with a HEAD request comparing the server's ETag
+to the saved one, so an unchanged source costs no download.  With a
+prefix argument FORCE, skip the revalidation and re-download every
+source.  Once every source finished, run `gnaw-after-update-hook',
+then CALLBACK when non-nil."
   (interactive "P")
-  (let ((sources (gnaw-sources))
-        (changed 0)
-        (failed 0))
-    (dolist (source sources)
-      (when (gnaw--http-url-p source)
-        (message "gnaw: updating cache for %s..." source)
+  (when gnaw--update-pending
+    (user-error "gnaw: an update is already running"))
+  (let* ((sources (cl-remove-if-not #'gnaw--http-url-p (gnaw-sources)))
+         (changed 0)
+         (failed 0)
+         (done (lambda (msg)
+                 (setq gnaw--update-pending nil)
+                 (run-hooks 'gnaw-after-update-hook)
+                 (message "%s" msg)
+                 (when callback (funcall callback))))
+         (finish (lambda (outcome)
+                   (pcase outcome
+                     ('changed (cl-incf changed))
+                     ('failed (cl-incf failed)))
+                   (when (zerop (cl-decf gnaw--update-pending))
+                     (funcall done
+                              (format "gnaw: cache refreshed%s%s."
+                                      (if (zerop changed)
+                                          ", no changes"
+                                        (format " (%d source%s changed)"
+                                                changed
+                                                (if (= changed 1) "" "s")))
+                                      (if (zerop failed)
+                                          ""
+                                        (format ", %d failed" failed))))))))
+    (if (null sources)
+        (funcall done "gnaw: no remote source to update")
+      (setq gnaw--update-pending (length sources))
+      (message "gnaw: updating %d source%s in the background..."
+               (length sources) (if (cdr sources) "s" ""))
+      (dolist (source sources)
+        ;; A synchronous failure (malformed URL) must still count
+        ;; down, or `gnaw--update-pending' would block updates forever.
         (condition-case err
-            (let ((cache-file (gnaw--source-to-cache-file source)))
-              (pcase (gnaw--refresh-cache source cache-file force)
-                ('changed
-                 (setq changed (1+ changed))
-                 (message "gnaw: cache updated for %s" source))
-                ;; `unchanged' and `refetched' alike: the cache content
-                ;; is still current.
-                (_
-                 (message "gnaw: cache up to date for %s" source))))
+            (gnaw--update-source source force finish)
           (error
-           (setq failed (1+ failed))
            (message "gnaw: failed updating %s: %s"
-                    source (error-message-string err))))))
-    (run-hooks 'gnaw-after-update-hook)
-    (message "gnaw: cache refreshed%s%s."
-             (if (zerop changed)
-                 ", no changes"
-               (format " (%d source%s changed)"
-                       changed (if (= changed 1) "" "s")))
-             (if (zerop failed)
-                 ""
-               (format ", %d failed" failed)))))
+                    source (error-message-string err))
+           (funcall finish 'failed)))))))
 
 ;;; State file (state.edn)
 
+(defvar gnaw--state-cache nil
+  "List (MTIME ALIST TABLE) caching the last `gnaw-read-state' read.
+MTIME is state.edn's modification time when ALIST was parsed and
+TABLE indexes ALIST's entries by message-id.  The gnaw CLI shares
+the file, so the mtime decides freshness.")
+
+(defun gnaw--state-index (state)
+  "Return STATE's entries in a hash table keyed by message-id."
+  (let ((table (make-hash-table :test 'equal :size (length state))))
+    (dolist (kv state table)
+      (puthash (car kv) (cdr kv) table))))
+
 (defun gnaw-read-state ()
-  "Read and return the gnaw state alist, or nil."
-  (gnaw--read-edn-file (expand-file-name "state.edn" gnaw-config-dir)))
+  "Read and return the gnaw state alist, or nil.
+The result is cached until state.edn changes on disk (the gnaw CLI
+shares the file); `gnaw--state-table' serves the indexed view.  A
+rewrite landing within the filesystem's mtime granularity would go
+unnoticed until the next bump; sub-second timestamps on modern
+filesystems make that window negligible."
+  (let* ((file (expand-file-name "state.edn" gnaw-config-dir))
+         (mtime (gnaw--file-mtime file)))
+    (if (and gnaw--state-cache (equal (car gnaw--state-cache) mtime))
+        (nth 1 gnaw--state-cache)
+      (let ((state (gnaw--read-edn-file file)))
+        (setq gnaw--state-cache (list mtime state (gnaw--state-index state)))
+        state))))
+
+(defun gnaw--state-table ()
+  "Return the current state indexed by message-id in a hash table."
+  (gnaw-read-state)
+  (nth 2 gnaw--state-cache))
 
 (defun gnaw--read-state-for-update ()
   "Return the state alist for a read-modify-write cycle.
@@ -792,7 +973,11 @@ shares the file, never reads a half-written state.edn."
                              state "\n ")
                   "}\n")))
       (set-file-modes tmp (or (file-modes file) #o644))
-      (rename-file tmp file t))))
+      (rename-file tmp file t))
+    ;; Refresh the cache from the state just written, saving the next
+    ;; read a re-parse.
+    (setq gnaw--state-cache
+          (list (gnaw--file-mtime file) state (gnaw--state-index state)))))
 
 ;;; Local marks (sticky / dismiss)
 
@@ -2924,6 +3109,12 @@ width, so the trailing Created column stays at the right edge."
                              (nth 2 c)))
                      cols))))
 
+(defun gnaw--report-cells (mid info entry cols)
+  "Return the row cell strings for a report.
+MID, INFO and ENTRY are the report's message-id, plist and state
+entry; COLS the active columns."
+  (mapcar (lambda (c) (gnaw--list-cell (nth 3 c) info entry mid)) cols))
+
 (defun gnaw--row-faces (entry info)
   "Return the whole-row face list for a report, nil when plain.
 ENTRY is the report's state.edn entry, INFO its report plist.  The
@@ -2941,18 +3132,15 @@ italic, ignoring the filter query and the dismissed filter.  Related
 reports absent from the loaded sources (e.g. closed ones when the
 source is an open-reports JSON) get a placeholder row built from the
 relation metadata, shown in `gnaw-missing' face."
-  (let ((state (gnaw-read-state))
+  (let ((state (gnaw--state-table))
         (cols (gnaw--active-columns))
         found rows)
     (dolist (p gnaw-list--reports)
       (when (member (car p) gnaw-list--related-mids)
         (push (car p) found)
-        (let* ((entry (cdr (assoc (car p) state)))
+        (let* ((entry (gethash (car p) state))
                (faces (gnaw--row-faces entry (cdr p)))
-               (cells (mapcar (lambda (c)
-                                (gnaw--list-cell (nth 3 c) (cdr p)
-                                                 entry (car p)))
-                              cols)))
+               (cells (gnaw--report-cells (car p) (cdr p) entry cols)))
           (when faces
             (setq cells (mapcar (lambda (s) (propertize s 'face faces))
                                 cells)))
@@ -3024,7 +3212,7 @@ or a flags: filter naming a close flag does."
   "Return `tabulated-list-entries' for the full report list.
 Closed reports enter the list only through a query asking for
 them (see `gnaw-list--display-reports')."
-  (let ((state (gnaw-read-state))
+  (let ((state (gnaw--state-table))
         (cols (gnaw--active-columns))
         (qgroups (and gnaw-list--query (gnaw--query-compile gnaw-list--query)))
         (pairs (gnaw-list--display-reports))
@@ -3039,7 +3227,7 @@ them (see `gnaw-list--display-reports')."
                 ;; match any of MATCH-PAIRS, so a folded series stays
                 ;; visible when any member matches.  Unfolding it then
                 ;; filters each member individually.
-                (let* ((entry   (cdr (assoc (car pair) state)))
+                (let* ((entry   (gethash (car pair) state))
                        (dismiss (and (assq :dismiss entry) t)))
                   (when (and (or gnaw-list--show-dismissed (not dismiss))
                              (or (null qgroups)
@@ -3047,10 +3235,8 @@ them (see `gnaw-list--display-reports')."
                                   (lambda (mp)
                                     (gnaw--query-match-p qgroups (car mp) (cdr mp)))
                                   (or match-pairs (list pair)))))
-                    (let ((cells (mapcar (lambda (c)
-                                           (gnaw--list-cell (nth 3 c) (cdr pair)
-                                                            entry (car pair)))
-                                         cols))
+                    (let ((cells (gnaw--report-cells (car pair) (cdr pair)
+                                                     entry cols))
                           (faces (gnaw--row-faces entry (cdr pair))))
                       (when faces
                         (setq cells (mapcar (lambda (s) (propertize s 'face faces))
@@ -3207,10 +3393,12 @@ whole."
 (defun gnaw-list-refresh (&optional update)
   "Re-render the list from the in-memory reports and current state.
 Does not re-read the report cache; use `gnaw-list-reload' for that.
-Non-nil UPDATE reprints only the rows that changed, which is much
-faster when few did -- correct as long as the row contents and the
-sort key stayed put, as when only the filter moved (the live
-preview), since a row then only ever appears or disappears whole."
+Non-nil UPDATE only prints the rows that appeared or disappeared,
+which is much faster when few did.  A row whose report survived is
+never reprinted, even when its content or faces changed -- that is
+`tabulated-list-print's update contract -- so only the live filter
+preview may pass it, where a row only ever appears or disappears
+whole; every command changing rows in place needs the full render."
   (interactive)
   ;; Guard every list command funneling through here: `tabulated-list-print'
   ;; would erase whatever buffer is current.
@@ -3470,11 +3658,20 @@ prefix argument, clear the active filter without prompting."
     (message "gnaw: filter cleared")))
 
 (defun gnaw-list-update (&optional force)
-  "Refresh the remote cache, then reload the list.
-With a prefix argument FORCE, re-download sources unconditionally."
+  "Refresh the remote cache in the background, then reload the list.
+With a prefix argument FORCE, re-download sources unconditionally.
+Emacs stays responsive while the sources download; the list reloads
+itself once the update finished.  Any missing source letters are
+asked for now, while the user is at the keyboard: the reload runs
+in a callback, outside any interaction, so it must not prompt."
   (interactive "P")
-  (gnaw-update force)
-  (gnaw-list-reload))
+  (gnaw--ensure-source-letters)
+  (let ((buf (current-buffer)))
+    (gnaw-update force
+                 (lambda ()
+                   (when (buffer-live-p buf)
+                     (with-current-buffer buf
+                       (gnaw-list-reload t)))))))
 
 (defun gnaw-list-limit-type (&optional add)
   "Limit the list to a chosen report type.
@@ -4220,7 +4417,7 @@ every row: a flag toggle only changes this one cell."
      gnaw-list--mark-index
      (if (member mid gnaw-list--flagged)
          "D"
-       (gnaw-mark-prefix (cdr (assoc mid (gnaw-read-state)))))
+       (gnaw-mark-prefix (gethash mid (gnaw--state-table))))
      t)))
 
 (defun gnaw-list-flag-dismiss ()
