@@ -1979,12 +1979,12 @@ Set by `gnaw--list-format'.  Buffer-local in use.")
   "Face for sticky reports in the report list."
   :group 'gnaw)
 
-(defface gnaw-dismissed '((t :slant italic))
+(defface gnaw-dismissed '((t :inherit shadow))
   "Face for dismissed reports when they are shown in the report list."
   :group 'gnaw)
 
 (defface gnaw-closed '((t :slant italic))
-  "Face for closed reports in the related-reports view."
+  "Face for closed reports, in the report list and the related view."
   :group 'gnaw)
 
 (defface gnaw-missing '((t :inherit shadow :slant italic))
@@ -1993,8 +1993,9 @@ Their placeholder rows are built from the relation metadata only."
   :group 'gnaw)
 
 ;; The cell faces below inherit standard faces instead of setting
-;; colors, so the list follows the user's theme.  Sticky and dismissed
-;; rows override them with their uniform whole-row face.
+;; colors, so the list follows the user's theme.  Sticky, dismissed and
+;; closed rows override them with the whole-row faces computed by
+;; `gnaw--row-faces'.
 
 (defface gnaw-type-bug '((t :inherit font-lock-warning-face))
   "Face for the Type cell of bug reports."
@@ -2923,6 +2924,16 @@ width, so the trailing Created column stays at the right edge."
                              (nth 2 c)))
                      cols))))
 
+(defun gnaw--row-faces (entry info)
+  "Return the whole-row face list for a report, nil when plain.
+ENTRY is the report's state.edn entry, INFO its report plist.  The
+sticky or dismissed mark face combines with `gnaw-closed' when the
+report is closed, so a marked closed row keeps both cues."
+  (delq nil
+        (list (cond ((assq :sticky entry) 'gnaw-sticky)
+                    ((assq :dismiss entry) 'gnaw-dismissed))
+              (and (gnaw--closed-p info) 'gnaw-closed))))
+
 (defun gnaw--list-entries-related ()
   "Return `tabulated-list-entries' for the related-reports view.
 Show the reports of `gnaw-list--related-mids' only, closed ones in
@@ -2937,10 +2948,7 @@ relation metadata, shown in `gnaw-missing' face."
       (when (member (car p) gnaw-list--related-mids)
         (push (car p) found)
         (let* ((entry (cdr (assoc (car p) state)))
-               (faces (delq nil
-                            (list (cond ((assq :sticky entry) 'gnaw-sticky)
-                                        ((assq :dismiss entry) 'gnaw-dismissed))
-                                  (and (gnaw--closed-p (cdr p)) 'gnaw-closed))))
+               (faces (gnaw--row-faces entry (cdr p)))
                (cells (mapcar (lambda (c)
                                 (gnaw--list-cell (nth 3 c) (cdr p)
                                                  entry (car p)))
@@ -3032,7 +3040,6 @@ them (see `gnaw-list--display-reports')."
                 ;; visible when any member matches.  Unfolding it then
                 ;; filters each member individually.
                 (let* ((entry   (cdr (assoc (car pair) state)))
-                       (sticky  (and (assq :sticky entry) t))
                        (dismiss (and (assq :dismiss entry) t)))
                   (when (and (or gnaw-list--show-dismissed (not dismiss))
                              (or (null qgroups)
@@ -3043,12 +3050,11 @@ them (see `gnaw-list--display-reports')."
                     (let ((cells (mapcar (lambda (c)
                                            (gnaw--list-cell (nth 3 c) (cdr pair)
                                                             entry (car pair)))
-                                         cols)))
-                      (cond
-                       (sticky  (setq cells (mapcar (lambda (s) (propertize s 'face 'gnaw-sticky))
-                                                    cells)))
-                       (dismiss (setq cells (mapcar (lambda (s) (propertize s 'face 'gnaw-dismissed))
-                                                    cells))))
+                                         cols))
+                          (faces (gnaw--row-faces entry (cdr pair))))
+                      (when faces
+                        (setq cells (mapcar (lambda (s) (propertize s 'face faces))
+                                            cells)))
                       (push (list pair (vconcat cells)) rows))))))
       (dolist (p pairs)
         (let ((sid (gnaw--series-id (cdr p))))

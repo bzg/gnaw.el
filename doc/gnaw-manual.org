@@ -263,10 +263,11 @@ Filtering and sorting (see [[*Searching]]):
 - {{{kbd(c)}}} (~gnaw-list-limit-closed~) ::
   #+kindex: c
   #+findex: gnaw-list-limit-closed
-  Only the closed reports (canceled, resolved...).  Closed reports
-  are loaded when a source lists them (e.g. an =all.json= report
-  file) and stay out of the list until a query names a close
-  flag (=flags:E=) or the =closed:= key, as this command does.
+  Only the closed reports (canceled, resolved...), shown in italic.
+  Closed reports are loaded when a source lists them (e.g. an
+  =all.json= report file) and stay out of the list until a query
+  names a close flag (=flags:E=) or the =closed:= key, as this
+  command does.
 
 - {{{kbd(.)}}} (~gnaw-list-limit-awaiting~) ::
   #+kindex: .
@@ -370,7 +371,7 @@ Refreshing and help:
 Two mutually exclusive local marks drive the view: *sticky* promotes
 a report (=!= in bold in the Mark column, exported to =todo.org= by
 the gnaw CLI), *dismiss* hides it until {{{kbd(_)}}} reveals them
-(=d= in italics).
+(=d=, in a dimmed color).
 
 Like in Dired, {{{kbd(d)}}} only /flags/ a report (shown =D=) and
 {{{kbd(x)}}} dismisses all the flagged ones at once; {{{kbd(D)}}}
