@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.34.0
+;; Version: 0.34.1
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -75,7 +75,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.34.0")
+(defconst gnaw-version (or (package-get-version) "0.34.1")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -1126,6 +1126,15 @@ shares the file, never reads a half-written state.edn."
           (e e)
           (n n))))
 
+(defun gnaw--author-display (info)
+  "Author display name for INFO: `:from-name', or the address local part.
+Mails sent with a bare address (no display name) have no :from-name in
+the export, so fall back to the part of :from before the @, as the HTML
+export does."
+  (let ((n (plist-get info :from-name)))
+    (if (and n (not (string-empty-p n))) n
+      (car (split-string (or (plist-get info :from) "") "@")))))
+
 (defun gnaw--enrich-entry (existing info)
   "Refresh metadata from INFO in EXISTING state entry."
   (let ((entry (copy-alist existing)))
@@ -2076,10 +2085,7 @@ INFO's subject yields no words to name the branch after."
               (what (gnaw--shorten-subject subject))
               ((not (string-empty-p what))))
     (let* ((sender (replace-regexp-in-string
-                    "['\"]" ""
-                    (let ((n (plist-get info :from-name)))
-                      (if (and n (not (string-empty-p n))) n
-                        (car (split-string (or (plist-get info :from) "") "@"))))))
+                    "['\"]" "" (gnaw--author-display info)))
            (initials (mapconcat (lambda (w) (downcase (substring w 0 1)))
                                 (seq-take (split-string sender) 2)
                                 ""))
@@ -3243,6 +3249,7 @@ of `gnaw-list-mode-map')."
                       (if d (propertize (substring d 0 (min 10 (length d)))
                                         'face 'gnaw-date)
                         "")))
+    (:from-name (gnaw--author-display info))
     (:subject (let ((s (or (plist-get info :subject) "")))
                 (cond ((plist-get info :series-head) (concat "▾ " s))
                       ((plist-get info :series-child) (concat "  " s))
