@@ -312,7 +312,11 @@ Filtering and sorting (see [[*Searching]]):
 - {{{kbd(|)}}} (~gnaw-save-preset-filter~) ::
   #+kindex: |
   #+findex: gnaw-save-preset-filter
+  #+findex: gnaw-edit-preset-filters
   Save the active filter as a preset (see ~gnaw-preset-filters~).
+  With {{{kbd(C-u)}}}, edit all the presets in a buffer instead
+  (~gnaw-edit-preset-filters~), one query per line; {{{kbd(C-c C-c)}}}
+  saves the list and {{{kbd(C-c C-k)}}} cancels.
 
 - {{{kbd(s)}}} (~gnaw-list-sort~) ::
   #+kindex: s
@@ -560,6 +564,12 @@ query, a related-reports narrowing, or the full list.
 {{{kbd(\)}}} prompts to apply one (~gnaw-select-preset-filter~), and
 {{{kbd(|)}}} saves the active filter to the list for future sessions
 (~gnaw-save-preset-filter~), after letting you edit it.
+
+#+findex: gnaw-edit-preset-filters
+{{{kbd(C-u |)}}} (~gnaw-edit-preset-filters~) opens the whole list in
+a buffer, one query per line: add, change, reorder or delete lines,
+then type {{{kbd(C-c C-c)}}} to save the result for future sessions,
+or {{{kbd(C-c C-k)}}} to cancel.
 
 * Reading Messages
 :PROPERTIES:
@@ -854,8 +864,10 @@ All the ~defcustom~ options, by theme
 - ~gnaw-preset-filters~ ::
   #+vindex: gnaw-preset-filters
   Default: nil.  List of predefined filter query strings;
-  {{{kbd(\)}}} prompts to apply one (~gnaw-select-preset-filter~) and
-  {{{kbd(|)}}} saves the active filter here (~gnaw-save-preset-filter~).
+  {{{kbd(\)}}} prompts to apply one (~gnaw-select-preset-filter~),
+  {{{kbd(|)}}} saves the active filter here (~gnaw-save-preset-filter~)
+  and {{{kbd(C-u |)}}} edits the whole list in a buffer
+  (~gnaw-edit-preset-filters~).
 
 - ~gnaw-list-filter-live~ ::
   #+vindex: gnaw-list-filter-live
