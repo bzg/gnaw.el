@@ -3053,7 +3053,7 @@ recently created reports first."
   "Predefined filter queries for `gnaw-select-preset-filter'.
 A list of query strings in the syntax of `gnaw-list-filter' (for
 example \"type:patch\" or \"priority:3 urgent:\").  When nil, no presets
-are offered."
+are offered.  `gnaw-save-preset-filter' adds the active filter here."
   :type '(repeat string)
   :group 'gnaw)
 
@@ -3447,6 +3447,7 @@ them (see `gnaw-list--display-reports')."
     (define-key map "^" #'gnaw-sort)
     (define-key map "_" #'gnaw-list-toggle-dismissed)
     (define-key map "\\" #'gnaw-select-preset-filter)
+    (define-key map "|" #'gnaw-save-preset-filter)
     (define-key map "q" #'gnaw-list-quit)
     map)
   "Keymap for `gnaw-list-mode'.")
@@ -4760,6 +4761,7 @@ order."
      (gnaw-list-filter "filter with key:value tokens (C-u: clear the filter)")
      (gnaw-list-filter-transient "filter by one field (menu)")
      (gnaw-select-preset-filter "apply a preset filter")
+     (gnaw-save-preset-filter "save the active filter as a preset")
      (gnaw-list-limit-type "limit to a report type")
      (gnaw-list-filter-topic "filter by a topic, with completion")
      (gnaw-list-filter-acked "only the acked reports (toggle)")
@@ -4820,6 +4822,23 @@ Each preset is a query string in the syntax of `gnaw-list-filter'."
     (user-error "No preset filters defined; customize `gnaw-preset-filters'"))
   (gnaw-list-filter
    (completing-read "Preset filter: " gnaw-preset-filters nil t)))
+
+(defun gnaw-save-preset-filter (query)
+  "Save filter QUERY to `gnaw-preset-filters' for future sessions.
+Interactively, QUERY defaults to the active filter and can be edited
+before it is saved.  The updated list is saved with Customize, in
+`custom-file' or the init file."
+  (interactive (list (read-string "Save preset filter: " gnaw-list--query)))
+  (let ((query (string-trim (or query ""))))
+    (cond ((string-empty-p query)
+           (user-error "No filter query to save"))
+          ((member query gnaw-preset-filters)
+           (message "gnaw: preset filter already saved"))
+          (t
+           (customize-save-variable
+            'gnaw-preset-filters
+            (append gnaw-preset-filters (list query)))
+           (message "gnaw: preset filter saved: %s" query)))))
 
 (defun gnaw--resolve-reports-dir (input)
   "Return the reports directory URL (ending in /) for user INPUT.
