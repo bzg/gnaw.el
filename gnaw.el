@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.26.0
+;; Version: 0.34.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -75,7 +75,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.26.0")
+(defconst gnaw-version (or (package-get-version) "0.34.0")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -1788,6 +1788,20 @@ back on `dired' when magit is not loaded."
   :type 'boolean
   :group 'gnaw)
 
+(defcustom gnaw-am-undo-on-failure 'ask
+  "Whether a failed `gnaw-am-patches' run undoes its own setup.
+When t, or `ask' with the user's consent, a failed `git am' is
+aborted and the run's setup undone: the worktree it added is
+removed, else the previous checkout restored, and the branch it
+created deleted -- no trace is left in the repo.  When nil, or
+`ask' answered no, the repo is left mid-am for a manual fix
+\(resolve the conflicts, then `git am --continue' -- or `git am
+--abort')."
+  :type '(choice (const :tag "Ask" ask)
+                 (const :tag "Always" t)
+                 (const :tag "Never" nil))
+  :group 'gnaw)
+
 (defcustom gnaw-am-fold-trailers t
   "Whether `gnaw-am-patches' folds the collected trailers into commits.
 BONE collects the review trailers (Acked-by:, Reviewed-by:, ...)
@@ -2095,10 +2109,35 @@ callers display on failure."
     (let ((inhibit-read-only t)) (erase-buffer))
     (apply #'call-process "git" nil t nil args)))
 
+(defun gnaw--git-append (dir &rest args)
+  "Run git ARGS in DIR like `gnaw--git', appending to *gnaw-git*.
+The buffer's contents stay -- typically a failed command whose
+output must remain visible -- and a `$ git ...' line separates
+them from the new command's."
+  (with-current-buffer (get-buffer-create "*gnaw-git*")
+    (setq default-directory (file-name-as-directory dir))
+    (let ((inhibit-read-only t))
+      (goto-char (point-max))
+      (insert (format "\n$ git %s\n" (string-join args " "))))
+    (apply #'call-process "git" nil t nil args)))
+
 (defun gnaw--commit-in-repo-p (commit)
   "Non-nil when COMMIT exists in the git repo of `default-directory'."
   (zerop (call-process "git" nil nil nil
                        "cat-file" "-e" (concat commit "^{commit}"))))
+
+(defun gnaw--current-checkout (repo)
+  "Return REPO's checked-out branch name, or its commit when detached.
+Nil when neither resolves (a corrupt HEAD; an unborn HEAD still
+yields its branch name)."
+  (let ((default-directory repo))
+    (with-temp-buffer
+      (if (zerop (call-process "git" nil t nil
+                               "symbolic-ref" "--short" "-q" "HEAD"))
+          (string-trim (buffer-string))
+        (erase-buffer)
+        (when (zerop (call-process "git" nil t nil "rev-parse" "HEAD"))
+          (string-trim (buffer-string)))))))
 
 (defun gnaw--maybe-checkout-base (files)
   "Offer to check out the base commit recorded in patch FILES.
@@ -2155,6 +2194,47 @@ PATCHES restricts the operation to these `:patches' entries."
 
 (declare-function magit-status-setup-buffer "magit-status" (&optional directory))
 
+(defun gnaw--am-undo (repo am-dir use-worktree branch orig)
+  "Undo the setup of a failed `gnaw-am-patches' run.
+Abort the pending am session in AM-DIR, then remove the worktree
+when USE-WORKTREE, else restore the ORIG checkout in REPO, and
+delete the BRANCH created for the run (BRANCH and ORIG may be
+nil).  Each step appends its output to the *gnaw-git* buffer,
+below the failed am's; a failing step signals a `user-error',
+leaving the rest to the user."
+  (cl-flet ((git! (dir &rest args)
+              (unless (zerop (apply #'gnaw--git-append dir args))
+                (user-error "Undo failed (git %s); see the *gnaw-git* buffer"
+                            (car args)))))
+    ;; An am failing before its session starts (patch format
+    ;; detection, say) leaves nothing to abort; tolerate that one.
+    (gnaw--git-append am-dir "am" "--abort")
+    (if use-worktree
+        (git! repo "worktree" "remove" "--force" (directory-file-name am-dir))
+      (when orig (git! repo "checkout" orig)))
+    (when branch (git! repo "branch" "-D" branch))))
+
+(defun gnaw--am-failed (repo am-dir use-worktree branch orig)
+  "Report a failed `git am' and offer to undo the run's setup.
+Undoing is governed by `gnaw-am-undo-on-failure'; the arguments
+are those of `gnaw--am-undo'.  The *gnaw-git* buffer showing the
+failure is already displayed, so the user can read it while
+answering."
+  (let ((undo (cond (use-worktree
+                     (concat "remove the worktree"
+                             (and branch (format " and branch %s" branch))))
+                    (branch (concat (and orig (format "back to %s, " orig))
+                                    (format "delete branch %s" branch)))
+                    (orig (format "back to %s" orig)))))
+    (if (and undo gnaw-am-undo-on-failure
+             (or (not (eq gnaw-am-undo-on-failure 'ask))
+                 (y-or-n-p (format "Git am failed; undo (%s)? " undo))))
+        (progn
+          (gnaw--am-undo repo am-dir use-worktree branch orig)
+          (message "gnaw: git am failed in %s; undone (%s)" am-dir undo))
+      (message "gnaw: git am failed in %s (run `git am --abort' to undo)"
+               am-dir))))
+
 (defun gnaw-am-patches (info &optional patches toggle-worktree)
   "Apply INFO's patches as commits with `git am'.
 First prompt for a branch to create (empty input keeps a detached
@@ -2167,8 +2247,9 @@ checkout untouched.  The review trailers collected by BONE, plus
 those synthesized from the report state per
 `gnaw-am-synthetic-trailers', are folded into the commits per
 `gnaw-am-fold-trailers'.  A successful run shows the directory
-applied in, per `gnaw-am-show-repo'.  PATCHES restricts the
-operation to these `:patches' entries."
+applied in, per `gnaw-am-show-repo'; a failed one offers to undo
+its branch and checkout per `gnaw-am-undo-on-failure'.  PATCHES
+restricts the operation to these `:patches' entries."
   (let ((files (gnaw--patch-files info "applying" patches)))
     (gnaw--confirm-incomplete-series info patches)
     (let* ((repo (gnaw--target-repo info))
@@ -2185,7 +2266,10 @@ operation to these `:patches' entries."
                        (file-name-as-directory
                         (expand-file-name
                          (funcall gnaw-am-read-worktree-function repo branch)))
-                     repo)))
+                     repo))
+           ;; What to come back to should the am fail and be undone; a
+           ;; worktree leaves the repo's checkout untouched.
+           (orig (and (not use-worktree) (gnaw--current-checkout repo))))
       (when (and use-worktree (file-exists-p am-dir))
         (user-error "Worktree directory %s already exists" am-dir))
       (unless (zerop (apply #'gnaw--git repo
@@ -2230,8 +2314,7 @@ operation to these `:patches' entries."
                           (magit-status-setup-buffer am-dir)
                         (dired am-dir))))
                 (display-buffer "*gnaw-git*")
-                (message "gnaw: git am failed in %s (run `git am --abort' to undo)"
-                         am-dir)))
+                (gnaw--am-failed repo am-dir use-worktree branch orig)))
           ;; The folded files are temp copies; the cached originals stay.
           (dolist (f am-files)
             (unless (member f files) (delete-file f))))))))
