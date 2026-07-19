@@ -673,7 +673,18 @@ thread is never upgraded: it suppresses the synthetic line instead.
 A successful =git am= pops ~magit-status~ (or ~dired~ when magit is
 not loaded) on the directory it applied in; set ~gnaw-am-show-repo~ to
 nil to keep the plain message.  See the =*gnaw-git*= buffer for the
-output; on a failed =git am=, run =git am --abort=.
+output.
+
+#+vindex: gnaw-am-undo-on-failure
+#+cindex: failed git am, undoing
+When =git am= fails, gnaw shows the failure and offers to undo the
+run's setup: the am session is aborted, the worktree it added removed,
+else the previous checkout restored, and the branch it created
+deleted---no trace is left in the repo.  Answer no to keep the mid-am
+state instead and fix it by hand (resolve the conflicts, then =git am
+--continue=---or =git am --abort=).  Set ~gnaw-am-undo-on-failure~ to
+t to always undo without asking, or to nil to always keep the mid-am
+state.
 
 * Configuration
 :PROPERTIES:
@@ -784,6 +795,11 @@ All the ~defcustom~ options, by theme
   #+vindex: gnaw-am-show-repo
   Default: t.  Show the directory (~magit-status~ or ~dired~) after a
   successful =git am=.
+
+- ~gnaw-am-undo-on-failure~ ::
+  #+vindex: gnaw-am-undo-on-failure
+  Default: =ask=.  Whether a failed =git am= undoes the run's setup:
+  branch, checkout and worktree (=ask=, =nil= or =t=).
 
 - ~gnaw-am-synthetic-trailers~ ::
   #+vindex: gnaw-am-synthetic-trailers
