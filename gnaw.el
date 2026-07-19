@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.34.1
+;; Version: 0.35.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -75,7 +75,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.34.1")
+(defconst gnaw-version (or (package-get-version) "0.35.0")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -3142,7 +3142,8 @@ recently created reports first."
   "Predefined filter queries for `gnaw-select-preset-filter'.
 A list of query strings in the syntax of `gnaw-list-filter' (for
 example \"type:patch\" or \"priority:3 urgent:\").  When nil, no presets
-are offered.  `gnaw-save-preset-filter' adds the active filter here."
+are offered.  `gnaw-save-preset-filter' adds the active filter here;
+`gnaw-edit-preset-filters' edits the whole list in a buffer."
   :type '(repeat string)
   :group 'gnaw)
 
@@ -4851,7 +4852,7 @@ order."
      (gnaw-list-filter "filter with key:value tokens (C-u: clear the filter)")
      (gnaw-list-filter-transient "filter by one field (menu)")
      (gnaw-select-preset-filter "apply a preset filter")
-     (gnaw-save-preset-filter "save the active filter as a preset")
+     (gnaw-save-preset-filter "save the active filter as a preset (C-u: edit all the presets in a buffer)")
      (gnaw-list-limit-type "limit to a report type")
      (gnaw-list-filter-topic "filter by a topic, with completion")
      (gnaw-list-filter-acked "only the acked reports (toggle)")
@@ -4913,22 +4914,92 @@ Each preset is a query string in the syntax of `gnaw-list-filter'."
   (gnaw-list-filter
    (completing-read "Preset filter: " gnaw-preset-filters nil t)))
 
-(defun gnaw-save-preset-filter (query)
+(defun gnaw-save-preset-filter (query &optional edit)
   "Save filter QUERY to `gnaw-preset-filters' for future sessions.
 Interactively, QUERY defaults to the active filter and can be edited
 before it is saved.  The updated list is saved with Customize, in
-`custom-file' or the init file."
-  (interactive (list (read-string "Save preset filter: " gnaw-list--query)))
-  (let ((query (string-trim (or query ""))))
-    (cond ((string-empty-p query)
-           (user-error "No filter query to save"))
-          ((member query gnaw-preset-filters)
-           (message "gnaw: preset filter already saved"))
-          (t
-           (customize-save-variable
-            'gnaw-preset-filters
-            (append gnaw-preset-filters (list query)))
-           (message "gnaw: preset filter saved: %s" query)))))
+`custom-file' or the init file.  With a prefix argument (non-nil
+EDIT), edit all the presets in a buffer instead
+\(`gnaw-edit-preset-filters')."
+  (interactive
+   (if current-prefix-arg
+       (list nil t)
+     (list (read-string "Save preset filter: " gnaw-list--query))))
+  (if edit
+      (gnaw-edit-preset-filters)
+    (let ((query (string-trim (or query ""))))
+      (cond ((string-empty-p query)
+             (user-error "No filter query to save"))
+            ((member query gnaw-preset-filters)
+             (message "gnaw: preset filter already saved"))
+            (t
+             (customize-save-variable
+              'gnaw-preset-filters
+              (append gnaw-preset-filters (list query)))
+             (message "gnaw: preset filter saved: %s" query))))))
+
+(defvar gnaw-preset-edit-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-c") #'gnaw-preset-edit-commit)
+    (define-key map (kbd "C-c C-k") #'gnaw-preset-edit-abort)
+    map)
+  "Keymap for `gnaw-preset-edit-mode'.")
+
+(define-derived-mode gnaw-preset-edit-mode text-mode "Gnaw-Presets"
+  "Major mode for editing `gnaw-preset-filters', one query per line.
+\\<gnaw-preset-edit-mode-map>\\[gnaw-preset-edit-commit] saves the \
+edited list, \\[gnaw-preset-edit-abort] discards it."
+  (setq header-line-format
+        (substitute-command-keys
+         "One filter query per line.  \
+\\<gnaw-preset-edit-mode-map>\\[gnaw-preset-edit-commit]: save, \
+\\[gnaw-preset-edit-abort]: cancel")))
+
+(defun gnaw-edit-preset-filters ()
+  "Edit `gnaw-preset-filters' in a buffer, one query per line.
+Add, change, reorder or delete lines freely; blank lines are
+ignored.  \\<gnaw-preset-edit-mode-map>\\[gnaw-preset-edit-commit] \
+saves the result for future sessions, \\[gnaw-preset-edit-abort] \
+discards the edits.
+Re-entering the command pops the existing buffer, keeping any
+unsaved edits."
+  (interactive)
+  (let ((buf (get-buffer-create "*gnaw preset filters*")))
+    (with-current-buffer buf
+      (unless (and (derived-mode-p 'gnaw-preset-edit-mode)
+                   (buffer-modified-p))
+        (erase-buffer)
+        (insert (string-join gnaw-preset-filters "\n"))
+        (unless (bobp) (insert "\n"))
+        (goto-char (point-min))
+        (gnaw-preset-edit-mode)
+        (set-buffer-modified-p nil)))
+    (pop-to-buffer buf)))
+
+(defun gnaw-preset-edit-commit ()
+  "Save the buffer's lines as `gnaw-preset-filters', then close the buffer.
+Blank lines are dropped and duplicates keep their first occurrence.
+The list is saved with Customize, in `custom-file' or the init file."
+  (interactive)
+  (unless (derived-mode-p 'gnaw-preset-edit-mode)
+    (user-error "Not in a gnaw preset filters buffer"))
+  (let ((presets (delete-dups
+                  (delete "" (mapcar
+                              #'string-trim
+                              (split-string (buffer-substring-no-properties
+                                             (point-min) (point-max))
+                                            "\n"))))))
+    (customize-save-variable 'gnaw-preset-filters presets)
+    (quit-window t)
+    (message "gnaw: preset filters saved (%d)" (length presets))))
+
+(defun gnaw-preset-edit-abort ()
+  "Close the preset filter buffer, discarding any edits."
+  (interactive)
+  (unless (derived-mode-p 'gnaw-preset-edit-mode)
+    (user-error "Not in a gnaw preset filters buffer"))
+  (quit-window t)
+  (message "gnaw: preset filter edit canceled"))
 
 (defun gnaw--resolve-reports-dir (input)
   "Return the reports directory URL (ending in /) for user INPUT.
