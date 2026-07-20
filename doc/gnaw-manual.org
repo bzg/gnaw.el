@@ -2,66 +2,59 @@
 #+subtitle: Release {{{version}}}
 #+author: Bastien Guerry
 #+language: en
-#+startup: overview literallinks
+#+startup: overview
 
 #+texinfo: @insertcopying
 
 * Introduction
-:PROPERTIES:
-:DESCRIPTION: What Gnaw is and how it fits with BONE.
-:END:
+
 #+cindex: introduction
 #+cindex: BONE
 
-: 3==3      <= A gnawed bone.
-
 [[https://codeberg.org/bzg/bone][BONE]] (/Backlog Of Notable Emails/) is a bug tracker that never asks
-anyone to file a bug.  Most trackers split a project's feedback in
-two: discussions happen on the list, while the "real" reports live
-behind a web form and an account.  BONE removes the split by watching
-the mailing list itself: a mail tagged =[BUG]=, =[PATCH]= or =[FR]=
-becomes a /report/, and the replies update it---through commands like
-=Confirmed.= or =Acked.= and review trailers like =Reviewed-by:=.
-The list stays the one place where things happen; the tracker is
-derived from it.  The essay [[https://bzg.fr/en/notes/the-issue-with-issue-trackers/][The issue with issue trackers]] explains
-the rationale.
+anyone to file a bug. Most trackers split a project's feedback in two:
+the discussions happen somewhere (on a list, on IRC or other (a)sync
+channels), while the "real" reports live behind a web form or another
+email address. BONE removes the need for this split by watching the
+mailing list itself: a mail tagged =[BUG]=, =[PATCH]= or =[FR]= becomes a
+/report/, and the replies update it---through commands like =Confirmed.=
+or =Acked.= and review trailers like =Reviewed-by:=. The list stays the
+one place where things happen; the tracker is derived from it[fn:1]. 
 
 #+cindex: reports.json
-BONE publishes the resulting reports as plain =reports.json= files.
-The tracker state is public data anyone can fetch: you can follow the
-bugs and patches of several projects without holding an account on
-several forges.
+BONE publishes the resulting reports as plain =reports.json= files. The
+tracker state is public data anyone can fetch: you can follow the bugs
+and patches of several projects without holding an account on several
+forges.
 
-=gnaw.el= is the Emacs way to work with those files.
-{{{kbd(M-x gnaw)}}} lists the reports of the sources you follow; from
-the list you can search them, read the underlying emails, view or
-apply the patches and attachments they carry, and organize your own
-work with local sticky and dismiss marks.
+=gnaw.el= is the Emacs way to work with those files. {{{kbd(M-x gnaw)}}} lists
+the reports of the sources you follow; from the list you can search
+them, read the underlying emails, view or apply the patches and
+attachments they carry, and organize your own work with local sticky
+and dismiss marks.
 
 #+cindex: front-ends
 Beyond the browser, this library is the data layer shared by mail
-front-ends like [[https://codeberg.org/bzg/gnus-gnaw][gnus-gnaw]], [[https://codeberg.org/bzg/notmuch-gnaw][notmuch-gnaw]] and [[https://codeberg.org/bzg/mu4e-gnaw][mu4e-gnaw]].  It:
+front-ends like [[https://codeberg.org/bzg/gnus-gnaw][gnus-gnaw]], [[https://codeberg.org/bzg/notmuch-gnaw][notmuch-gnaw]] and [[https://codeberg.org/bzg/mu4e-gnaw][mu4e-gnaw]]. It:
 
 - reads the gnaw configuration (=config.edn=) and report sources,
 - manages the local cache of remote =reports.json= files,
-- parses and serializes the EDN config and =state.edn= files shared
-  with the gnaw CLI,
+- parses and serializes the EDN config and =state.edn= files shared with
+  the gnaw CLI,
 - exposes the report list, the local-mark API and the MUA-independent
   presentation helpers (annotation string, topic filtering) the
   front-ends use.
 
 * Installation
-:PROPERTIES:
-:DESCRIPTION: Getting gnaw.el into your Emacs.
-:END:
+
 #+cindex: installation
 #+cindex: package-vc
 
 =gnaw.el= requires Emacs 28.1 or later, built with native JSON support.
 
-It is not on MELPA yet.  On Emacs 30 or later, install it straight
-from its git repository with the built-in [[info:emacs#Fetching Package Sources][package-vc]]; the =:doc=
-spec also builds and installs this manual as an Info page:
+On Emacs 30 or later, install it straight from its git repository with
+the built-in [[info:emacs#Fetching Package Sources][package-vc]]; the =:doc= spec also builds and installs this
+manual as an Info page:
 
 #+begin_src emacs-lisp
 (use-package gnaw
@@ -72,48 +65,44 @@ spec also builds and installs this manual as an Info page:
             :doc "doc/gnaw-manual.org"))))
 #+end_src
 
-You need the =:init= form because the =:vc= keyword of =use-package=
-does not support =:doc=.  Interactively, without the manual:
+You need the =:init= form because the =:vc= keyword of =use-package= does
+not support =:doc=. Interactively, without the manual:
 
 : M-x package-vc-install RET https://codeberg.org/bzg/gnaw.el RET
 
 Update later with {{{kbd(M-x package-vc-upgrade RET gnaw RET)}}}.
 
 * Getting Started
-:PROPERTIES:
-:DESCRIPTION: First run and interactive setup.
-:END:
+
 #+cindex: setup, interactive
 #+cindex: sources, configuring
 #+findex: gnaw
 
-{{{kbd(M-x gnaw)}}} opens the =*gnaw*= report browser.  With no source
+{{{kbd(M-x gnaw)}}} opens the =*gnaw*= report browser. With no source
 configured, it runs the full interactive setup:
 
 1. a source URL---a base URL, a =reports/meta.json=, or a
    =reports/...json= file (all resolve to the =reports/= directory);
-2. which report files to track, chosen from =meta.json='s
-   =reports-files= (default =all-open.json=; you can pick several);
+2. which report files to track, chosen from =meta.json='s =reports-files=
+   (default =all-open.json=; you can pick several);
 3. a source name (defaults to =meta.json='s =:source=);
 4. a letter identifying the source in the browser's =S= column
    (suggesting the first free letter of the name, so /Org mode ML/
    suggests =O=);
-5. one or more local git repositories for that source, used to
-   apply patches;
-6. how to open report mail (=auto=, =mua=, =gnus=, =notmuch=, =mu4e=
-   or =web=);
+5. one or more local git repositories for that source, used to apply
+   patches;
+6. how to open report mail (=auto=, =mua=, =gnus=, =notmuch=, =mu4e= or =web=);
 7. when =gnus= is chosen, the Gnus group holding the mails.
 
 The setup writes the source, its letter and the patch repository to
 =config.edn= (see [[*The configuration file]]).
 
 #+cindex: workflow, typical
-A typical session then goes: {{{kbd(G)}}} to refresh the sources,
-{{{kbd(/)}}} or the filter keys to narrow the list, {{{kbd(RET)}}} or
-{{{kbd(SPC)}}} to read a report's mail, {{{kbd(A)}}} to apply its
-patches, {{{kbd(!)}}} to keep a report in sight and {{{kbd(d)}}} then
-{{{kbd(x)}}} to dismiss the dealt-with ones (see [[*The Report
-Browser]]).
+A typical session then goes: {{{kbd(G)}}} to refresh the sources, {{{kbd(/)}}} or
+the filter keys to narrow the list, {{{kbd(RET)}}} or {{{kbd(SPC)}}} to read a
+report's mail, {{{kbd(A)}}} to apply its patches, {{{kbd(!)}}} to keep a report in
+sight and {{{kbd(d)}}} then {{{kbd(x)}}} to dismiss the dealt-with ones (see [[*The
+Report Browser]]).
 
 #+vindex: gnaw-inhibit-startup-tip
 #+cindex: startup tip
@@ -123,13 +112,12 @@ start silently.
 
 #+findex: gnaw-configure
 #+findex: gnaw-add-source
-{{{kbd(M-x gnaw-configure)}}} reruns the full setup later on,
-keeping the existing configuration---sources, repositories and mail
+{{{kbd(M-x gnaw-configure)}}} reruns the full setup later on, keeping the
+existing configuration---sources, repositories and mail
 setup---displayed in a window while the prompts run, each prompt
-defaulting to the configured value.
-{{{kbd(M-x gnaw-add-source)}}} only adds or updates a source.  An
-updated source keeps the repositories it is linked to, and the
-setup offers to link more.
+defaulting to the configured value. {{{kbd(M-x gnaw-add-source)}}} only adds
+or updates a source. An updated source keeps the repositories it is
+linked to, and the setup offers to link more.
 
 #+findex: gnaw-update
 #+cindex: cache, refreshing
@@ -140,64 +128,56 @@ responsive meanwhile.
 
 #+findex: gnaw-cache-cleanup
 #+cindex: cache, cleaning
-{{{kbd(M-x gnaw-cache-cleanup)}}} deletes, after showing the tally
-and asking, the cache files gnaw no longer needs: the report caches
-of sources no longer configured, and---when
+{{{kbd(M-x gnaw-cache-cleanup)}}} deletes, after showing the tally and
+asking, the cache files gnaw no longer needs: the report caches of
+sources no longer configured, and---when
 ~gnaw-cache-attachments-max-age~ is set to a number of days, nil by
-default---the attachments untouched for that long.  Attachments
-hold most of the disk weight: with the default nil they are all
-kept.  With a prefix argument it also empties the configured
-sources' report caches, re-downloaded on the next update.  It never
-touches =state.edn=.
+default---the attachments untouched for that long. Attachments hold
+most of the disk weight: with the default nil they are all kept. With
+a prefix argument it also empties the configured sources' report
+caches, re-downloaded on the next update. It never touches =state.edn=.
 
 * The Report Browser
-:PROPERTIES:
-:DESCRIPTION: The *gnaw* buffer and its key bindings.
-:END:
+
 #+cindex: report browser
 #+cindex: report list
 
 ** The report list
-:PROPERTIES:
-:DESCRIPTION: Columns and what they show.
-:END:
+
 #+cindex: columns
 #+vindex: gnaw-list-columns
 
-Each row is a report.  The default columns are Mark, Type, Votes,
-Flags, Att, Msgs, From, Subject and Created; the variable
+Each row is a report. The default columns are =Mark=, =Type=, =Votes=,
+=Flags=, =Att=, =Msgs=, =From=, =Subject= and =Created=; the variable
 ~gnaw-list-columns~ configures them, and its docstring shows how to
-re-add the left-out Pri (priority), Activity (last activity) and Topic
+re-add the left-out =Pri= (priority), =Activity= (last activity) and =Topic=
 columns.
 
 #+cindex: Flags column
-The =Flags= column compresses the report state into letters: =A= when
-the report is acked, =O= when it is owned, then a closed-state
-letter---=C= canceled, =R= resolved, =E= expired, =S= superseded.
+The =Flags= column compresses the report state into letters: =A= when the
+report is acked, =O= when it is owned, then a closed-state letter---=C=
+canceled, =R= resolved, =E= expired, =S= superseded.
 
 #+cindex: Att column
-The =Att= column has three positions: =.= when the report awaits a
-reply, =~= when it has related reports, then one attachment glyph---=+=
-a single patch, =x= several, =@= calendar events (=.ics=), =#=
-plain-text files, in that priority order.  The help echo of the Flags
-and Att cells ({{{kbd(C-h .)}}}, or hovering) spells them out.
+The =Att= column has three positions: =.= when the report awaits a reply,
+=~= when it has related reports, then one attachment glyph---=+= a single
+patch, =x= several, =@= calendar events (=.ics=), =#= plain-text files, in
+that priority order. The help echo of the Flags and Att cells ({{{kbd(C-h
+.)}}}, or hovering) spells them out.
 
 #+cindex: sources, several
 With several sources configured, a leading =S= column identifies each
-report's source by its letter (the =:letter= of its =config.edn=
-entry, asked on the first reload when missing); its help echo shows
-the full source name.  With a single source, gnaw omits the column.
+report's source by its letter (the =:letter= of its =config.edn= entry,
+asked on the first reload when missing); its help echo shows the full
+source name. With a single source, gnaw omits the column.
 
 #+cindex: patch series, folding
 Gnaw folds a patch series into a single row (cover letter or first
-patch) with a status summary like =(2 acked, 1 open)=; {{{kbd(TAB)}}}
-unfolds the series to list each patch, {{{kbd(TAB)}}} again folds it
-back.
+patch) with a status summary like =(2 acked, 1 open)=; {{{kbd(TAB)}}} unfolds
+the series to list each patch, {{{kbd(TAB)}}} again folds it back.
 
 ** Key bindings
-:PROPERTIES:
-:DESCRIPTION: All the commands available in the list.
-:END:
+
 #+cindex: key bindings, report browser
 
 Reading and following:
@@ -248,8 +228,7 @@ Patches and attachments (see [[*Patches and Attachments]]):
 
 - {{{kbd(A)}}} (~gnaw-list-patch-apply~) ::
   #+findex: gnaw-list-patch-apply
-  Apply the report's patches with =git apply= ({{{kbd(C-u A)}}}:
-  =git am=).
+  Apply the report's patches with =git apply= ({{{kbd(C-u A)}}}: =git am=).
 
 - {{{kbd(:)}}} (~gnaw-list-attachments~) ::
   #+findex: gnaw-list-attachments
@@ -284,10 +263,10 @@ Filtering and sorting (see [[*Searching]]):
 - {{{kbd(c)}}} (~gnaw-list-limit-closed~) ::
   #+findex: gnaw-list-limit-closed
   Keep only the closed reports (canceled, resolved...), shown in
-  italic.  Gnaw loads closed reports when a source lists them (e.g.
-  an =all.json= report file) but keeps them out of the list until a
-  query names a close flag (=flags:E=) or the =closed:= key, as this
-  command does.
+  italic. Gnaw loads closed reports when a source lists them (e.g. an
+  =all.json= report file) but keeps them out of the list until a query
+  names a close flag (=flags:E=) or the =closed:= key, as this command
+  does.
 
 - {{{kbd(.)}}} (~gnaw-list-limit-awaiting~) ::
   #+findex: gnaw-list-limit-awaiting
@@ -313,10 +292,10 @@ Filtering and sorting (see [[*Searching]]):
 - {{{kbd(|)}}} (~gnaw-save-preset-filter~) ::
   #+findex: gnaw-save-preset-filter
   #+findex: gnaw-edit-preset-filters
-  Save the active filter as a preset (see [[*Preset filters]]).
-  With {{{kbd(C-u)}}}, edit all the presets in a buffer instead
-  (~gnaw-edit-preset-filters~), one query per line; {{{kbd(C-c C-c)}}}
-  saves the list and {{{kbd(C-c C-k)}}} cancels.
+  Save the active filter as a preset (see [[*Preset filters]]). With
+  {{{kbd(C-u)}}}, edit all the presets in a buffer instead
+  (~gnaw-edit-preset-filters~), one query per line; {{{kbd(C-c C-c)}}} saves
+  the list and {{{kbd(C-c C-k)}}} cancels.
 
 - {{{kbd(s)}}}, {{{kbd(S)}}} (~gnaw-list-sort~) ::
   #+findex: gnaw-list-sort
@@ -374,108 +353,94 @@ Refreshing and help:
   List these bindings in a help window.
 
 ** Marks: sticky and dismiss
-:PROPERTIES:
-:DESCRIPTION: Promoting and hiding reports.
-:END:
+
 #+cindex: sticky mark
 #+cindex: dismiss
 #+cindex: marks, local
 
-Two mutually exclusive local marks drive the view: *sticky* promotes
-a report (=!= in bold in the Mark column, exported to =todo.org= by
-the gnaw CLI), *dismiss* hides it until {{{kbd(_)}}} reveals them
-(=d=, in a dimmed color).
+Two mutually exclusive local marks drive the view: *sticky* promotes a
+report (=!= in bold in the Mark column, exported to =todo.org= by the gnaw
+CLI), *dismiss* hides it until {{{kbd(_)}}} reveals them (=d=, in a dimmed
+color).
 
-Like in [[info:emacs#Dired Deletion][Dired]], {{{kbd(d)}}} only /flags/ a report (shown =D=) and
-{{{kbd(x)}}} dismisses all the flagged ones at once; {{{kbd(D)}}}
-dismisses right away; {{{kbd(u)}}} clears the mark or flag.  Each of
-{{{kbd(!)}}}, {{{kbd(d)}}}, {{{kbd(D)}}} and {{{kbd(u)}}} then moves
-point to the next row, keeping the column.  {{{kbd(D)}}} and
-{{{kbd(x)}}} turn off the follow mode first.
+Like in [[info:emacs#Dired Deletion][Dired]], {{{kbd(d)}}} only /flags/ a report (shown =D=) and {{{kbd(x)}}}
+dismisses all the flagged ones at once; {{{kbd(D)}}} dismisses right away;
+{{{kbd(u)}}} clears the mark or flag. Each of {{{kbd(!)}}}, {{{kbd(d)}}}, {{{kbd(D)}}} and
+{{{kbd(u)}}} then moves point to the next row, keeping the column. {{{kbd(D)}}}
+and {{{kbd(x)}}} turn off the follow mode first.
 
 #+cindex: undo, of mark changes
-{{{kbd(C-/)}}} (~gnaw-undo~ outside the list buffer) undoes the mark
-changes of the session, most recent first, restoring the entries as
-they were, original timestamps included---something re-toggling a
-mark cannot do.  One undo restores a whole {{{kbd(x)}}} batch.
+{{{kbd(C-/)}}} (~gnaw-undo~ outside the list buffer) undoes the mark changes
+of the session, most recent first, restoring the entries as they were,
+original timestamps included---something re-toggling a mark cannot do.
+One undo restores a whole {{{kbd(x)}}} batch.
 
 #+cindex: state.edn
-Marks live in =state.edn=, shared with the gnaw CLI and the
-front-ends (see [[*The Front-end API]]); the undo only restores the
-keys gnaw.el owns, so the marks the CLI wrote in the meantime
-survive it.
+Marks live in =state.edn=, shared with the gnaw CLI and the front-ends
+(see [[*The Front-end API]]); the undo only restores the keys gnaw.el
+owns, so the marks the CLI wrote in the meantime survive it.
 
 ** Related reports
-:PROPERTIES:
-:DESCRIPTION: Narrowing to a report and its relations.
-:END:
+
 #+cindex: related reports
 
-On a report with related reports, {{{kbd(TAB)}}} narrows the list to
-the report and its relations, closed ones in italic; {{{kbd(TAB)}}} or
-{{{kbd(q)}}} restores the full list, and so does setting or clearing a
-filter.
+On a report with related reports, {{{kbd(TAB)}}} narrows the list to the
+report and its relations, closed ones in italic; {{{kbd(TAB)}}} or {{{kbd(q)}}}
+restores the full list, and so does setting or clearing a filter.
 
 * Searching
-:PROPERTIES:
-:DESCRIPTION: The filter query language.
-:END:
+
 #+cindex: searching
 #+cindex: filtering
 
 ** Query syntax
-:PROPERTIES:
-:DESCRIPTION: Tokens, operators, quotes and regexps.
-:END:
+
 #+cindex: query syntax
 
 {{{kbd(/)}}} filters the list with =key:value= tokens.
 
 For example, ="type:bug subject:latex acked:bzg"= narrows the list to
 the bug reports whose subject matches "latex", acked by someone whose
-address matches "bzg".  See [[*Search keys]] for all the keys.
+address matches "bzg". See [[*Search keys]] for all the keys.
 
 #+vindex: gnaw-list-filter-live
 #+vindex: gnaw-list-filter-live-delay
 #+vindex: gnaw-list-filter-live-min-chars
 While you type, the list previews what the query matches, refreshing
-at each pause (~gnaw-list-filter-live-delay~, 0.2 seconds).  A
-half-typed trailing token stays out of the preview until it can match
-something sensible: a key awaiting its value (=subject:=), an open
-=/regexp/= or ="quote=, or a free-text word shorter than
-~gnaw-list-filter-live-min-chars~ (3).  {{{kbd(C-g)}}} restores the
-view the preview replaced; set ~gnaw-list-filter-live~ to nil to
-disable the preview altogether.
+at each pause (~gnaw-list-filter-live-delay~, 0.2 seconds). A half-typed
+trailing token stays out of the preview until it can match something
+sensible: a key awaiting its value (=subject:=), an open =/regexp/= or
+="quote=, or a free-text word shorter than
+~gnaw-list-filter-live-min-chars~ (3). {{{kbd(C-g)}}} restores the view the
+preview replaced; set ~gnaw-list-filter-live~ to nil to disable the
+preview altogether.
 
 #+cindex: operators, query
 Operator =|= is OR between clauses, space is AND between tokens, and a
-comma inside a value is OR (=acked:alice,bob=).  So =a b c | d= reads
-as =(a b c) | d=.  A leading =-= negates its whole token, comma
-alternatives included: =-type:patch=, =-latex=, =-acked:alice,bob=
-(acked by neither), or =acked:* -acked:bzg= (acked, but not by bzg).
+comma inside a value is OR (=acked:alice,bob=). So =a b c | d= reads as =(a
+b c) | d=. A leading =-= negates its whole token, comma alternatives
+included: =-type:patch=, =-latex=, =-acked:alice,bob= (acked by neither), or
+=acked:* -acked:bzg= (acked, but not by bzg).
 
 Double quotes make a value literal and keep it whole---="preamble
-shuffling"= and =subject:"preamble shuffling"= match that phrase;
-spaces, commas, =|= and slashes lose their meaning inside the quotes.
+shuffling"= and =subject:"preamble shuffling"= match that phrase; spaces,
+commas, =|= and slashes lose their meaning inside the quotes.
 
 An empty value matches nothing, whatever the key.
 
 #+cindex: regexp, in queries
-A value in slashes matches as a case-insensitive [[info:emacs#Regexps][Emacs regexp]] on
-the text fields (=from:=, =subject:= and bare words, =topic:=, =mid:=,
-and the person fields =acked:= =owned:= =closed:=):
-=subject:/v[0-9]+/=.  The regexp is always the whole value---a =,=
-loses its meaning inside, and =|= being a clause separator, =\|=
-cannot appear either: to OR two regexps, use two clauses
-(=s:/a/ | s:/b/=).
+A value in slashes matches as a case-insensitive [[info:emacs#Regexps][Emacs regexp]] on the
+text fields (=from:=, =subject:= and bare words, =topic:=, =mid:=, and the
+person fields =acked:= =owned:= =closed:=): =subject:/v[0-9]+/=. The regexp is
+always the whole value---a =,= loses its meaning inside, and =|= being a
+clause separator, =\|= cannot appear either: to OR two regexps, use two
+clauses (=s:/a/ | s:/b/=).
 
-The mode line shows the active query; {{{kbd(q)}}} (or
-{{{kbd(C-u /)}}}, or {{{kbd(/)}}} then {{{kbd(RET)}}}) clears it.
+The mode line shows the active query; {{{kbd(q)}}} (or {{{kbd(C-u /)}}}, or {{{kbd(/)}}}
+then {{{kbd(RET)}}}) clears it.
 
 ** Search keys
-:PROPERTIES:
-:DESCRIPTION: All the key:value tokens.
-:END:
+
 #+cindex: search keys
 
 | Long                       | Short    | Matches                                   |
@@ -499,125 +464,108 @@ The mode line shows the active query; {{{kbd(q)}}} (or
 | =expired:10d=                | =e:=       | expiring within (forward)                 |
 
 ** Filter toggles and the prefix ladder
-:PROPERTIES:
-:DESCRIPTION: Combining and negating filters.
-:END:
+
 #+cindex: filter toggles
 #+cindex: prefix argument, filters
 
-The fixed filter keys---{{{kbd(a)}}}, {{{kbd(o)}}}, {{{kbd(c)}}},
-{{{kbd(.)}}}, {{{kbd(~)}}}, {{{kbd(+)}}}---are toggles: typing the
-key again while its filter is active clears it and puts point back on
-the report it was on.
+The fixed filter keys---{{{kbd(a)}}}, {{{kbd(o)}}}, {{{kbd(c)}}}, {{{kbd(.)}}}, {{{kbd(~)}}},
+{{{kbd(+)}}}---are toggles: typing the key again while its filter is active
+clears it and puts point back on the report it was on.
 
-With a prefix argument, the filter keys---{{{kbd(t)}}}, {{{kbd(T)}}},
-{{{kbd(a)}}}, {{{kbd(o)}}}, {{{kbd(c)}}}, {{{kbd(.)}}}, {{{kbd(~)}}},
-{{{kbd(+)}}}, {{{kbd(C-RET)}}}, and the fields of the {{{kbd(=)}}}
-menu---add their condition to the active filter (AND) instead of
-replacing it: {{{kbd(a C-u o)}}} keeps the reports both acked and
-owned.  With two prefix arguments, the toggle keys and
-{{{kbd(C-RET)}}} negate their condition instead, excluding the
-matching reports: {{{kbd(C-u C-u o)}}} keeps the reports nobody owns
-(=-owned:*=).  With three, they add the negated condition to the
-active filter: {{{kbd(a C-u C-u C-u o)}}} keeps the acked reports
-nobody owns (=acked:* -owned:*=).
+With a prefix argument, the filter keys---{{{kbd(t)}}}, {{{kbd(T)}}}, {{{kbd(a)}}},
+{{{kbd(o)}}}, {{{kbd(c)}}}, {{{kbd(.)}}}, {{{kbd(~)}}}, {{{kbd(+)}}}, {{{kbd(C-RET)}}}, and the fields of
+the {{{kbd(=)}}} menu---add their condition to the active filter (AND)
+instead of replacing it: {{{kbd(a C-u o)}}} keeps the reports both acked and
+owned. With two prefix arguments, the toggle keys and {{{kbd(C-RET)}}}
+negate their condition instead, excluding the matching reports:
+{{{kbd(C-u C-u o)}}} keeps the reports nobody owns (=-owned:*=). With three,
+they add the negated condition to the active filter: {{{kbd(a C-u C-u C-u
+o)}}} keeps the acked reports nobody owns (=acked:* -owned:*=).
 
 ** Filtering from the cell at point
-:PROPERTIES:
-:DESCRIPTION: C-RET builds the query for you.
-:END:
+
 #+cindex: cell, filtering by
 
-{{{kbd(C-RET)}}} builds the query from the cell at point: the source
-on S, the author on From, the report type on Type, at least that vote
-score on Votes, all the cell's letters on Flags, all its glyphs on
-Att, at least as many messages on Msgs, created on or after that date
-on Created, and =similar:= on Subject---subjects sharing at least
-three significant words with the one at point (four letters or more, a
-hyphenated name like =org-element= counting as one word, bracketed
-tags like =[PATCH v2]= ignored).  {{{kbd(C-RET)}}} again, without a
-prefix argument, restores the view the filter replaced: the previous
-query, a related-reports narrowing, or the full list.
+{{{kbd(C-RET)}}} builds the query from the cell at point: the source on S,
+the author on From, the report type on Type, at least that vote score
+on Votes, all the cell's letters on Flags, all its glyphs on Att, at
+least as many messages on Msgs, created on or after that date on
+Created, and =similar:= on Subject---subjects sharing at least three
+significant words with the one at point (four letters or more, a
+hyphenated name like =org-element= counting as one word, bracketed tags
+like =[PATCH v2]= ignored). {{{kbd(C-RET)}}} again, without a prefix argument,
+restores the view the filter replaced: the previous query, a
+related-reports narrowing, or the full list.
 
 ** Preset filters
-:PROPERTIES:
-:DESCRIPTION: Saved queries applied in one key.
-:END:
+
 #+cindex: preset filters
 #+vindex: gnaw-preset-filters
 #+findex: gnaw-select-preset-filter
 #+findex: gnaw-save-preset-filter
 
 ~gnaw-preset-filters~ holds a list of predefined filter query strings;
-{{{kbd(\)}}} prompts to apply one (~gnaw-select-preset-filter~), and
-{{{kbd(|)}}} saves the active filter to the list for future sessions
+{{{kbd(\)}}} prompts to apply one (~gnaw-select-preset-filter~), and {{{kbd(|)}}}
+saves the active filter to the list for future sessions
 (~gnaw-save-preset-filter~), after letting you edit it.
 
 #+findex: gnaw-edit-preset-filters
-{{{kbd(C-u |)}}} (~gnaw-edit-preset-filters~) opens the whole list in
-a buffer, one query per line: add, change, reorder or delete lines,
-then type {{{kbd(C-c C-c)}}} to save the result for future sessions,
-or {{{kbd(C-c C-k)}}} to cancel.
+{{{kbd(C-u |)}}} (~gnaw-edit-preset-filters~) opens the whole list in a
+buffer, one query per line: add, change, reorder or delete lines, then
+type {{{kbd(C-c C-c)}}} to save the result for future sessions, or {{{kbd(C-c
+C-k)}}} to cancel.
 
 * Reading Messages
-:PROPERTIES:
-:DESCRIPTION: How RET opens a report's email.
-:END:
+
 #+cindex: reading messages
 #+cindex: mail user agent
 
 #+vindex: gnaw-open-message-method
 #+vindex: gnaw-gnus-group
-~gnaw-open-message-method~ selects how {{{kbd(RET)}}} opens a report,
-per source: an alist mapping a source name to =auto=, =mua=, =gnus=,
-=notmuch=, =mu4e= or =web= (the entry keyed by =t= is the default).
-=gnus= reads the group from ~gnaw-gnus-group~ (an alist; asked with
-completion otherwise); =notmuch= and =mu4e= open by message-id; =web=
-fetches the public-inbox archive.
+~gnaw-open-message-method~ selects how {{{kbd(RET)}}} opens a report, per
+source: an alist mapping a source name to =auto=, =mua=, =gnus=, =notmuch=,
+=mu4e= or =web= (the entry keyed by =t= is the default). =gnus= reads the
+group from ~gnaw-gnus-group~ (an alist; asked with completion
+otherwise); =notmuch= and =mu4e= open by message-id; =web= fetches the
+public-inbox archive.
 
 #+findex: gnaw-message-browse
-The =web= method displays the fetched message in a
-~gnaw-message-mode~ buffer, where {{{kbd(w)}}}
-(~gnaw-message-browse~) opens the archived page in a browser and
-{{{kbd(q)}}} quits.
+The =web= method displays the fetched message in a ~gnaw-message-mode~
+buffer, where {{{kbd(w)}}} (~gnaw-message-browse~) opens the archived page in
+a browser and {{{kbd(q)}}} quits.
 
 #+cindex: follow mode
-{{{kbd(SPC)}}} toggles the mail in a window below the list, keeping
-point in the list; {{{kbd(f)}}} (~gnaw-list-follow-mode~) does this
-automatically as point moves.
+{{{kbd(SPC)}}} toggles the mail in a window below the list, keeping point in
+the list; {{{kbd(f)}}} (~gnaw-list-follow-mode~) does this automatically as
+point moves.
 
 #+vindex: gnaw-open-message-function
 #+findex: gnaw-configure-email-client
-Front-ends set ~gnaw-open-message-function~ to handle =auto= and
-=mua=.  {{{kbd(M-x gnaw-configure-email-client)}}} configures this per
-source, including the Gnus group when =gnus= is selected.
+Front-ends set ~gnaw-open-message-function~ to handle =auto= and =mua=.
+{{{kbd(M-x gnaw-configure-email-client)}}} configures this per source,
+including the Gnus group when =gnus= is selected.
 
 * Patches and Attachments
-:PROPERTIES:
-:DESCRIPTION: Viewing, saving and applying what reports carry.
-:END:
+
 #+cindex: patches
 #+cindex: attachments
 
 ** Viewing and saving
-:PROPERTIES:
-:DESCRIPTION: The v, V and : commands.
-:END:
+
 #+cindex: attachments, viewing
 #+cindex: attachments, saving
 
-{{{kbd(v)}}} views an attachment and {{{kbd(V)}}} saves one: with a
-single attachment they act right away, otherwise they ask which one
-(with an /all patches/ candidate on multi-patch reports).
+{{{kbd(v)}}} views an attachment and {{{kbd(V)}}} saves one: with a single
+attachment they act right away, otherwise they ask which one (with an
+/all patches/ candidate on multi-patch reports).
 
-{{{kbd(:)}}} opens the generic menu on the attachments of the report
-at point.  A single patch opens the patch menu: {{{kbd(v)}}} view in
-[[info:emacs#Diff Mode][diff-mode]], {{{kbd(a)}}} runs =git apply=, {{{kbd(m)}}} =git am=,
-{{{kbd(s)}}} save to a directory.  Gnaw displays a single calendar
-(=.ics=) or text attachment right away, and lists several in a buffer
-where {{{kbd(+)}}} (or {{{kbd(RET)}}}) acts the same way on the
-attachment at point, with an extra first row acting on all the patches
-at once when several are patches.
+{{{kbd(:)}}} opens the generic menu on the attachments of the report at
+point. A single patch opens the patch menu: {{{kbd(v)}}} view in [[info:emacs#Diff Mode][diff-mode]],
+{{{kbd(a)}}} runs =git apply=, {{{kbd(m)}}} =git am=, {{{kbd(s)}}} save to a directory. Gnaw
+displays a single calendar (=.ics=) or text attachment right away, and
+lists several in a buffer where {{{kbd(+)}}} (or {{{kbd(RET)}}}) acts the same way
+on the attachment at point, with an extra first row acting on all the
+patches at once when several are patches.
 
 #+vindex: gnaw-save-no-confirm
 Saving proposes the source's =:repo= (the first one, when it lists
@@ -626,81 +574,71 @@ several) as the target directory and asks before overwriting; set
 ({{{kbd(C-u V)}}}) inverts that setting for one call.
 
 ** Applying patches
-:PROPERTIES:
-:DESCRIPTION: git apply, git am, branches and worktrees.
-:END:
+
 #+cindex: git apply
 #+cindex: git am
 #+cindex: patch series
 
-{{{kbd(A)}}} applies the report's patches with =git apply= (patch the
-working tree) and {{{kbd(C-u A)}}} with =git am= (apply as commits on
-a branch it offers to create).
+{{{kbd(A)}}} applies the report's patches with =git apply= (patch the working
+tree) and {{{kbd(C-u A)}}} with =git am= (apply as commits on a branch it
+offers to create).
 
 #+vindex: gnaw-apply-repo
-Git runs in the source's =:repo= (falling back to ~gnaw-apply-repo~ or
-a prompt), warning when a patch series looks incomplete.  When the
-source lists several repos, the apply commands first ask which one
-to use, with completion.
+Git runs in the source's =:repo= (falling back to ~gnaw-apply-repo~ or a
+prompt), warning when a patch series looks incomplete. When the source
+lists several repos, the apply commands first ask which one to use,
+with completion.
 
 #+vindex: gnaw-am-branch-function
 #+cindex: branch, for git am
-=git am= first asks for a branch to create---proposing a name built
-from the sender and subject, like =ec/fix-tangle__v2=
-(~gnaw-am-branch-function~); empty input keeps a detached HEAD---and
-for its start point, proposing the patches' recorded =base-commit:=
-when the repo has it.
+=git am= first asks for a branch to create---proposing a name built from
+the sender and subject, like =ec/fix-tangle__v2=
+(~gnaw-am-branch-function~); empty input keeps a detached HEAD---and for
+its start point, proposing the patches' recorded =base-commit:= when the
+repo has it.
 
 #+vindex: gnaw-am-create-worktree
 #+cindex: worktree
 Set ~gnaw-am-create-worktree~ to apply in a new worktree instead,
 leaving the repo's checkout untouched; a prefix argument on the am
-commands ({{{kbd(C-u m)}}} in the menu) inverts that setting for one
-call.
+commands ({{{kbd(C-u m)}}} in the menu) inverts that setting for one call.
 
 #+vindex: gnaw-am-fold-trailers
 #+vindex: gnaw-am-synthetic-trailers
 #+cindex: trailers, review
-Gnaw folds the review trailers BONE collects from replies
-(=Acked-by:=, =Reviewed-by:=...) into the commit messages, b4-style,
-working on temporary copies of the patch files---it never touches the
-cached originals; set ~gnaw-am-fold-trailers~ to nil to disable.  On
-lists where review acts are BONE commands instead (=Acked.=,
-=Confirmed.=, =Reviewed.=, =Reviewed-by:=...), gnaw turns the report
-state into synthetic trailers (~gnaw-am-synthetic-trailers~): the
-acked state---BONE's strong review approval---yields =Reviewed-by:=
-and the archived page a =Link:= line; add =owned= to also turn the
-owner into a =Reviewed-by:=.  Gnaw never upgrades a literal
-=Acked-by:= collected from the thread: it suppresses the synthetic
-line instead.
+Gnaw folds the review trailers BONE collects from replies (=Acked-by:=,
+=Reviewed-by:=...) into the commit messages, b4-style, working on
+temporary copies of the patch files---it never touches the cached
+originals; set ~gnaw-am-fold-trailers~ to nil to disable. On lists where
+review acts are BONE commands instead (=Acked.=, =Confirmed.=, =Reviewed.=,
+=Reviewed-by:=...), gnaw turns the report state into synthetic trailers
+(~gnaw-am-synthetic-trailers~): the acked state---BONE's strong review
+approval---yields =Reviewed-by:= and the archived page a =Link:= line; add
+=owned= to also turn the owner into a =Reviewed-by:=. Gnaw never upgrades
+a literal =Acked-by:= collected from the thread: it suppresses the
+synthetic line instead.
 
 #+vindex: gnaw-am-show-repo
-A successful =git am= pops ~magit-status~ (or ~dired~ when magit is
-not loaded) on the directory it applied in; set ~gnaw-am-show-repo~ to
-nil to keep the plain message.  See the =*gnaw-git*= buffer for the
-output.
+A successful =git am= pops ~magit-status~ (or ~dired~ when magit is not
+loaded) on the directory it applied in; set ~gnaw-am-show-repo~ to nil
+to keep the plain message. See the =*gnaw-git*= buffer for the output.
 
 #+vindex: gnaw-am-undo-on-failure
 #+cindex: failed git am, undoing
-When =git am= fails, gnaw shows the failure and offers to undo the
-run's setup: it aborts the am session, removes the worktree it
-added---else restores the previous checkout---and deletes the branch
-it created, leaving no trace in the repo.  Answer no to keep the mid-am
-state instead and fix it by hand (resolve the conflicts, then =git am
---continue=---or =git am --abort=).  Set ~gnaw-am-undo-on-failure~ to
-t to always undo without asking, or to nil to always keep the mid-am
-state.
+When =git am= fails, gnaw shows the failure and offers to undo the run's
+setup: it aborts the am session, removes the worktree it added---else
+restores the previous checkout---and deletes the branch it created,
+leaving no trace in the repo. Answer no to keep the mid-am state
+instead and fix it by hand (resolve the conflicts, then =git am
+--continue=---or =git am --abort=). Set ~gnaw-am-undo-on-failure~ to t to
+always undo without asking, or to nil to always keep the mid-am state.
 
 * Configuration
-:PROPERTIES:
-:DESCRIPTION: config.edn and all the options.
-:END:
+
 #+cindex: configuration
 
 ** The configuration file
-:PROPERTIES:
-:DESCRIPTION: config.edn, shared with the gnaw CLI.
-:END:
+
 #+cindex: config.edn
 
 #+begin_src clojure
@@ -713,36 +651,31 @@ state.
 #+end_src
 
 - =:sources= ::
-  Each has =:urls= (a vector of reports.json URLs), an optional
-  =:name=, a =:letter= identifying the source in the =S= column when
-  several sources are configured (asked interactively when missing)
-  and a =:repo= where patches apply---a directory, or a vector of
-  them (=:repo ["~/src/org-mode" "~/src/org-contrib"]=): applying
-  then asks which repo to use, and saving proposes the first.
+  Each has =:urls= (a vector of reports.json URLs), an optional =:name=, a
+  =:letter= identifying the source in the =S= column when several sources
+  are configured (asked interactively when missing) and a =:repo= where
+  patches apply---a directory, or a vector of them (=:repo
+  ["~/src/org-mode" "~/src/org-contrib"]=): applying then asks which
+  repo to use, and saving proposes the first.
 - =:my-addresses= ::
   Your email addresses.
 - =:skip-columns= ::
   Browser columns to hide (by name, case-insensitive).
 
 ** Options
-:PROPERTIES:
-:DESCRIPTION: All the defcustom options, by theme.
-:END:
+
 #+cindex: options
 #+cindex: customization
 
-All the ~defcustom~ options, by theme
-({{{kbd(M-x customize-group RET gnaw)}}}).
+All the ~defcustom~ options, by theme ({{{kbd(M-x customize-group RET
+gnaw)}}}).
 
 *** General options
-:PROPERTIES:
-:DESCRIPTION: Directories, network, hooks.
-:END:
 
 - ~gnaw-config-dir~ ::
   #+vindex: gnaw-config-dir
-  Default: =~/.config/gnaw=.  Holds =config.edn=, =state.edn= and
-  =cache/=.  Sources always come from =config.edn=.
+  Default: =~/.config/gnaw=. Holds =config.edn=, =state.edn= and =cache/=.
+  Sources always come from =config.edn=.
 
 - ~gnaw-http-timeout~ ::
   #+vindex: gnaw-http-timeout
@@ -750,18 +683,15 @@ All the ~defcustom~ options, by theme
 
 - ~gnaw-cache-attachments-max-age~ ::
   #+vindex: gnaw-cache-attachments-max-age
-  Default: nil (keep forever).  Days after which
-  {{{kbd(M-x gnaw-cache-cleanup)}}} discards a cached attachment.
+  Default: nil (keep forever). Days after which {{{kbd(M-x
+  gnaw-cache-cleanup)}}} discards a cached attachment.
 
 - ~gnaw-after-update-hook~ ::
   #+vindex: gnaw-after-update-hook
-  Run once {{{kbd(M-x gnaw-update)}}} finished its background
-  downloads (after the command itself returned).
+  Run once {{{kbd(M-x gnaw-update)}}} finished its background downloads
+  (after the command itself returned).
 
 *** Reading options
-:PROPERTIES:
-:DESCRIPTION: Opening report mail.
-:END:
 
 - ~gnaw-open-message-method~, ~gnaw-gnus-group~ ::
   #+vindex: gnaw-open-message-method
@@ -769,9 +699,6 @@ All the ~defcustom~ options, by theme
   Per-source open method and Gnus group (see [[*Reading Messages]]).
 
 *** Patch and attachment options
-:PROPERTIES:
-:DESCRIPTION: git apply, git am and saving.
-:END:
 
 - ~gnaw-apply-repo~ ::
   #+vindex: gnaw-apply-repo
@@ -780,7 +707,7 @@ All the ~defcustom~ options, by theme
 - ~gnaw-git-apply-options~, ~gnaw-git-am-options~ ::
   #+vindex: gnaw-git-apply-options
   #+vindex: gnaw-git-am-options
-  Default: =--3way=.  Extra arguments for =git apply= and =git am=.
+  Default: =--3way=. Extra arguments for =git apply= and =git am=.
 
 - ~gnaw-am-branch-function~ ::
   #+vindex: gnaw-am-branch-function
@@ -788,123 +715,111 @@ All the ~defcustom~ options, by theme
 
 - ~gnaw-am-create-worktree~ ::
   #+vindex: gnaw-am-create-worktree
-  Default: nil.  Apply =git am= in a new worktree.
+  Default: nil. Apply =git am= in a new worktree.
 
 - ~gnaw-am-read-worktree-function~ ::
   #+vindex: gnaw-am-read-worktree-function
-  Reads the to-be-created worktree directory, called with the repo
-  and the branch name; the default proposes a sibling of the repo
-  named after both, like =org-mode-ec-fix-tangle=.
+  Reads the to-be-created worktree directory, called with the repo and
+  the branch name; the default proposes a sibling of the repo named
+  after both, like =org-mode-ec-fix-tangle=.
 
 - ~gnaw-am-fold-trailers~ ::
   #+vindex: gnaw-am-fold-trailers
-  Default: t.  Fold the review trailers collected by BONE into the
+  Default: t. Fold the review trailers collected by BONE into the
   commits created by =git am= (see [[*Applying patches]]).
 
 - ~gnaw-am-show-repo~ ::
   #+vindex: gnaw-am-show-repo
-  Default: t.  Show the directory (~magit-status~ or ~dired~) after a
+  Default: t. Show the directory (~magit-status~ or ~dired~) after a
   successful =git am=.
 
 - ~gnaw-am-undo-on-failure~ ::
   #+vindex: gnaw-am-undo-on-failure
-  Default: =ask=.  Whether a failed =git am= undoes the run's setup:
+  Default: =ask=. Whether a failed =git am= undoes the run's setup:
   branch, checkout and worktree (=ask=, =nil= or =t=).
 
 - ~gnaw-am-synthetic-trailers~ ::
   #+vindex: gnaw-am-synthetic-trailers
-  Default: =(acked link)=.  Trailers synthesized from the report
+  Default: =(acked link)=. Trailers synthesized from the report
   state---acked state, archived page, optionally the owner---and
   folded along the collected ones.
 
 - ~gnaw-checkout-base~ ::
   #+vindex: gnaw-checkout-base
-  Default: =ask=.  Whether =git apply= checks out a patch's recorded
+  Default: =ask=. Whether =git apply= checks out a patch's recorded
   =base-commit:= first (=ask=, =nil= or =t=).
 
 - ~gnaw-save-no-confirm~ ::
   #+vindex: gnaw-save-no-confirm
-  Default: nil.  When non-nil, the save commands write into the
-  first configured =:repo= and overwrite without asking; a prefix
-  argument inverts the setting for one call.
+  Default: nil. When non-nil, the save commands write into the first
+  configured =:repo= and overwrite without asking; a prefix argument
+  inverts the setting for one call.
 
 *** Report list options
-:PROPERTIES:
-:DESCRIPTION: Columns, sorting, follow mode.
-:END:
 
 - ~gnaw-list-columns~ ::
   #+vindex: gnaw-list-columns
-  Columns of the report list (see [[*The report list]])---by default
-  Mark, Type, Votes, Flags, Att, Msgs, From, Subject and Created.
-  The docstring shows how to re-add the left-out Pri (priority),
-  Activity (last activity) and Topic columns.
+  Columns of the report list (see [[*The report list]])---by default Mark,
+  Type, Votes, Flags, Att, Msgs, From, Subject and Created. The
+  docstring shows how to re-add the left-out Pri (priority), Activity
+  (last activity) and Topic columns.
 
 - ~gnaw-list-sort-key~ ::
   #+vindex: gnaw-list-sort-key
-  Default: =("Created" . t)=.  Initial sort column and direction, most
-  recently created first; {{{kbd(s)}}} (or {{{kbd(S)}}}) on a column
-  re-sorts interactively.
+  Default: =("Created" . t)=. Initial sort column and direction, most
+  recently created first; {{{kbd(s)}}} (or {{{kbd(S)}}}) on a column re-sorts
+  interactively.
 
 - ~gnaw-list-follow-delay~ ::
   #+vindex: gnaw-list-follow-delay
-  Default: 0.3.  Idle seconds before follow mode ({{{kbd(f)}}}) shows
-  the report at point.
+  Default: 0.3. Idle seconds before follow mode ({{{kbd(f)}}}) shows the
+  report at point.
 
 - ~gnaw-inhibit-startup-tip~ ::
   #+vindex: gnaw-inhibit-startup-tip
-  Default: nil.  When non-nil, {{{kbd(M-x gnaw)}}} starts silently
-  instead of displaying a tip presenting a random command.
+  Default: nil. When non-nil, {{{kbd(M-x gnaw)}}} starts silently instead of
+  displaying a tip presenting a random command.
 
 *** Filtering options
-:PROPERTIES:
-:DESCRIPTION: Presets and the live preview.
-:END:
 
 - ~gnaw-preset-filters~ ::
   #+vindex: gnaw-preset-filters
-  Default: nil.  List of predefined filter query strings (see
-  [[*Preset filters]]);
-  {{{kbd(\)}}} prompts to apply one (~gnaw-select-preset-filter~),
-  {{{kbd(|)}}} saves the active filter here (~gnaw-save-preset-filter~)
-  and {{{kbd(C-u |)}}} edits the whole list in a buffer
+  Default: nil. List of predefined filter query strings (see [[*Preset
+  filters]]); {{{kbd(\)}}} prompts to apply one (~gnaw-select-preset-filter~),
+  {{{kbd(|)}}} saves the active filter here (~gnaw-save-preset-filter~) and
+  {{{kbd(C-u |)}}} edits the whole list in a buffer
   (~gnaw-edit-preset-filters~).
 
 - ~gnaw-list-filter-live~ ::
   #+vindex: gnaw-list-filter-live
-  Default: t.  Whether {{{kbd(/)}}} previews its results while typing
-  (see [[*Query syntax]]).
+  Default: t. Whether {{{kbd(/)}}} previews its results while typing (see
+  [[*Query syntax]]).
 
 - ~gnaw-list-filter-live-delay~ ::
   #+vindex: gnaw-list-filter-live-delay
-  Default: 0.2.  Idle seconds before the live preview refreshes.
+  Default: 0.2. Idle seconds before the live preview refreshes.
 
 - ~gnaw-list-filter-live-min-chars~ ::
   #+vindex: gnaw-list-filter-live-min-chars
-  Default: 3.  Minimum needle length before it takes part in the live
+  Default: 3. Minimum needle length before it takes part in the live
   preview.
 
 ** Faces
-:PROPERTIES:
-:DESCRIPTION: How the list is fontified.
-:END:
+
 #+cindex: faces
 
-The list cells inherit standard faces (~gnaw-type-bug~,
-~gnaw-type-patch~, ~gnaw-date~, ~gnaw-acked~, ~gnaw-owned~,
-~gnaw-votes~...), so colors follow your theme;
-{{{kbd(M-x customize-group RET gnaw)}}} lists them all.
+The list cells inherit standard faces (~gnaw-type-bug~, ~gnaw-type-patch~,
+~gnaw-date~, ~gnaw-acked~, ~gnaw-owned~, ~gnaw-votes~...), so colors follow
+your theme; {{{kbd(M-x customize-group RET gnaw)}}} lists them all.
 
 * The Front-end API
-:PROPERTIES:
-:DESCRIPTION: The functions mail front-ends build on.
-:END:
+
 #+cindex: API, front-end
 #+cindex: front-ends, writing
 
-This API is what the mail front-ends build on: [[https://codeberg.org/bzg/gnus-gnaw][gnus-gnaw]],
-[[https://codeberg.org/bzg/notmuch-gnaw][notmuch-gnaw]] and [[https://codeberg.org/bzg/mu4e-gnaw][mu4e-gnaw]] all use it to list the reports next
-to their mail and to toggle the local marks from there.
+This API is what the mail front-ends build on: [[https://codeberg.org/bzg/gnus-gnaw][gnus-gnaw]], [[https://codeberg.org/bzg/notmuch-gnaw][notmuch-gnaw]]
+and [[https://codeberg.org/bzg/mu4e-gnaw][mu4e-gnaw]] all use it to list the reports next to their mail and to
+toggle the local marks from there.
 
 - ~(gnaw-reports)~ ::
   #+findex: gnaw-reports
@@ -916,8 +831,7 @@ to their mail and to toggle the local marks from there.
 
 - ~(gnaw-load-config)~ ::
   #+findex: gnaw-load-config
-  Return a plist =(:addresses :skip-columns :source-configs
-  :sources)=.
+  Return a plist =(:addresses :skip-columns :source-configs :sources)=.
 
 - ~(gnaw-read-state)~ ::
   #+findex: gnaw-read-state
@@ -943,14 +857,11 @@ to their mail and to toggle the local marks from there.
 INFO is a plist with =:type :subject :date :from :from-name= (used to
 enrich state) plus display and action keys =:flags :priority :votes
 :deadline :expiry :last-activity :replies :topic :source :source-name
-:source-letter :archived-at :patches :events :texts :awaiting
-:related :series :patch-seq :acked :owned :owned-name :closed=.
+:source-letter :archived-at :patches :events :texts :awaiting :related
+:series :patch-seq :acked :owned :owned-name :closed=.
 
 * Contributing
-:PROPERTIES:
-:DESCRIPTION: Bug reports, patches and feature requests.
-:APPENDIX: t
-:END:
+
 #+cindex: contributing
 #+cindex: bug reports
 
@@ -970,27 +881,12 @@ This project uses [[https://intver.org][Intentional Versioning]], with three aud
 - =z= :: contributors to the codebase
 
 * Main Index
-:PROPERTIES:
-:INDEX:    cp
-:DESCRIPTION: An index of Gnaw's concepts and features.
-:END:
 
 * Command and Function Index
-:PROPERTIES:
-:INDEX:    fn
-:DESCRIPTION: Command names and API functions.
-:END:
 
 * Variable Index
-:PROPERTIES:
-:INDEX:    vr
-:DESCRIPTION: Variables mentioned in the manual.
-:END:
 
 * Copying
-:PROPERTIES:
-:copying:  t
-:END:
 
 This manual is for gnaw.el version {{{version}}}.
 
@@ -1032,3 +928,7 @@ General Public License for more details.
 # The "kbd" macro turns KBD into @kbd{KBD}.  Additionally, it
 # encloses case-sensitive special keys (SPC, RET...) within @key{...}.
 #+macro: kbd (eval (org-texinfo-kbd-macro $1))
+
+* Notes
+
+[fn:1] See [[https://bzg.fr/en/notes/the-issue-with-issue-trackers/][The issue with issue trackers]] for a rationale.
