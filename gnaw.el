@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.35.0
+;; Version: 0.35.1
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -28,8 +28,16 @@
 ;;
 ;;   3==3  GNAW -- GNAW is Not Another Workflow
 ;;
-;; Browser and shared data layer for BONE/gnaw in Emacs.  `M-x gnaw'
-;; opens a report browser; the same data layer backs the mail front-ends
+;; BONE (Backlog Of Notable Emails, <https://codeberg.org/bzg/bone>)
+;; is a bug tracker that never asks anyone to file a bug: it watches a
+;; project's mailing list, turns the mails tagged [BUG], [PATCH] or
+;; [FR] into reports, updates them from the replies and publishes the
+;; result as plain reports.json files anyone can fetch.
+;;
+;; gnaw.el is the Emacs way to work with those files.  `M-x gnaw'
+;; opens a report browser: search the reports, read their emails, view
+;; or apply their patches and attachments, keep local sticky and
+;; dismiss marks.  The same data layer backs the mail front-ends
 ;; gnus-gnaw, notmuch-gnaw and mu4e-gnaw.  This library:
 ;;
 ;; - reads the gnaw configuration (`config.edn') and report sources,
@@ -52,8 +60,8 @@
 ;;   `gnaw-reports'      collect open reports from all sources
 ;;   `gnaw-update'       refresh the local cache; C-u forces a re-download
 ;;   `gnaw-toggle-mark'  toggle :sticky/:dismiss for a message-id
-;;   `gnaw-read-state' / `gnaw-write-state'   state.edn I/O
-;;   `gnaw-annotation'   fixed-width report annotation for MUA lines
+;;   `gnaw-read-state' / `gnaw-write-state'   read and write state.edn
+;;   `gnaw-annotation'   build the fixed-width annotation for MUA lines
 ;;
 ;;; Code:
 
@@ -75,7 +83,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.35.0")
+(defconst gnaw-version (or (package-get-version) "0.35.1")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -2385,7 +2393,7 @@ Set by `gnaw--list-format'.  Buffer-local in use.")
   :group 'gnaw)
 
 (defface gnaw-dismissed '((t :inherit shadow))
-  "Face for dismissed reports when they are shown in the report list."
+  "Face for dismissed reports when the report list shows them."
   :group 'gnaw)
 
 (defface gnaw-closed '((t :slant italic))
@@ -3409,7 +3417,7 @@ relation metadata, shown in `gnaw-missing' face."
 
 (defun gnaw--list-entries ()
   "Return `tabulated-list-entries', folding patch series unless expanded.
-A series is shown as one representative row (cover letter or first
+A folded series yields one representative row (cover letter or first
 patch) prefixed with ▸ and a status summary; unfolded series (in
 `gnaw-list--expanded') list each patch, ▾ marking the first row.
 The query in `gnaw-list--query' filters the result.  When the list
@@ -4282,7 +4290,7 @@ inverts that setting for this call."
 (defun gnaw--attachment-act (info att)
   "Act on ATT, a (TYPE . ENTRY) attachment of report INFO.
 A patch opens the patch menu, TYPE `all-patches' opens it on every
-patch of the report; other files are displayed."
+patch of the report; other files show right away."
   (pcase (car att)
     ('patch (gnaw-list-patch-transient info (list (cdr att))))
     ('all-patches (gnaw-list-patch-transient info nil))
@@ -4331,7 +4339,7 @@ returns (all-patches) to act on every patch at once."
 
 (defun gnaw-list-attachment-view ()
   "View an attachment of the report at point, asking which when several.
-Patches are shown in `diff-mode', other files in a read-only buffer."
+Patches open in `diff-mode', other files in a read-only buffer."
   (interactive)
   (let* ((info (cdr (gnaw-list--current)))
          (att (gnaw--choose-attachment info "View attachment: ")))
@@ -4370,8 +4378,8 @@ argument ARG inverts that setting for this call.  Patches go through
 (defun gnaw-list-attachments ()
   "Act on the attachments of the report at point.
 A single patch opens the patch menu; a single calendar or text
-attachment is displayed right away; several attachments are listed
-in a buffer where + acts again on the attachment at point."
+attachment shows right away; with several attachments, a buffer
+lists them and + acts again on the attachment at point."
   (interactive)
   (let* ((info (cdr (gnaw-list--current)))
          (atts (gnaw--attachments info)))
@@ -4455,7 +4463,7 @@ at once."
 
 (defun gnaw-list-related-narrow ()
   "Narrow the list to the report at point and its related reports.
-Closed related reports are shown in italic.  \\<gnaw-list-mode-map>\
+Closed related reports appear in italic.  \\<gnaw-list-mode-map>\
 \\[gnaw-list-tab] restores the full list."
   (interactive)
   (let* ((pair (gnaw-list--current))
@@ -4599,8 +4607,8 @@ Keep the cursor in place (see `gnaw-list--restore-point')."
 
 (defun gnaw-list-toggle-sticky ()
   "Toggle the sticky mark on the report at point, then move down.
-Sticky reports are shown in bold and exported to todo.org by the gnaw
-CLI.  Moving down keeps point on its column."
+Sticky reports appear in bold, and the gnaw CLI exports them to
+todo.org.  Moving down keeps point on its column."
   (interactive)
   (let ((col (current-column)))
     (gnaw-list--toggle :sticky)
@@ -4632,7 +4640,8 @@ dismissal."
                "gnaw: dismiss mark removed"))))
 
 (defun gnaw-list--set-mark-cell (mid)
-  "Redraw MID's Mark cell on the current row, when the column is shown.
+  "Redraw MID's Mark cell on the current row, when the list shows
+the Mark column.
 Much cheaper than `gnaw-list-refresh', which rebuilds and reprints
 every row: a flag toggle only changes this one cell."
   (when gnaw-list--mark-index
@@ -4709,7 +4718,7 @@ See `gnaw-undo' for what is restored."
   (gnaw-list--refresh-keeping-point))
 
 (defun gnaw-list-toggle-dismissed ()
-  "Toggle whether dismissed reports are shown."
+  "Toggle whether the list shows dismissed reports."
   (interactive)
   (setq-local gnaw-list--related-mids nil) ; the toggle leaves the related view
   (setq-local gnaw-list--show-dismissed (not gnaw-list--show-dismissed))

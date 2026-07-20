@@ -5,11 +5,21 @@
 [[https://www.repostatus.org/#active][https://img.shields.io/badge/status-active-brightgreen.svg?style=for-the-badge]]
 [[https://intver.org/][https://img.shields.io/badge/versioning-intver.org-blue.svg?style=for-the-badge]]
 
-=gnaw.el= is an Emacs browser of [[https://codeberg.org/bzg/bone][BONE]] reports and a shared utility for
-other mail front-ends like [[https://codeberg.org/bzg/gnus-gnaw][gnus-gnaw]], [[https://codeberg.org/bzg/notmuch-gnaw][notmuch-gnaw]] and [[https://codeberg.org/bzg/mu4e-gnaw][mu4e-gnaw]].
+[[https://codeberg.org/bzg/bone][BONE]] (/Backlog Of Notable Emails/) is a bug tracker that never asks
+anyone to file a bug: it watches a project's mailing list, turns the
+mails tagged =[BUG]=, =[PATCH]= or =[FR]= into reports, updates them
+from the replies, and publishes the result as plain =reports.json=
+files anyone can fetch (no web forms, no accounts). The essay [[https://bzg.fr/en/notes/the-issue-with-issue-trackers/][The
+issue with issue trackers]] explains the rationale.
 
-=M-x gnaw= lists reports. It makes it easy to search through them, to
-read the associated email and to view/apply patches and attachments.
+=gnaw.el= is the Emacs way to work with those files: =M-x gnaw= lists
+the reports of the sources you follow and makes it easy to search
+them, to read the associated emails, to view or apply patches and
+attachments, and to organize your work with local sticky and dismiss
+marks.
+
+It is also the data layer shared by mail front-ends like [[https://codeberg.org/bzg/gnus-gnaw][gnus-gnaw]],
+[[https://codeberg.org/bzg/notmuch-gnaw][notmuch-gnaw]] and [[https://codeberg.org/bzg/mu4e-gnaw][mu4e-gnaw]].
 
 [[file:gnaw.png]]
 #+caption: Gnaw summary
@@ -31,7 +41,7 @@ also builds and installs the Info manual (=C-h i m gnaw RET=):
             :doc "doc/gnaw-manual.org"))))
 #+end_src
 
-The =:init= form is needed because the =:vc= keyword of =use-package= does
+You need the =:init= form because the =:vc= keyword of =use-package= does
 not support =:doc=. Interactively, without the manual:
 
 : M-x package-vc-install RET https://codeberg.org/bzg/gnaw.el RET
@@ -85,6 +95,6 @@ This project uses [[https://intver.org][Intentional Versioning]], with three aud
 
 Copyright © 2026 Bastien Guerry
 
-=gnaw.el= is published under the terms of the GNU General Public
-License, either version 3 of the License, or (at your option) any
-later version.
+You can redistribute =gnaw.el= and/or modify it under the terms of the
+GNU General Public License, either version 3 of the License, or (at
+your option) any later version.
