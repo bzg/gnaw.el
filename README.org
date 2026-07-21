@@ -38,7 +38,7 @@ also builds and installs the Info manual (=C-h i m gnaw RET=):
   (unless (package-installed-p 'gnaw)
     (package-vc-install
      '(gnaw :url "https://codeberg.org/bzg/gnaw.el"
-            :doc "doc/gnaw-manual.org"))))
+            :doc "doc/gnaw.org"))))
 #+end_src
 
 You need the =:init= form because the =:vc= keyword of =use-package= does
@@ -62,7 +62,7 @@ disable it.
 
 * Documentation
 
-The [[file:doc/gnaw-manual.org][Gnaw manual]] covers everything else: the report browser and its
+The [[file:doc/gnaw.org][Gnaw manual]] covers everything else: the report browser and its
 key bindings, the search query language, reading messages, applying
 patches, =config.edn=, all the options and the API for front-ends.
 

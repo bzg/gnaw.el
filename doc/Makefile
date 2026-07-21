@@ -19,9 +19,9 @@ info: gnaw.info
 pdf: gnaw.pdf
 html: gnaw.html
 
-gnaw.texi: gnaw-manual.org
+gnaw.texi: gnaw.org
 	$(BATCH) --eval "(require 'ox-texinfo)" \
-	  gnaw-manual.org -f org-texinfo-export-to-texinfo
+	  gnaw.org -f org-texinfo-export-to-texinfo
 
 gnaw.info: gnaw.texi
 	$(MAKEINFO) --no-split $< -o $@

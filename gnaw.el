@@ -4870,7 +4870,7 @@ order."
      (gnaw-list-limit-awaiting "only the reports awaiting a reply (toggle)")
      (gnaw-list-limit-related "only the reports with related reports (toggle)")
      (gnaw-list-limit-attachments "only the reports with attachments (toggle)")
-     (gnaw-list-filter-cell "toggle a filter on the cell at point (source, author, type, votes, flags, att, msgs, date, subject)")
+     (gnaw-list-filter-cell "toggle a filter on the cell at point")
      "C-u on the keys above (also in the = menu) adds the condition"
      "to the active filter (AND).  On the fixed filter keys -- a, o,"
      "c, ., ~, + and the = menu flags -- C-u C-u excludes the matching"

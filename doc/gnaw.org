@@ -62,7 +62,7 @@ manual as an Info page:
   (unless (package-installed-p 'gnaw)
     (package-vc-install
      '(gnaw :url "https://codeberg.org/bzg/gnaw.el"
-            :doc "doc/gnaw-manual.org"))))
+            :doc "doc/gnaw.org"))))
 #+end_src
 
 You need the =:init= form because the =:vc= keyword of =use-package= does
