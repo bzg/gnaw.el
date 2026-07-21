@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.35.4
+;; Version: 0.35.5
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -83,7 +83,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.35.4")
+(defconst gnaw-version (or (package-get-version) "0.35.5")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -4842,14 +4842,14 @@ order."
     (call-interactively (nth 2 (assoc name cands)))))
 
 (defconst gnaw-list--help-sections
-  '(("Read\n————"
+  '(("Read\n----"
      (gnaw-list-open "open the report's mail")
      (gnaw-list-open-other-window "toggle the mail below the list")
      (gnaw-list-browse "browse the report's archived web page")
      (gnaw-list-copy-archive-url "copy the archived web page URL")
      (gnaw-list-store-link "store an Org link to the report (C-c C-l inserts it)")
      (gnaw-list-follow-mode "toggle follow mode (auto-show the mail at point)"))
-    ("Marks\n—————"
+    ("Marks\n-----"
      (gnaw-list-toggle-sticky "toggle the sticky mark (bold, exported to todo.org)")
      (gnaw-list-flag-dismiss "flag for dismissal (D in the Mark column)")
      (gnaw-list-execute-flags "dismiss the flagged reports")
@@ -4857,7 +4857,7 @@ order."
      (gnaw-list-remove-marks "remove the mark or flag at point")
      (gnaw-list-undo "undo the last mark change (timestamps restored)")
      (gnaw-list-toggle-dismissed "show / hide dismissed reports"))
-    ("Filter and sort\n———————————————"
+    ("Filter and sort\n---------------"
      (gnaw-list-filter "filter with key:value tokens (C-u: clear the filter)")
      (gnaw-list-filter-transient "filter by one field (menu)")
      (gnaw-select-preset-filter "apply a preset filter")
@@ -4878,7 +4878,7 @@ order."
      "to the active filter (AND)"
      (gnaw-list-sort "sort by the column at point")
      (gnaw-sort "sort by a criterion"))
-    ("Patches and attachments\n———————————————————————"
+    ("Patches and attachments\n-----------------------"
      (gnaw-list-tab "fold / unfold the series, or narrow to related reports")
      (gnaw-list-quit "leave the related view, clear the filter, or quit the window")
      (gnaw-list-attachment-view "view an attachment (patches in diff-mode)")
@@ -4888,10 +4888,10 @@ order."
      "git am asks for a branch to create and its base commit; C-u on"
      "the menu's m key inverts gnaw-am-create-worktree (apply in a"
      "new worktree, leaving the repo's checkout untouched)")
-    ("Refresh\n———————"
+    ("Refresh\n-------"
      (gnaw-list-reload "re-read the local cache")
      (gnaw-list-update "refresh the remote cache, then reload"))
-    ("Help\n————"
+    ("Help\n----"
      (gnaw-show-help "this help")
      (describe-mode "full mode description")))
   "Sections shown by `gnaw-show-help': (TITLE (COMMAND DESCRIPTION)...).
@@ -5249,7 +5249,7 @@ Help section, whose \"h\" key the message always mentions."
                         append (cl-remove-if-not #'consp entries)))
          (cmd (nth (random (length cmds)) cmds))
          (key (where-is-internal (car cmd) gnaw-list-mode-map t)))
-    (format "gnaw some bone! Tip: \"%s\" — %s (\"h\" for the full help)"
+    (format "gnaw some bone! Tip: \"%s\" - %s (\"h\" for the full help)"
             (if key (key-description key) (format "M-x %s" (car cmd)))
             (cadr cmd))))
 
