@@ -7,11 +7,16 @@
 #+texinfo: @insertcopying
 
 * Introduction
+:PROPERTIES:
+:DESCRIPTION: What BONE and gnaw.el are, and how they fit together.
+:END:
 
 #+cindex: introduction
 #+cindex: BONE
 
-[[https://codeberg.org/bzg/bone][BONE]] (/Backlog Of Notable Emails/) is a bug tracker that never asks
+=gnaw.el= lets you browse and manage BONE reports from Emacs.
+
+ [[https://codeberg.org/bzg/bone][BONE]] (/Backlog Of Notable Emails/) is a bug tracker that never asks
 anyone to file a bug. Most trackers split a project's feedback in two:
 the discussions happen somewhere (on a list, on IRC or other (a)sync
 channels), while the "real" reports live behind a web form or another
@@ -19,7 +24,7 @@ email address. BONE removes the need for this split by watching the
 mailing list itself: a mail tagged =[BUG]=, =[PATCH]= or =[FR]= becomes a
 /report/, and the replies update it---through commands like =Confirmed.=
 or =Acked.= and review trailers like =Reviewed-by:=. The list stays the
-one place where things happen; the tracker is derived from it[fn:1]. 
+one place where things happen; the tracker is derived from it[fn:1].
 
 #+cindex: reports.json
 BONE publishes the resulting reports as plain =reports.json= files. The
@@ -46,6 +51,9 @@ front-ends like [[https://codeberg.org/bzg/gnus-gnaw][gnus-gnaw]], [[https://cod
   front-ends use.
 
 * Installation
+:PROPERTIES:
+:DESCRIPTION: Installing gnaw.el with package-vc, or by hand.
+:END:
 
 #+cindex: installation
 #+cindex: package-vc
@@ -73,6 +81,9 @@ not support =:doc=. Interactively, without the manual:
 Update later with {{{kbd(M-x package-vc-upgrade RET gnaw RET)}}}.
 
 * Getting Started
+:PROPERTIES:
+:DESCRIPTION: The first run's interactive setup and a typical session.
+:END:
 
 #+cindex: setup, interactive
 #+cindex: sources, configuring
@@ -138,11 +149,17 @@ a prefix argument it also empties the configured sources' report
 caches, re-downloaded on the next update. It never touches =state.edn=.
 
 * The Report Browser
+:PROPERTIES:
+:DESCRIPTION: The report list, its columns, key bindings and marks.
+:END:
 
 #+cindex: report browser
 #+cindex: report list
 
 ** The report list
+:PROPERTIES:
+:DESCRIPTION: Columns, marks and how the browser presents each report.
+:END:
 
 #+cindex: columns
 #+vindex: gnaw-list-columns
@@ -177,6 +194,9 @@ patch) with a status summary like =(2 acked, 1 open)=; {{{kbd(TAB)}}} unfolds
 the series to list each patch, {{{kbd(TAB)}}} again folds it back.
 
 ** Key bindings
+:PROPERTIES:
+:DESCRIPTION: All key bindings, grouped by function.
+:END:
 
 #+cindex: key bindings, report browser
 
@@ -353,6 +373,9 @@ Refreshing and help:
   List these bindings in a help window.
 
 ** Marks: sticky and dismiss
+:PROPERTIES:
+:DESCRIPTION: The two local marks, and how to undo mark changes.
+:END:
 
 #+cindex: sticky mark
 #+cindex: dismiss
@@ -381,6 +404,9 @@ Marks live in =state.edn=, shared with the gnaw CLI and the front-ends
 owns, so the marks the CLI wrote in the meantime survive it.
 
 ** Related reports
+:PROPERTIES:
+:DESCRIPTION: Narrowing the list to a report and its relations.
+:END:
 
 #+cindex: related reports
 
@@ -389,11 +415,17 @@ report and its relations, closed ones in italic; {{{kbd(TAB)}}} or {{{kbd(q)}}}
 restores the full list, and so does setting or clearing a filter.
 
 * Searching
+:PROPERTIES:
+:DESCRIPTION: The filter query language, search keys and preset filters.
+:END:
 
 #+cindex: searching
 #+cindex: filtering
 
 ** Query syntax
+:PROPERTIES:
+:DESCRIPTION: The key:value token language and its operators.
+:END:
 
 #+cindex: query syntax
 
@@ -440,6 +472,9 @@ The mode line shows the active query; {{{kbd(q)}}} (or {{{kbd(C-u /)}}}, or {{{k
 then {{{kbd(RET)}}}) clears it.
 
 ** Search keys
+:PROPERTIES:
+:DESCRIPTION: The full table of query keys.
+:END:
 
 #+cindex: search keys
 
@@ -464,6 +499,9 @@ then {{{kbd(RET)}}}) clears it.
 | =expired:10d=                | =e:=       | expiring within (forward)                 |
 
 ** Filter toggles and the prefix ladder
+:PROPERTIES:
+:DESCRIPTION: How a prefix argument changes the fixed filter keys.
+:END:
 
 #+cindex: filter toggles
 #+cindex: prefix argument, filters
@@ -483,6 +521,9 @@ they add the negated condition to the active filter: {{{kbd(a C-u C-u C-u
 o)}}} keeps the acked reports nobody owns (=acked:* -owned:*=).
 
 ** Filtering from the cell at point
+:PROPERTIES:
+:DESCRIPTION: Building a query from the cell under point.
+:END:
 
 #+cindex: cell, filtering by
 
@@ -498,6 +539,9 @@ restores the view the filter replaced: the previous query, a
 related-reports narrowing, or the full list.
 
 ** Preset filters
+:PROPERTIES:
+:DESCRIPTION: Saving and applying named filter queries.
+:END:
 
 #+cindex: preset filters
 #+vindex: gnaw-preset-filters
@@ -516,6 +560,9 @@ type {{{kbd(C-c C-c)}}} to save the result for future sessions, or {{{kbd(C-c
 C-k)}}} to cancel.
 
 * Reading Messages
+:PROPERTIES:
+:DESCRIPTION: Opening a report's mail through Gnus, notmuch, mu4e or the web.
+:END:
 
 #+cindex: reading messages
 #+cindex: mail user agent
@@ -546,11 +593,17 @@ Front-ends set ~gnaw-open-message-function~ to handle =auto= and =mua=.
 including the Gnus group when =gnus= is selected.
 
 * Patches and Attachments
+:PROPERTIES:
+:DESCRIPTION: Viewing, saving and applying a report's patches.
+:END:
 
 #+cindex: patches
 #+cindex: attachments
 
 ** Viewing and saving
+:PROPERTIES:
+:DESCRIPTION: Viewing or saving one or several attachments.
+:END:
 
 #+cindex: attachments, viewing
 #+cindex: attachments, saving
@@ -574,6 +627,9 @@ several) as the target directory and asks before overwriting; set
 ({{{kbd(C-u V)}}}) inverts that setting for one call.
 
 ** Applying patches
+:PROPERTIES:
+:DESCRIPTION: Applying patches with git apply or git am.
+:END:
 
 #+cindex: git apply
 #+cindex: git am
@@ -634,10 +690,16 @@ instead and fix it by hand (resolve the conflicts, then =git am
 always undo without asking, or to nil to always keep the mid-am state.
 
 * Configuration
+:PROPERTIES:
+:DESCRIPTION: config.edn, the customizable options and faces.
+:END:
 
 #+cindex: configuration
 
 ** The configuration file
+:PROPERTIES:
+:DESCRIPTION: config.edn's sources, addresses and hidden columns.
+:END:
 
 #+cindex: config.edn
 
@@ -663,6 +725,9 @@ always undo without asking, or to nil to always keep the mid-am state.
   Browser columns to hide (by name, case-insensitive).
 
 ** Options
+:PROPERTIES:
+:DESCRIPTION: All the customizable options, by theme.
+:END:
 
 #+cindex: options
 #+cindex: customization
@@ -671,6 +736,9 @@ All the ~defcustom~ options, by theme ({{{kbd(M-x customize-group RET
 gnaw)}}}).
 
 *** General options
+:PROPERTIES:
+:DESCRIPTION: gnaw-config-dir and other general settings.
+:END:
 
 - ~gnaw-config-dir~ ::
   #+vindex: gnaw-config-dir
@@ -692,6 +760,9 @@ gnaw)}}}).
   (after the command itself returned).
 
 *** Reading options
+:PROPERTIES:
+:DESCRIPTION: Per-source mail-opening options.
+:END:
 
 - ~gnaw-open-message-method~, ~gnaw-gnus-group~ ::
   #+vindex: gnaw-open-message-method
@@ -699,6 +770,9 @@ gnaw)}}}).
   Per-source open method and Gnus group (see [[*Reading Messages]]).
 
 *** Patch and attachment options
+:PROPERTIES:
+:DESCRIPTION: Options controlling git apply and git am.
+:END:
 
 - ~gnaw-apply-repo~ ::
   #+vindex: gnaw-apply-repo
@@ -756,6 +830,9 @@ gnaw)}}}).
   inverts the setting for one call.
 
 *** Report list options
+:PROPERTIES:
+:DESCRIPTION: Columns, sorting, follow delay and the startup tip.
+:END:
 
 - ~gnaw-list-columns~ ::
   #+vindex: gnaw-list-columns
@@ -781,6 +858,9 @@ gnaw)}}}).
   displaying a tip presenting a random command.
 
 *** Filtering options
+:PROPERTIES:
+:DESCRIPTION: Preset filters and the live filter preview.
+:END:
 
 - ~gnaw-preset-filters~ ::
   #+vindex: gnaw-preset-filters
@@ -805,6 +885,9 @@ gnaw)}}}).
   preview.
 
 ** Faces
+:PROPERTIES:
+:DESCRIPTION: The faces the report list's columns inherit.
+:END:
 
 #+cindex: faces
 
@@ -813,6 +896,9 @@ The list cells inherit standard faces (~gnaw-type-bug~, ~gnaw-type-patch~,
 your theme; {{{kbd(M-x customize-group RET gnaw)}}} lists them all.
 
 * The Front-end API
+:PROPERTIES:
+:DESCRIPTION: The Lisp API mail front-ends build on.
+:END:
 
 #+cindex: API, front-end
 #+cindex: front-ends, writing
@@ -861,6 +947,9 @@ enrich state) plus display and action keys =:flags :priority :votes
 :series :patch-seq :acked :owned :owned-name :closed=.
 
 * Contributing
+:PROPERTIES:
+:DESCRIPTION: Reporting bugs, sending patches, supporting the project.
+:END:
 
 #+cindex: contributing
 #+cindex: bug reports
@@ -881,12 +970,27 @@ This project uses [[https://intver.org][Intentional Versioning]], with three aud
 - =z= :: contributors to the codebase
 
 * Main Index
+:PROPERTIES:
+:DESCRIPTION: Index of concepts.
+:INDEX: cp
+:END:
 
 * Command and Function Index
+:PROPERTIES:
+:DESCRIPTION: Index of commands and functions.
+:INDEX: fn
+:END:
 
 * Variable Index
+:PROPERTIES:
+:DESCRIPTION: Index of user options and variables.
+:INDEX: vr
+:END:
 
 * Copying
+:PROPERTIES:
+:DESCRIPTION: The manual's license.
+:END:
 
 This manual is for gnaw.el version {{{version}}}.
 
@@ -930,5 +1034,8 @@ General Public License for more details.
 #+macro: kbd (eval (org-texinfo-kbd-macro $1))
 
 * Notes
+:PROPERTIES:
+:DESCRIPTION: Footnotes cited in the manual.
+:END:
 
 [fn:1] See [[https://bzg.fr/en/notes/the-issue-with-issue-trackers/][The issue with issue trackers]] for a rationale.
