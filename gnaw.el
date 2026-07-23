@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.35.5
+;; Version: 0.36.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -83,7 +83,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.35.5")
+(defconst gnaw-version (or (package-get-version) "0.36.0")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -3550,6 +3550,56 @@ them (see `gnaw-list--display-reports')."
     (define-key map "q" #'gnaw-list-quit)
     map)
   "Keymap for `gnaw-list-mode'.")
+
+(easy-menu-define gnaw-list-mode-menu gnaw-list-mode-map
+  "Menu for `gnaw-list-mode'."
+  '("Gnaw"
+    ["Open report" gnaw-list-open]
+    ["Open in other window" gnaw-list-open-other-window]
+    ["Follow mode" gnaw-list-follow-mode
+     :style toggle :selected gnaw-list-follow-mode]
+    ["Browse archived page" gnaw-list-browse]
+    ["Copy archive URL" gnaw-list-copy-archive-url]
+    ["Store Org link" gnaw-list-store-link]
+    "--"
+    ("Marks"
+     ["Toggle sticky mark" gnaw-list-toggle-sticky]
+     ["Flag for dismissal" gnaw-list-flag-dismiss]
+     ["Dismiss flagged reports" gnaw-list-execute-flags]
+     ["Dismiss immediately (toggle)" gnaw-list-toggle-dismiss]
+     ["Remove mark or flag" gnaw-list-remove-marks]
+     ["Undo last mark change" gnaw-list-undo]
+     ["Show/hide dismissed" gnaw-list-toggle-dismissed])
+    ("Filter and sort"
+     ["Filter by query" gnaw-list-filter]
+     ["Filter by field (menu)" gnaw-list-filter-transient]
+     ["Apply preset filter" gnaw-select-preset-filter]
+     ["Save preset filter" gnaw-save-preset-filter]
+     ["Limit to a type" gnaw-list-limit-type]
+     ["Filter by topic" gnaw-list-filter-topic]
+     ["Only acked (toggle)" gnaw-list-filter-acked]
+     ["Only owned (toggle)" gnaw-list-filter-owned]
+     ["Only closed (toggle)" gnaw-list-limit-closed]
+     ["Only awaiting reply (toggle)" gnaw-list-limit-awaiting]
+     ["Only related (toggle)" gnaw-list-limit-related]
+     ["Only with attachments (toggle)" gnaw-list-limit-attachments]
+     ["Sort by column at point" gnaw-list-sort]
+     ["Sort by criterion" gnaw-sort])
+    ("Patches and attachments"
+     ["Fold/unfold series or narrow" gnaw-list-tab]
+     ["View attachment" gnaw-list-attachment-view]
+     ["Save attachment" gnaw-list-attachment-save]
+     ["Apply patches" gnaw-list-patch-apply]
+     ["Attachments menu" gnaw-list-attachments])
+    "--"
+    ["Reload from local cache" gnaw-list-reload]
+    ["Update from remote" gnaw-list-update]
+    "--"
+    ["Configure gnaw" gnaw-configure]
+    ["Add a source" gnaw-add-source]
+    "--"
+    ["Help" gnaw-show-help]
+    ["Quit" gnaw-list-quit]))
 
 (define-derived-mode gnaw-list-mode tabulated-list-mode "Gnaw"
   "Major mode listing open BONE reports.
