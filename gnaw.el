@@ -4871,11 +4871,6 @@ order."
      (gnaw-list-limit-related "only the reports with related reports (toggle)")
      (gnaw-list-limit-attachments "only the reports with attachments (toggle)")
      (gnaw-list-filter-cell "toggle a filter on the cell at point")
-     "C-u on the keys above (also in the = menu) adds the condition"
-     "to the active filter (AND).  On the fixed filter keys -- a, o,"
-     "c, ., ~, + and the = menu flags -- C-u C-u excludes the matching"
-     "reports instead (-owned:*...) and C-u C-u C-u adds the exclusion"
-     "to the active filter (AND)"
      (gnaw-list-sort "sort by the column at point")
      (gnaw-sort "sort by a criterion"))
     ("Patches and attachments\n-----------------------"
@@ -4884,10 +4879,7 @@ order."
      (gnaw-list-attachment-view "view an attachment (patches in diff-mode)")
      (gnaw-list-attachment-save "save an attachment (proposes the configured repo)")
      (gnaw-list-patch-apply "apply the patches with git apply (C-u: git am)")
-     (gnaw-list-attachments "menu acting on patches and attachments")
-     "git am asks for a branch to create and its base commit; C-u on"
-     "the menu's m key inverts gnaw-am-create-worktree (apply in a"
-     "new worktree, leaving the repo's checkout untouched)")
+     (gnaw-list-attachments "menu acting on patches and attachments"))
     ("Refresh\n-------"
      (gnaw-list-reload "re-read the local cache")
      (gnaw-list-update "refresh the remote cache, then reload"))
@@ -4901,7 +4893,6 @@ A plain string among the entries is printed as a note line.")
   "List the report list's key bindings, grouped by theme."
   (interactive)
   (with-help-window "*gnaw help*"
-    (princ "gnaw report list\n")
     (dolist (section gnaw-list--help-sections)
       (princ (format "\n%s\n" (car section)))
       (dolist (cmd (cdr section))
