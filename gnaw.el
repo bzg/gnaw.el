@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.36.0
+;; Version: 0.36.1
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -75,7 +75,7 @@
 ;; `json-parse-buffer' and friends only exist when Emacs was built
 ;; with JSON support, which is optional before Emacs 30.
 (unless (json-available-p)
-  (error "gnaw.el needs an Emacs built with native JSON support"))
+  (error "GNAW needs an Emacs built with native JSON support"))
 
 (defvar url-http-response-status)
 
@@ -83,7 +83,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.36.0")
+(defconst gnaw-version (or (package-get-version) "0.36.1")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -477,7 +477,7 @@ the same headers but no body, which is enough to read :etag cheaply.
 Signal an error on HTTP errors or after `gnaw-http-timeout' seconds
 without a response."
   (let* ((coding-system-for-read 'binary)
-         (url-request-method (if head "HEAD" url-request-method))
+         (url-request-method (if head "HEAD" "GET"))
          (buf (url-retrieve-synchronously url t nil gnaw-http-timeout)))
     (unless buf (error "Failed to fetch %s" url))
     (unwind-protect
@@ -512,18 +512,21 @@ sends a HEAD request.  A watchdog enforces `gnaw-http-timeout':
                      (finish reply)))
                  nil t))
       ;; `run-at-time' fires a nil delay immediately: no timeout
-      ;; configured means no watchdog at all.
-      (setq timer (and gnaw-http-timeout
-                       (run-at-time
-                        gnaw-http-timeout nil
-                        (lambda ()
-                          (when (buffer-live-p buf)
-                            (when-let* ((proc (get-buffer-process buf)))
-                              (delete-process proc))
-                            (kill-buffer buf))
-                          (finish (list :error
-                                        (format "no response after %ss"
-                                                gnaw-http-timeout))))))))))
+      ;; configured means no watchdog at all.  None either when the
+      ;; callback already ran synchronously.
+      (unless finished
+        (setq timer
+              (and gnaw-http-timeout
+                   (run-at-time
+                    gnaw-http-timeout nil
+                    (lambda ()
+                      (when (buffer-live-p buf)
+                        (when-let* ((proc (get-buffer-process buf)))
+                          (delete-process proc))
+                        (kill-buffer buf))
+                      (finish (list :error
+                                    (format "no response after %ss"
+                                            gnaw-http-timeout)))))))))))
 
 (defun gnaw--http-body (url)
   "Return the raw HTTP body bytes of URL.
@@ -889,7 +892,7 @@ source.  Once every source finished, run `gnaw-after-update-hook',
 then CALLBACK when non-nil."
   (interactive "P")
   (when gnaw--update-pending
-    (user-error "gnaw: an update is already running"))
+    (user-error "An update is already running"))
   (let* ((sources (cl-remove-if-not #'gnaw--http-url-p (gnaw-sources)))
          (changed 0)
          (failed 0)
@@ -936,6 +939,10 @@ then CALLBACK when non-nil."
                          (directory-files-recursively path "")))
     (or (file-attribute-size (file-attributes path)) 0)))
 
+(defun gnaw--meta-url (source)
+  "Return the URL of reports SOURCE's sibling meta.json."
+  (concat (file-name-directory source) "meta.json"))
+
 (defun gnaw--source-cache-files (source)
   "Return the files a remote SOURCE owns under cache/reports/.
 Its reports cache and its sibling meta.json's (see
@@ -947,8 +954,7 @@ it as an orphan."
     (mapcan (lambda (url)
               (let ((f (gnaw--source-to-cache-file url)))
                 (list f (gnaw--validators-file f))))
-            (list source
-                  (concat (file-name-directory source) "meta.json")))))
+            (list source (gnaw--meta-url source)))))
 
 (defun gnaw--cache-report-files (&optional all)
   "Return the files under cache/reports/ that no configured source owns.
@@ -1019,7 +1025,7 @@ re-downloads them.  State.edn is never touched: it is user data
 shared with the gnaw CLI, not a cache."
   (interactive "P")
   (when gnaw--update-pending
-    (user-error "gnaw: an update is running, let it finish first"))
+    (user-error "An update is running, let it finish first"))
   (let* ((files (gnaw--cache-report-files all))
          (atts (gnaw--cache-stale-attachments))
          (bytes (apply #'+ (mapcar #'gnaw--tree-size (append files atts)))))
@@ -1027,7 +1033,7 @@ shared with the gnaw CLI, not a cache."
      ((not (or files atts))
       (message "gnaw: cache clean, nothing to delete"))
      ((not (y-or-n-p
-            (format "gnaw: delete %d source cache file(s) and %d attachment(s), freeing %s? "
+            (format "Delete %d source cache file(s) and %d attachment(s), freeing %s? "
                     (length files) (length atts)
                     (file-size-human-readable bytes))))
       (message "gnaw: cache kept"))
@@ -1216,9 +1222,11 @@ ISO timestamp at which it was set."
 Persist the new state and return non-nil if ACTION is now on."
   (let* ((state (gnaw--read-state-for-update))
          (new   (gnaw--apply-transition state action mid info)))
+    (gnaw-write-state new)
+    ;; Push after the write: a failed write must not leave an undo
+    ;; entry for a change that was never persisted.
     (gnaw--undo-push (format "%s toggle" (substring (symbol-name action) 1))
                      (list (cons mid (cdr (assoc mid state)))))
-    (gnaw-write-state new)
     (gnaw-action-on-p new mid action)))
 
 (defun gnaw-remove-marks (mid)
@@ -1229,13 +1237,13 @@ Return non-nil if a mark was actually cleared."
     (when (and entry
                (or (alist-get :sticky entry)
                    (alist-get :dismiss entry)))
-      (gnaw--undo-push "mark removal" (list (cons mid entry)))
       (let ((new (gnaw--alist-dissoc (gnaw--alist-dissoc entry :sticky)
                                      :dismiss)))
         (gnaw-write-state
          (if (gnaw--entry-removable-p new)
              (gnaw--state-delete state mid)
            (gnaw--state-put state mid new))))
+      (gnaw--undo-push "mark removal" (list (cons mid entry)))
       t)))
 
 ;;; Undo of mark changes
@@ -1275,9 +1283,9 @@ mark cannot do.  Repeated calls walk further back.  Marks written
 by another program since the change are left untouched."
   (interactive)
   (unless gnaw--undo-log
-    (user-error "gnaw: no mark change to undo in this session"))
-  (let ((op (pop gnaw--undo-log))
-        (state (gnaw--read-state-for-update)))
+    (user-error "No mark change to undo in this session"))
+  (let* ((state (gnaw--read-state-for-update))
+         (op (pop gnaw--undo-log)))
     (dolist (pair (cdr op))
       (setq state (gnaw--undo-restore state (car pair) (cdr pair))))
     (gnaw-write-state state)
@@ -1374,7 +1382,7 @@ A report's :topic may hold several space-separated topics."
 (defun gnaw-source-meta (source)
   "Return the parsed meta.json sibling of reports SOURCE, or nil."
   (condition-case nil
-      (gnaw--read-json (concat (file-name-directory source) "meta.json"))
+      (gnaw--read-json (gnaw--meta-url source))
     (error nil)))
 
 (defun gnaw--attachments-base (source subdir)
@@ -1629,7 +1637,7 @@ return to the calling buffer on summary exit."
                       (and (bound-and-true-p gnus-registry-enabled)
                            (fboundp 'gnus-registry-get-id-key)
                            (car (gnus-registry-get-id-key id 'group)))
-                      (gnaw--read-gnus-group "Gnus group for this message: "))))
+                      (gnaw--read-gnus-group "Gnus group for this message"))))
       (gnus-activate-group group)
       (gnus-group-read-group 1 t group)
       (gnus-summary-goto-article id nil t)
@@ -1971,7 +1979,7 @@ Return nil without ADDR."
 (defun gnaw--synthetic-trailers (info)
   "Return the trailers derived from report INFO's state.
 Per `gnaw-am-synthetic-trailers': the addresses posted by the
-Acked. and Owned. commands become Reviewed-by: lines, and the
+\"Acked.\" and \"Owned.\" commands become Reviewed-by: lines, and the
 report's archived web page a Link: line."
   (let ((wanted gnaw-am-synthetic-trailers))
     (delq nil
@@ -1996,8 +2004,9 @@ covers a synthetic review of the same address, and vice versa."
     (if (member k '("acked-by" "reviewed-by")) "approval" k)))
 
 (defun gnaw--trailer-addr (trailer)
-  "Return TRAILER's address -- its <...> part, else its whole value --
-downcased, or nil when TRAILER has no colon."
+  "Return TRAILER's address, downcased.
+The address is its <...> part when present, else its whole
+value.  Return nil when TRAILER has no colon."
   (when-let* ((colon (string-search ":" trailer)))
     (let ((val (string-trim (substring trailer (1+ colon)))))
       (downcase (if (string-match "<\\([^>]+\\)>" val)
@@ -2231,7 +2240,8 @@ leaving the rest to the user."
 (defun gnaw--am-failed (repo am-dir use-worktree branch orig)
   "Report a failed `git am' and offer to undo the run's setup.
 Undoing is governed by `gnaw-am-undo-on-failure'; the arguments
-are those of `gnaw--am-undo'.  The *gnaw-git* buffer showing the
+REPO, AM-DIR, USE-WORKTREE, BRANCH and ORIG are those of
+`gnaw--am-undo'.  The *gnaw-git* buffer showing the
 failure is already displayed, so the user can read it while
 answering."
   (let ((undo (cond (use-worktree
@@ -2333,6 +2343,21 @@ restricts the operation to these `:patches' entries."
           (dolist (f am-files)
             (unless (member f files) (delete-file f))))))))
 
+(defun gnaw--save-files-in-dir (info files no-confirm what)
+  "Copy report INFO's FILES to a directory and return that directory.
+The directory prompt proposes the source's first `:repo' (or
+`gnaw-apply-repo') and names the files WHAT.  Non-nil NO-CONFIRM
+saves to that repo without prompting and overwrites silently;
+otherwise existing files ask before being overwritten."
+  (let* ((repo (or (gnaw--source-repo info) gnaw-apply-repo))
+         (dir (if (and repo no-confirm)
+                  (file-name-as-directory repo)
+                (read-directory-name (format "Save %s in: " what) repo))))
+    (dolist (f files)
+      (copy-file f (expand-file-name (file-name-nondirectory f) dir)
+                 (if no-confirm t 1)))
+    dir))
+
 (defun gnaw-save-patches (info &optional no-confirm patches)
   "Save INFO's patch files to a directory.
 Prompt for the target directory, proposing the source's first
@@ -2341,36 +2366,30 @@ before overwriting.  When NO-CONFIRM is non-nil, save to that
 repo without prompting and overwrite silently.  PATCHES restricts
 the operation to these `:patches' entries."
   (let* ((files (gnaw--patch-files info "saving" patches))
-         (repo (or (gnaw--source-repo info) gnaw-apply-repo))
-         (dir (if (and repo no-confirm)
-                  (file-name-as-directory repo)
-                (read-directory-name "Save patch(es) in: " repo))))
-    (dolist (f files)
-      (copy-file f (expand-file-name (file-name-nondirectory f) dir)
-                 (if no-confirm t 1)))
+         (dir (gnaw--save-files-in-dir info files no-confirm "patch(es)")))
     (message "gnaw: saved %d patch(es) in %s" (length files) dir)))
 
 ;;; Query filter (subset of the BONE web search syntax)
 
-(defvar gnaw-list--query nil
-  "Active `gnaw-list' filter query string, or nil.  Buffer-local in use.")
+(defvar-local gnaw-list--query nil
+  "Active `gnaw-list' filter query string, or nil.")
 
-(defvar gnaw-list--expanded nil
-  "Series ids unfolded in the current `gnaw-list' buffer.  Buffer-local.")
+(defvar-local gnaw-list--expanded nil
+  "Series ids unfolded in the current `gnaw-list' buffer.")
 
-(defvar gnaw-list--show-dismissed nil
-  "When non-nil, show reports marked dismissed.  Buffer-local in `gnaw-list'.")
+(defvar-local gnaw-list--show-dismissed nil
+  "When non-nil, show reports marked dismissed.")
 
-(defvar gnaw-list--related-mids nil
+(defvar-local gnaw-list--related-mids nil
   "Message-ids the list is narrowed to, the origin report first, or nil.
-Set by `gnaw-list-related-narrow'.  Buffer-local in use.")
+Set by `gnaw-list-related-narrow'.")
 
-(defvar gnaw-list--related-entries nil
+(defvar-local gnaw-list--related-entries nil
   "Alist of (MID . RELATION-ENTRY) for the related-reports view.
 RELATION-ENTRY is the relation alist exported by BONE (type,
 subject, archived-at...), used to build placeholder rows for
 related reports absent from the loaded sources.  Set by
-`gnaw-list-related-narrow'.  Buffer-local in use.")
+`gnaw-list-related-narrow'.")
 
 (defvar-local gnaw-list--flagged nil
   "Message-ids flagged for dismissal (d), executed by x.")
@@ -2378,15 +2397,15 @@ related reports absent from the loaded sources.  Set by
 (defvar-local gnaw-list--below-mid nil
   "Message-id of the mail currently shown below the list, or nil.")
 
-(defvar gnaw-list--reports nil
+(defvar-local gnaw-list--reports nil
   "Cached (MID . INFO) pairs for the current `gnaw-list' buffer.
-Set by `gnaw-list-reload'.  Buffer-local in use.  Closed reports
-are included when a source lists them, but stay hidden until a
-query asks for them (see `gnaw-list--display-reports').")
+Set by `gnaw-list-reload'.  Closed reports are included when a
+source lists them, but stay hidden until a query asks for
+them (see `gnaw-list--display-reports').")
 
-(defvar gnaw-list--mark-index nil
+(defvar-local gnaw-list--mark-index nil
   "Index of the Mark column among the active columns, nil when hidden.
-Set by `gnaw--list-format'.  Buffer-local in use.")
+Set by `gnaw--list-format'.")
 
 (defface gnaw-sticky '((t :weight bold))
   "Face for sticky reports in the report list."
@@ -2510,6 +2529,26 @@ A duration is TODAY plus or minus its days, per FORWARD."
       (let ((d (gnaw--query-duration->days s)))
         (and d (if forward (+ today d) (- today d))))))
 
+(defun gnaw--query-range (spec parse-bound)
+  "Normalize range SPEC \"A..B\" into a (LO . HI) cons of numbers.
+PARSE-BOUND maps a bound string to a number, nil when it cannot.
+An empty bound is open (nil in the cons) and out-of-order ends are
+swapped.  Return nil when SPEC is not an A..B range at all, and the
+symbol `invalid' when a non-empty bound does not parse -- callers
+decide what an invalid range matches."
+  (when (string-match "\\`\\(.*\\)\\.\\.\\(.*\\)\\'" spec)
+    ;; Read both ends before calling PARSE-BOUND, which may clobber
+    ;; the match data via its own `string-match'.
+    (let* ((sa (match-string 1 spec))
+           (sb (match-string 2 spec))
+           (va (funcall parse-bound sa))
+           (vb (funcall parse-bound sb)))
+      (if (or (and (not (string-empty-p sa)) (null va))
+              (and (not (string-empty-p sb)) (null vb)))
+          'invalid
+        (cons (if (and va vb) (min va vb) va)
+              (if (and va vb) (max va vb) vb))))))
+
 (defun gnaw--query-date-matcher (spec key forward)
   "Compile date SPEC into a predicate on INFO's KEY date field.
 SPEC is a duration (3d/2w/2m), a YYYY-MM-DD date, or an A..B range
@@ -2518,27 +2557,21 @@ normalized); FORWARD durations look ahead from today.  The bounds
 are resolved once, here; an unparseable SPEC or range bound matches
 nothing -- an empty bound is open, an invalid one is an error, like
 on the BONE web page."
-  (let ((today (time-to-days (current-time)))
-        (lo nil) (hi nil) (none nil))
-    (if (string-match "\\`\\(.*\\)\\.\\.\\(.*\\)\\'" spec)
-        ;; Read both ends before calling `gnaw--query-bound', which
-        ;; clobbers the match data via its own `string-match'.
-        (let* ((sa (match-string 1 spec))
-               (sb (match-string 2 spec))
-               (va (gnaw--query-bound sa forward today))
-               (vb (gnaw--query-bound sb forward today)))
-          (if (or (and (not (string-empty-p sa)) (null va))
-                  (and (not (string-empty-p sb)) (null vb)))
-              (setq none t)
-            (setq lo (if (and va vb) (min va vb) va)
-                  hi (if (and va vb) (max va vb) vb))))
+  (let* ((today (time-to-days (current-time)))
+         (range (gnaw--query-range
+                 spec (lambda (s) (gnaw--query-bound s forward today))))
+         (lo nil) (hi nil) (none nil))
+    (cond
+     ((consp range) (setq lo (car range) hi (cdr range)))
+     ((eq range 'invalid) (setq none t))
+     (t
       (let ((d (gnaw--query-duration->days spec))
             (single (gnaw--query-ymd->days spec)))
         (cond (d (if forward
                      (setq lo today hi (+ today d))
                    (setq lo (- today d) hi today)))
               (single (setq lo single hi single))
-              (t (setq none t)))))
+              (t (setq none t))))))
     (if none
         #'ignore
       (lambda (_mid info)
@@ -2562,17 +2595,12 @@ none -- which no alternative matches."
          (delq nil
                (mapcar
                 (lambda (alt)
-                  (if (string-match "\\`\\(.*\\)\\.\\.\\(.*\\)\\'" alt)
-                      (let* ((sa (match-string 1 alt))
-                             (sb (match-string 2 alt))
-                             (va (gnaw--query-number-bound sa))
-                             (vb (gnaw--query-number-bound sb)))
-                        (unless (or (and (not (string-empty-p sa)) (null va))
-                                    (and (not (string-empty-p sb)) (null vb)))
-                          (cons (if (and va vb) (min va vb) va)
-                                (if (and va vb) (max va vb) vb))))
-                    (when-let* ((n (gnaw--query-number-bound alt)))
-                      (cons n n))))
+                  (let ((range (gnaw--query-range
+                                alt #'gnaw--query-number-bound)))
+                    (cond ((consp range) range)
+                          ((null range)
+                           (when-let* ((n (gnaw--query-number-bound alt)))
+                             (cons n n))))))
                 (gnaw--query-vals spec)))))
     (lambda (_mid info)
       (when-let* ((n (funcall getter info)))
@@ -3122,7 +3150,7 @@ The default follows a left-to-right priority order: the mark you act on,
 the high-signal short codes (votes, flags, type), then identity, then
 the flexible subject, then the creation date as the rightmost time
 anchor.  The Pri (priority), Activity (last activity) and Topic columns
-are left out by default to reduce noise. If you want to re-add them:
+are left out by default to reduce noise.  If you want to re-add them:
   (\"Pri\"       4 gnaw--priority-sort :priority)
   (\"Activity\" 11 t :last-activity)
   (\"Topic\"   16 t :topic)
@@ -3208,14 +3236,15 @@ message-id (both used for the mark: D flags a pending dismissal).
 The Flags and Att cells carry a help echo spelling them out, and the
 S cell the full source name, which `tabulated-list-print-col'
 preserves.  Every cell carries a
-mouse-face, so mouse-1 opens the report (see the follow-link entry
-of `gnaw-list-mode-map')."
+mouse-face, so a mouse click opens the report (see the follow-link
+entry of `gnaw-list-mode-map')."
   (propertize
    (gnaw--list-cell-1 key info entry mid)
    'mouse-face 'highlight))
 
 (defun gnaw--list-cell-1 (key info entry mid)
-  "Return the bare display string for column KEY (see `gnaw--list-cell')."
+  "Return the bare display string for column KEY (see `gnaw--list-cell').
+INFO, ENTRY and MID are as in `gnaw--list-cell'."
   (pcase key
     (:mark (if (and mid (member mid gnaw-list--flagged))
                "D"
@@ -3604,8 +3633,9 @@ them (see `gnaw-list--display-reports')."
 (define-derived-mode gnaw-list-mode tabulated-list-mode "Gnaw"
   "Major mode listing open BONE reports.
 \\<gnaw-list-mode-map>Press \\[describe-mode] for the full list of key bindings."
-  (setq tabulated-list-format (gnaw--list-format))
+  ;; Padding first: `gnaw--list-format' adds it to the used width.
   (setq tabulated-list-padding 1)
+  (setq tabulated-list-format (gnaw--list-format))
   (setq tabulated-list-sort-key
         (and gnaw-list-sort-key
              (assoc (car gnaw-list-sort-key) (gnaw--active-columns))
@@ -3794,8 +3824,7 @@ match nothing by construction, and a free-text needle shorter than
 `gnaw-list-filter-live-min-chars' matches too much.  An incomplete
 last comma (OR) alternative drops off alone when complete ones
 precede it; nil means TOK contributes nothing yet."
-  (let* ((case-fold-search nil)
-         (bare (if (string-prefix-p "-" tok) (substring tok 1) tok))
+  (let* ((bare (if (string-prefix-p "-" tok) (substring tok 1) tok))
          (colon (string-search ":" bare))
          (key (and colon (substring bare 0 colon)))
          (text (and key (member key gnaw--query-text-keys) t))
@@ -3990,6 +4019,64 @@ names the reports two prefix arguments exclude."
   "Limit the list to reports carrying at least one attachment."
   "the reports with attachments"))
 
+(defun gnaw--cell-filter-query (col info)
+  "Return the query string filtering on column COL's value in INFO.
+The per-column semantics are those of `gnaw-list-filter-cell'.
+Signal a `user-error' when the cell has no value to filter on.
+The Subject column inspects the displayed reports, so it must be
+called from the report list buffer."
+  (pcase col
+    ("S"
+     (let ((l (plist-get info :source-letter)))
+       (when (member l '(nil ""))
+         (user-error "No source letter on this row"))
+       (format "S:%s" l)))
+    ("From"
+     (let ((from (or (plist-get info :from)
+                     (plist-get info :from-name))))
+       (when (member from '(nil ""))
+         (user-error "No author on this row"))
+       (format "from:%s" (gnaw--query-quote-val from))))
+    ("Type" (format "type:%s" (or (plist-get info :type) "bug")))
+    ("Votes"
+     (let ((v (plist-get info :votes)))
+       (unless v (user-error "No votes on this row"))
+       (format "votes:%d.." (gnaw--votes-number v))))
+    ("Flags"
+     (let ((f (replace-regexp-in-string
+               "-" "" (or (plist-get info :flags) ""))))
+       (when (string-empty-p f)
+         (user-error "No flags on this row"))
+       (format "flags:%s" f)))
+    ("Att"
+     (let ((glyphs (string-replace " " "" (gnaw--att-string info))))
+       (when (string-empty-p glyphs)
+         (user-error "No attributes on this row"))
+       (format "att:%s" glyphs)))
+    ("Msgs"
+     (let ((n (plist-get info :replies)))
+       (unless n (user-error "No messages on this row"))
+       (format "msgs:%d.." (1+ n))))
+    ("Created"
+     (let ((d (plist-get info :date)))
+       (unless d (user-error "No creation date on this row"))
+       (format "date:%s.." (substring d 0 (min 10 (length d))))))
+    ("Subject"
+     (let ((words (gnaw--subject-words (plist-get info :subject))))
+       (unless words (user-error "No significant word in this subject"))
+       (let* ((val (string-join words "+"))
+              (m (gnaw--query-similar-matcher val)))
+         ;; The report always matches its own words: fewer than
+         ;; two matches means filtering would leave it alone.
+         (when (< (seq-count
+                   (lambda (p)
+                     (funcall m (plist-get (cdr p) :subject)))
+                   (gnaw-list--display-reports))
+                  2)
+           (user-error "No other report with a similar subject"))
+         (format "similar:%s" val))))
+    (_ (user-error "No cell filter for the %s column" col))))
+
 (defun gnaw-list-filter-cell (&optional arg)
   "Toggle a filter built from the value of the cell at point.
 On the S column, keep the reports of that source; on From, the
@@ -4047,59 +4134,7 @@ them; with three, add that exclusion to the active filter (AND)."
                       (line-number-at-pos))))
       (gnaw-list-filter
        (gnaw-list--query-add
-        (concat
-         (and negate "-")
-         (pcase col
-           ("S"
-            (let ((l (plist-get info :source-letter)))
-              (when (member l '(nil ""))
-                (user-error "No source letter on this row"))
-              (format "S:%s" l)))
-           ("From"
-            (let ((from (or (plist-get info :from)
-                            (plist-get info :from-name))))
-              (when (member from '(nil ""))
-                (user-error "No author on this row"))
-              (format "from:%s" (gnaw--query-quote-val from))))
-           ("Type" (format "type:%s" (or (plist-get info :type) "bug")))
-           ("Votes"
-            (let ((v (plist-get info :votes)))
-              (unless v (user-error "No votes on this row"))
-              (format "votes:%d.." (gnaw--votes-number v))))
-           ("Flags"
-            (let ((f (replace-regexp-in-string
-                      "-" "" (or (plist-get info :flags) ""))))
-              (when (string-empty-p f)
-                (user-error "No flags on this row"))
-              (format "flags:%s" f)))
-           ("Att"
-            (let ((glyphs (string-replace " " "" (gnaw--att-string info))))
-              (when (string-empty-p glyphs)
-                (user-error "No attributes on this row"))
-              (format "att:%s" glyphs)))
-           ("Msgs"
-            (let ((n (plist-get info :replies)))
-              (unless n (user-error "No messages on this row"))
-              (format "msgs:%d.." (1+ n))))
-           ("Created"
-            (let ((d (plist-get info :date)))
-              (unless d (user-error "No creation date on this row"))
-              (format "date:%s.." (substring d 0 (min 10 (length d))))))
-           ("Subject"
-            (let ((words (gnaw--subject-words (plist-get info :subject))))
-              (unless words (user-error "No significant word in this subject"))
-              (let* ((val (string-join words "+"))
-                     (m (gnaw--query-similar-matcher val)))
-                ;; The report always matches its own words: fewer than
-                ;; two matches means filtering would leave it alone.
-                (when (< (seq-count
-                          (lambda (p)
-                            (funcall m (plist-get (cdr p) :subject)))
-                          (gnaw-list--display-reports))
-                         2)
-                  (user-error "No other report with a similar subject"))
-                (format "similar:%s" val))))
-           (_ (user-error "No cell filter for the %s column" col))))
+        (concat (and negate "-") (gnaw--cell-filter-query col info))
         add))
       (setq gnaw-list--cell-filter (cons gnaw-list--query prev)))))
 
@@ -4361,6 +4396,13 @@ patch of the report; other files show right away."
       (pop-to-buffer (current-buffer))
       (goto-char (point-min)))))
 
+(defun gnaw--attachment-type-label (type)
+  "Return the display label of attachment TYPE."
+  (pcase type
+    ('patch "patch")
+    ('event "ics")
+    ('text  "text")))
+
 (defun gnaw--choose-attachment (info prompt)
   "Choose one attachment of report INFO, prompting with PROMPT.
 Return a (TYPE . ENTRY) pair; a single attachment is returned
@@ -4374,10 +4416,7 @@ returns (all-patches) to act on every patch at once."
                                '(all-patches))))
                  (mapcar (lambda (att)
                            (cons (format "%s: %s"
-                                         (pcase (car att)
-                                           ('patch "patch")
-                                           ('event "ics")
-                                           ('text  "text"))
+                                         (gnaw--attachment-type-label (car att))
                                          (file-name-nondirectory
                                           (or (alist-get 'file (cdr att)) "")))
                                  att))
@@ -4416,12 +4455,8 @@ argument ARG inverts that setting for this call.  Patches go through
                 (file (or (gnaw-attachment-file info entry (car att))
                           (user-error "Cannot fetch attachment %s"
                                       (alist-get 'file entry))))
-                (repo (or (gnaw--source-repo info) gnaw-apply-repo))
-                (dir (if (and repo no-confirm)
-                         (file-name-as-directory repo)
-                       (read-directory-name "Save attachment in: " repo))))
-           (copy-file file (expand-file-name (file-name-nondirectory file) dir)
-                      (if no-confirm t 1))
+                (dir (gnaw--save-files-in-dir info (list file) no-confirm
+                                              "attachment")))
            (message "gnaw: saved %s in %s"
                     (file-name-nondirectory file) dir))))))
 
@@ -4471,8 +4506,7 @@ at once."
                                                  (length patches))))))
            (mapcar (lambda (att)
                      (list att
-                           (vector (pcase (car att)
-                                     ('patch "patch") ('event "ics") ('text "text"))
+                           (vector (gnaw--attachment-type-label (car att))
                                    (file-name-nondirectory
                                     (or (alist-get 'file (cdr att)) "")))))
                    atts)))
@@ -4690,9 +4724,9 @@ dismissal."
                "gnaw: dismiss mark removed"))))
 
 (defun gnaw-list--set-mark-cell (mid)
-  "Redraw MID's Mark cell on the current row, when the list shows
-the Mark column.
-Much cheaper than `gnaw-list-refresh', which rebuilds and reprints
+  "Redraw MID's Mark cell on the current row.
+Do nothing when the list does not show the Mark column.  Much
+cheaper than `gnaw-list-refresh', which rebuilds and reprints
 every row: a flag toggle only changes this one cell."
   (when gnaw-list--mark-index
     (tabulated-list-set-col
@@ -4735,13 +4769,18 @@ Turn off `gnaw-list-follow-mode' first; write state.edn only once."
           (push (cons fmid (cdr (assoc fmid state))) befores)
           (setq state (gnaw--apply-transition state :dismiss fmid (cdr pair)))
           (setq count (1+ count)))))
+    ;; Do not touch state.edn when every flagged report already was
+    ;; dismissed (or vanished): the CLI shares the file and watches
+    ;; its mtime.
     (when befores
-      (gnaw--undo-push (format "dismissal of %d report(s)" count) befores))
-    (gnaw-write-state state)
+      (gnaw--undo-push (format "dismissal of %d report(s)" count) befores)
+      (gnaw-write-state state))
     (setq-local gnaw-list--flagged nil)
     (gnaw-list--refresh-keeping-point)
-    (message "gnaw: dismissed %d report(s) (type _ to include dismissed reports to the view, C-/ to undo)"
-             count)))
+    (if befores
+        (message "gnaw: dismissed %d report(s) (type _ to include dismissed reports to the view, C-/ to undo)"
+                 count)
+      (message "gnaw: nothing to dismiss, flags cleared"))))
 
 (defun gnaw-list-remove-marks ()
   "Remove the mark or dismissal flag from the report at point, then move down.
@@ -5092,7 +5131,7 @@ replaced; a LETTER already identifying a kept entry signals a
                       (and repo (list (cons :repo repo))))))
     (when (and letter (member (downcase letter)
                               (gnaw--taken-source-letters others)))
-      (user-error "gnaw: letter %s already identifies another source" letter))
+      (user-error "Letter %s already identifies another source" letter))
     (gnaw--alist-put config :sources (append others (list src)))))
 
 (defun gnaw--write-config (config)

@@ -5,6 +5,8 @@
 [[https://www.repostatus.org/#active][https://img.shields.io/badge/status-active-brightgreen.svg?style=for-the-badge]]
 [[https://intver.org/][https://img.shields.io/badge/versioning-intver.org-blue.svg?style=for-the-badge]]
 
+=gnaw.el= lets you browse and manage BONE reports from Emacs.
+
 [[https://codeberg.org/bzg/bone][BONE]] (/Backlog Of Notable Emails/) is a bug tracker that never asks
 anyone to file a bug: it watches a project's mailing list, turns the
 mails tagged =[BUG]=, =[PATCH]= or =[FR]= into reports, updates them
@@ -12,11 +14,10 @@ from the replies, and publishes the result as plain =reports.json=
 files anyone can fetch (no web forms, no accounts). The essay [[https://bzg.fr/en/notes/the-issue-with-issue-trackers/][The
 issue with issue trackers]] explains the rationale.
 
-=gnaw.el= is the Emacs way to work with those files: =M-x gnaw= lists
-the reports of the sources you follow and makes it easy to search
-them, to read the associated emails, to view or apply patches and
-attachments, and to organize your work with local sticky and dismiss
-marks.
+=M-x gnaw= lists the reports of the sources you follow and makes it
+easy to search them, to read the associated emails, to view or apply
+patches and attachments, and to organize your work with local sticky
+and dismiss marks.
 
 It is also the data layer shared by mail front-ends like [[https://codeberg.org/bzg/gnus-gnaw][gnus-gnaw]],
 [[https://codeberg.org/bzg/notmuch-gnaw][notmuch-gnaw]] and [[https://codeberg.org/bzg/mu4e-gnaw][mu4e-gnaw]].
