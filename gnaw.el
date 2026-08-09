@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.36.1
+;; Version: 0.36.2
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -83,7 +83,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.36.1")
+(defconst gnaw-version (or (package-get-version) "0.36.2")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -4932,46 +4932,46 @@ order."
 
 (defconst gnaw-list--help-sections
   '(("Read\n----"
-     (gnaw-list-open "open the report's mail")
-     (gnaw-list-open-other-window "toggle the mail below the list")
-     (gnaw-list-browse "browse the report's archived web page")
-     (gnaw-list-copy-archive-url "copy the archived web page URL")
-     (gnaw-list-store-link "store an Org link to the report (C-c C-l inserts it)")
-     (gnaw-list-follow-mode "toggle follow mode (auto-show the mail at point)"))
+     (gnaw-list-open "open report's mail")
+     (gnaw-list-open-other-window "display mail in another window")
+     (gnaw-list-browse "browse report's web page")
+     (gnaw-list-copy-archive-url "copy report's web page URL")
+     (gnaw-list-store-link "store an Org link to this report")
+     (gnaw-list-follow-mode "toggle follow mode (always show mail at point)"))
     ("Marks\n-----"
-     (gnaw-list-toggle-sticky "toggle the sticky mark (bold, exported to todo.org)")
-     (gnaw-list-flag-dismiss "flag for dismissal (D in the Mark column)")
-     (gnaw-list-execute-flags "dismiss the flagged reports")
+     (gnaw-list-toggle-sticky "toggle sticky mark (bold, exported to todo.org)")
+     (gnaw-list-flag-dismiss "flag for dismissal (D in Mark column)")
+     (gnaw-list-execute-flags "dismiss flagged reports")
      (gnaw-list-toggle-dismiss "dismiss immediately (toggle)")
-     (gnaw-list-remove-marks "remove the mark or flag at point")
-     (gnaw-list-undo "undo the last mark change (timestamps restored)")
+     (gnaw-list-remove-marks "remove mark or flag at point")
+     (gnaw-list-undo "undo last mark change (restore timestamps)")
      (gnaw-list-toggle-dismissed "show / hide dismissed reports"))
     ("Filter and sort\n---------------"
-     (gnaw-list-filter "filter with key:value tokens (C-u: clear the filter)")
+     (gnaw-list-filter "filter with key:value tokens (C-u: clear filter)")
      (gnaw-list-filter-transient "filter by one field (menu)")
      (gnaw-select-preset-filter "apply a preset filter")
-     (gnaw-save-preset-filter "save the active filter as a preset (C-u: edit all the presets in a buffer)")
+     (gnaw-save-preset-filter "save active filter as a preset (C-u: edit presets in a buffer)")
      (gnaw-list-limit-type "limit to a report type")
      (gnaw-list-filter-topic "filter by a topic, with completion")
-     (gnaw-list-filter-acked "only the acked reports (toggle)")
-     (gnaw-list-filter-owned "only the owned reports (toggle)")
-     (gnaw-list-limit-closed "only the closed reports (canceled, resolved...) (toggle)")
-     (gnaw-list-limit-awaiting "only the reports awaiting a reply (toggle)")
-     (gnaw-list-limit-related "only the reports with related reports (toggle)")
-     (gnaw-list-limit-attachments "only the reports with attachments (toggle)")
-     (gnaw-list-filter-cell "toggle a filter on the cell at point")
-     (gnaw-list-sort "sort by the column at point")
+     (gnaw-list-filter-acked "only acked reports (toggle)")
+     (gnaw-list-filter-owned "only owned reports (toggle)")
+     (gnaw-list-limit-closed "only closed reports (canceled, resolved...) (toggle)")
+     (gnaw-list-limit-awaiting "only reports awaiting a reply (toggle)")
+     (gnaw-list-limit-related "only reports with related reports (toggle)")
+     (gnaw-list-limit-attachments "only reports with attachments (toggle)")
+     (gnaw-list-filter-cell "toggle a filter on cell at point")
+     (gnaw-list-sort "sort by column at point")
      (gnaw-sort "sort by a criterion"))
     ("Patches and attachments\n-----------------------"
-     (gnaw-list-tab "fold / unfold the series, or narrow to related reports")
-     (gnaw-list-quit "leave the related view, clear the filter, or quit the window")
-     (gnaw-list-attachment-view "view an attachment (patches in diff-mode)")
-     (gnaw-list-attachment-save "save an attachment (proposes the configured repo)")
-     (gnaw-list-patch-apply "apply the patches with git apply (C-u: git am)")
-     (gnaw-list-attachments "menu acting on patches and attachments"))
+     (gnaw-list-tab "fold / unfold series, or narrow to related reports")
+     (gnaw-list-quit "leave related view, clear filter, or quit window")
+     (gnaw-list-attachment-view "view attachment (patches in diff-mode)")
+     (gnaw-list-attachment-save "save attachment (proposes configured repo)")
+     (gnaw-list-patch-apply "apply patches with git apply (C-u: git am)")
+     (gnaw-list-attachments "menu to act on patches and attachments"))
     ("Refresh\n-------"
-     (gnaw-list-reload "re-read the local cache")
-     (gnaw-list-update "refresh the remote cache, then reload"))
+     (gnaw-list-reload "re-read local cache")
+     (gnaw-list-update "refresh remote cache, then reload"))
     ("Help\n----"
      (gnaw-show-help "this help")
      (describe-mode "full mode description")))
