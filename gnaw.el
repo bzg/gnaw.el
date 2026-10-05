@@ -2041,8 +2041,10 @@ it."
 TRAILERS are \"Key: Name <addr>\" strings; those already present in
 the commit message (case-insensitively) are skipped.  The missing
 ones are inserted just before the \"---\" separator that ends the
-message.  Return FILE itself when nothing is missing or the file has
-no separator (then there is no commit message to extend safely)."
+message, after a blank line unless the message already ends with a
+trailer block: git only reads trailers from a paragraph of their own.
+Return FILE itself when nothing is missing or the file has no
+separator (then there is no commit message to extend safely)."
   (with-temp-buffer
     (insert-file-contents file)
     (goto-char (point-min))
@@ -2065,6 +2067,11 @@ no separator (then there is no commit message to extend safely)."
         (if (not missing)
             file
           (goto-char sep)
+          (unless (seq-every-p
+                   (lambda (l) (string-match-p "\\`[[:alnum:]-]+:[ \t]" l))
+                   (split-string (car (last (split-string msg "\n\n")))
+                                 "\n" t))
+            (insert "\n"))
           (dolist (tr missing) (insert tr "\n"))
           (let ((tmp (make-temp-file "gnaw-am-" nil ".patch")))
             (write-region nil nil tmp nil 'silent)
