@@ -2242,7 +2242,7 @@ PATCHES restricts the operation to these `:patches' entries."
           (message "gnaw: git apply applied %d patch(es) in %s"
                    (length files) default-directory)
         (display-buffer "*gnaw-git*")
-        (message "gnaw: git apply failed in %s (rejects left as .rej)"
+        (message "gnaw: git apply failed in %s (see the *gnaw-git* buffer)"
                  default-directory)))))
 
 (declare-function magit-status-setup-buffer "magit-status" (&optional directory))
