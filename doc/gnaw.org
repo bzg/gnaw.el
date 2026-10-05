@@ -614,7 +614,8 @@ attachment they act right away, otherwise they ask which one (with an
 
 {{{kbd(:)}}} opens the generic menu on the attachments of the report at
 point. A single patch opens the patch menu: {{{kbd(v)}}} view in [[info:emacs#Diff Mode][diff-mode]],
-{{{kbd(a)}}} runs =git apply=, {{{kbd(m)}}} =git am=, {{{kbd(s)}}} save to a directory. Gnaw
+{{{kbd(a)}}} runs =git apply=, {{{kbd(m)}}} =git am=, {{{kbd(s)}}} save to a directory,
+{{{kbd(c)}}} check whether it is already applied. Gnaw
 displays a single calendar (=.ics=) or text attachment right away, and
 lists several in a buffer where {{{kbd(+)}}} (or {{{kbd(RET)}}}) acts the same way
 on the attachment at point, with an extra first row acting on all the
@@ -688,6 +689,19 @@ leaving no trace in the repo. Answer no to keep the mid-am state
 instead and fix it by hand (resolve the conflicts, then =git am
 --continue=---or =git am --abort=). Set ~gnaw-am-undo-on-failure~ to t to
 always undo without asking, or to nil to always keep the mid-am state.
+
+#+cindex: applied patches, checking
+{{{kbd(c)}}} in the patch menu tells whether the patches are already applied
+in the repo's main branch---the local branch named after origin's
+HEAD, or that remote branch when the local one is behind it, as after a
+fetch, else =main= or =master=---whatever the current checkout, so that a
+work branch carrying the patches does not count. A patch that
+reverse-applies is /applied verbatim/; one whose added lines are mostly
+there, with a commit adding them after the patch was sent, is /probably
+applied/, and gnaw names that commit. This is a heuristic gathering
+evidence for you to judge, not a ruling: a reworked patch may go
+unnoticed. The answer shows in the echo area for a single patch, in a
+=*gnaw-check*= buffer for several.
 
 * Configuration
 :PROPERTIES:

@@ -2369,6 +2369,222 @@ the operation to these `:patches' entries."
          (dir (gnaw--save-files-in-dir info files no-confirm "patch(es)")))
     (message "gnaw: saved %d patch(es) in %s" (length files) dir)))
 
+;;; Checking whether patches are already applied
+
+;; A heuristic, meant to gather evidence for a human rather than to
+;; rule: a patch counts as applied verbatim when it reverse-applies,
+;; as probably applied when most of its added lines are in the target
+;; files and `git log -S' dates them after the submission.
+;; Everything is checked against the main branch, never the working
+;; tree: a work branch may carry the very patches under review.
+
+(defconst gnaw--applied-min-ratio 0.5
+  "Share of a patch's added lines below which it counts as not found.")
+
+(defconst gnaw--applied-probes 3
+  "How many of the longest matched lines `git log -S' looks up.")
+
+(defun gnaw--main-branch (repo)
+  "Return the main branch of REPO, never its current checkout.
+The local branch named after origin's HEAD, or that remote branch
+when the local one lacks some of its commits, as after a fetch;
+else a local main or master."
+  (let* ((default-directory repo)
+         (remote (with-temp-buffer
+                   (and (zerop (call-process "git" nil t nil "symbolic-ref"
+                                             "--short" "-q"
+                                             "refs/remotes/origin/HEAD"))
+                        (string-trim (buffer-string)))))
+         (local (and remote (string-remove-prefix "origin/" remote))))
+    (cond ((and remote
+                (zerop (call-process "git" nil nil nil "merge-base"
+                                     "--is-ancestor" remote local)))
+           local)
+          (remote)
+          ((seq-find #'gnaw--commit-in-repo-p '("main" "master")))
+          (t (user-error "No main branch in %s, try `%s'"
+                         repo "git remote set-head origin -a")))))
+
+(defun gnaw--applied-parse (file)
+  "Return the lines patch FILE adds, as a list of (PATH . LINES) pairs.
+PATH is a patched file as the patch spells it, prefix included;
+LINES its trimmed added lines, less the short ones matching
+everywhere."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (let ((case-fold-search nil)
+          targets target added)
+      (cl-flet ((flush ()
+                  (when (and target added)
+                    (push (cons target (nreverse added)) targets))
+                  (setq added nil)))
+        (while (not (eobp))
+          (cond
+           ;; A "--- " then "+++ " pair heads a file's diff.  Non-git
+           ;; diffs append a tab and a timestamp, and may use absolute
+           ;; paths.
+           ((looking-at "--- .*\n\\+\\+\\+ \\([^\t\n]*\\)")
+            (flush)
+            (let ((tgt (string-trim (match-string 1))))
+              (setq target (and (not (equal tgt "/dev/null"))
+                                (not (file-name-absolute-p tgt))
+                                tgt)))
+            (forward-line 1))
+           ;; The next diff or mail ends the file's hunks: a "+" line
+           ;; further down may belong to a commit message.
+           ((looking-at "diff \\|From ")
+            (flush)
+            (setq target nil))
+           ((and target (looking-at "\\+\\(.*\\)"))
+            (let ((l (string-trim (match-string 1))))
+              (when (>= (length (replace-regexp-in-string "[^[:alnum:]]" "" l))
+                        8)
+                (push l added)))))
+          (forward-line 1))
+        (flush)
+        (nreverse targets)))))
+
+(defun gnaw--applied-ref-lines (ref path cache)
+  "Return a hash set of the trimmed lines of PATH at REF, nil without PATH.
+Runs in `default-directory'.  CACHE memoizes the sets by PATH."
+  (or (gethash path cache)
+      (with-temp-buffer
+        (when (zerop (call-process "git" nil t nil "show"
+                                   (concat ref ":" path)))
+          (let ((set (make-hash-table :test 'equal)))
+            (dolist (l (split-string (buffer-string) "\n"))
+              (puthash (string-trim l) t set))
+            (puthash path set cache))))))
+
+(defun gnaw--applied-log-S (ref line path since)
+  "Return (HASH EPOCH SUBJECT) of REF's last commit touching LINE in PATH.
+Nil when that commit is older than SINCE, epoch seconds bounding
+the walk through history, if non-nil.  Runs in `default-directory';
+EPOCH is the committer date."
+  (with-temp-buffer
+    (when (zerop (apply #'call-process "git" nil t nil "log" "-1"
+                        "--format=%h%x00%ct%x00%s" (concat "-S" line)
+                        (append (and since (list (format "--since=@%d" since)))
+                                (list ref "--" path))))
+      (let ((parts (split-string (string-trim (buffer-string)) "\0")))
+        (when (= (length parts) 3)
+          (list (nth 0 parts) (string-to-number (nth 1 parts))
+                (nth 2 parts)))))))
+
+(defun gnaw--applied-commit (ref found since)
+  "Return the (HASH EPOCH SUBJECT) commit of REF dating FOUND, or nil.
+FOUND lists (PATH . LINE) pairs.  The commit is the median one of
+the longest lines, nil when most of them are older than SINCE: a
+single line must not date the whole patch, be it older than the
+patch or touched by a later commit."
+  (let* ((longest (seq-take (sort (seq-uniq found)
+                                  (lambda (a b) (> (length (cdr a))
+                                                   (length (cdr b)))))
+                            gnaw--applied-probes))
+         (commits (sort (delq nil
+                              (mapcar (lambda (p)
+                                        (gnaw--applied-log-S ref (cdr p) (car p)
+                                                             since))
+                                      longest))
+                        (lambda (a b) (> (nth 1 a) (nth 1 b))))))
+    ;; The lines older than SINCE have no commit, and would come last.
+    (nth (/ (length longest) 2) commits)))
+
+(defun gnaw--applied-check (ref file date cache)
+  "Return a plist on whether patch FILE, sent on DATE, is applied in REF.
+Its :verdict is `exact', `probable', `partial', `older' when the
+lines found predate the patch, `not-found', or `nothing' when FILE
+adds no line to look for.  CACHE is that of
+`gnaw--applied-ref-lines'.  Runs in `default-directory', with
+GIT_INDEX_FILE naming an index read from REF."
+  (if (zerop (call-process "git" nil nil nil "apply" "--cached" "--reverse"
+                           "--check" file))
+      (list :verdict 'exact)
+    (let ((sent (ignore-errors (time-convert (date-to-time date) 'integer)))
+          (total 0)
+          found)                        ; (PATH . LINE) pairs
+      (pcase-dolist (`(,target . ,lines) (gnaw--applied-parse file))
+        (cl-incf total (length lines))
+        ;; Diffs prefix the path with a directory, b/ for git; a few
+        ;; do not.
+        (when-let* ((path (seq-find
+                           (lambda (p) (gnaw--applied-ref-lines ref p cache))
+                           (list (replace-regexp-in-string "\\`[^/]+/" "" target)
+                                 target)))
+                    (cur (gnaw--applied-ref-lines ref path cache)))
+          (dolist (l lines)
+            (when (gethash l cur) (push (cons path l) found)))))
+      (let* ((ratio (if (> total 0) (/ (float (length found)) total) 0.0))
+             (commit (and (>= ratio gnaw--applied-min-ratio)
+                          (gnaw--applied-commit ref found sent))))
+        (list :verdict
+              (cond ((zerop total) 'nothing)
+                    ((< ratio gnaw--applied-min-ratio) 'not-found)
+                    ((null commit) 'older)
+                    ((>= ratio 0.8) 'probable)
+                    (t 'partial))
+              :found (length found) :total total :commit commit)))))
+
+(defun gnaw--applied-describe (result)
+  "Return a one-line description of RESULT, a `gnaw--applied-check' plist."
+  (let* ((commit (plist-get result :commit))
+         (lines (format "%d/%d lines" (or (plist-get result :found) 0)
+                        (or (plist-get result :total) 0)))
+         (evidence (and commit
+                        (format "%s %s %s" (nth 0 commit)
+                                (format-time-string "%F" (nth 1 commit))
+                                (nth 2 commit)))))
+    (pcase (plist-get result :verdict)
+      ('exact "applied verbatim")
+      ('nothing "adds no line to look for")
+      ('probable (format "probably applied (%s): %s" lines evidence))
+      ('partial (format "partly found (%s): %s" lines evidence))
+      ('older (format "not found (%s, older than the patch)" lines))
+      (_ (format "not found (%s)" lines)))))
+
+(defun gnaw-check-patches (info &optional patches)
+  "Tell whether INFO's patches are applied in the repo's main branch.
+PATCHES restricts the check to these `:patches' entries.  The
+answer is a heuristic one: see the commit it names."
+  (let* ((patches (or patches (plist-get info :patches)))
+         (files (gnaw--patch-files info "checking" patches))
+         (default-directory (gnaw--target-repo info))
+         (ref (gnaw--main-branch default-directory))
+         (tmp (make-temp-file "gnaw-index" t))
+         ;; A throwaway index read from REF lets `git apply --cached'
+         ;; check against it, leaving the checkout and its index alone.
+         (process-environment (cons (concat "GIT_INDEX_FILE="
+                                            (expand-file-name "index" tmp))
+                                    process-environment))
+         (cache (make-hash-table :test 'equal)))
+    (unwind-protect
+        (progn
+          (unless (zerop (gnaw--git default-directory "read-tree" ref))
+            (display-buffer "*gnaw-git*")
+            (user-error "Cannot read %s in %s" ref default-directory))
+          (message "gnaw: checking %d patch(es) against %s..."
+                   (length files) ref)
+          (let ((report
+                 (format
+                  "gnaw: checked against %s in %s\n%s" ref default-directory
+                  (string-join
+                   (cl-mapcar
+                    (lambda (file patch)
+                      (format "  %s: %s" (file-name-nondirectory file)
+                              (gnaw--applied-describe
+                               (gnaw--applied-check
+                                ref file
+                                (or (alist-get 'date patch)
+                                    (plist-get info :date))
+                                cache))))
+                    files patches)
+                   "\n"))))
+            ;; The echo area would truncate a series' report.
+            (if (cdr files)
+                (with-help-window "*gnaw-check*" (princ report))
+              (message "%s" report))))
+      (delete-directory tmp t))))
+
 ;;; Query filter (subset of the BONE web search syntax)
 
 (defvar-local gnaw-list--query nil
@@ -4361,13 +4577,20 @@ inverts that setting for this call."
   (pcase-let ((`(,info . ,patches) (gnaw--patch-target)))
     (gnaw-save-patches info (gnaw--save-no-confirm-p arg) patches)))
 
+(defun gnaw-list-patch-check ()
+  "Tell whether the target patches are applied in the repo's main branch."
+  (interactive)
+  (pcase-let ((`(,info . ,patches) (gnaw--patch-target)))
+    (gnaw-check-patches info patches)))
+
 (transient-define-prefix gnaw-list-patch-transient (info &optional patches)
   "Act on PATCHES of report INFO -- all of its patches when nil."
   [["Patches"
     ("v" "View in diff-mode" gnaw-list-patch-view)
     ("a" "Apply (git apply)" gnaw-list-patch-apply)
     ("m" "Apply as commits (git am; C-u: worktree)" gnaw-list-patch-am)
-    ("s" "Save to a directory" gnaw-list-patch-save)]]
+    ("s" "Save to a directory" gnaw-list-patch-save)
+    ("c" "Check if applied (in the main branch)" gnaw-list-patch-check)]]
   (interactive (list (cdr (gnaw-list--current))))
   (transient-setup 'gnaw-list-patch-transient nil nil
                    :scope (cons info patches)))
