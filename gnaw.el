@@ -4687,7 +4687,7 @@ argument ARG inverts that setting for this call.  Patches go through
   "Act on the attachments of the report at point.
 A single patch opens the patch menu; a single calendar or text
 attachment shows right away; with several attachments, a buffer
-lists them and + acts again on the attachment at point."
+lists them and : acts again on the attachment at point."
   (interactive)
   (let* ((info (cdr (gnaw-list--current)))
          (atts (gnaw--attachments info)))
@@ -4703,7 +4703,7 @@ the report list is updated.")
 
 (defvar gnaw-attachments-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map "+" #'gnaw-attachments-act)
+    (define-key map ":" #'gnaw-attachments-act)
     (define-key map (kbd "RET") #'gnaw-attachments-act)
     map)
   "Keymap for `gnaw-attachments-mode'.")
@@ -4736,7 +4736,7 @@ at once."
     (tabulated-list-print)
     (pop-to-buffer (current-buffer))
     (goto-char (point-min))
-    (message "gnaw: type + or RET to act on the attachment at point")))
+    (message "gnaw: type : or RET to act on the attachment at point")))
 
 (defun gnaw-attachments-act ()
   "Act on the attachment at point: patch menu, or display the file."
