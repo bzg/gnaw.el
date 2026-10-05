@@ -888,12 +888,18 @@ The sources download in parallel while Emacs stays responsive; each
 is first revalidated with a HEAD request comparing the server's ETag
 to the saved one, so an unchanged source costs no download.  With a
 prefix argument FORCE, skip the revalidation and re-download every
-source.  Once every source finished, run `gnaw-after-update-hook',
-then CALLBACK when non-nil."
+source.  The meta.json files already cached are refreshed along with
+their sources.  Once every source finished, run
+`gnaw-after-update-hook', then CALLBACK when non-nil."
   (interactive "P")
   (when gnaw--update-pending
     (user-error "An update is already running"))
   (let* ((sources (cl-remove-if-not #'gnaw--http-url-p (gnaw-sources)))
+         ;; Nothing else refreshes a meta.json once it is cached.
+         (metas (seq-filter
+                 (lambda (url)
+                   (file-exists-p (gnaw--source-to-cache-file url)))
+                 (delete-dups (mapcar #'gnaw--meta-url sources))))
          (changed 0)
          (failed 0)
          (done (lambda (msg)
@@ -918,18 +924,23 @@ then CALLBACK when non-nil."
                                         (format ", %d failed" failed))))))))
     (if (null sources)
         (funcall done "gnaw: no remote source to update")
-      (setq gnaw--update-pending (length sources))
+      (setq gnaw--update-pending (+ (length sources) (length metas)))
       (message "gnaw: updating %d source%s in the background..."
                (length sources) (if (cdr sources) "s" ""))
-      (dolist (source sources)
-        ;; A synchronous failure (malformed URL) must still count
-        ;; down, or `gnaw--update-pending' would block updates forever.
-        (condition-case err
-            (gnaw--update-source source force finish)
-          (error
-           (message "gnaw: failed updating %s: %s"
-                    source (error-message-string err))
-           (funcall finish 'failed)))))))
+      (dolist (url (append sources metas))
+        ;; A meta.json counts down like a source, but stays out of the
+        ;; tallies the final message reports.
+        (let ((cb (if (member url metas)
+                      (lambda (_) (funcall finish nil))
+                    finish)))
+          ;; A synchronous failure (malformed URL) must still count
+          ;; down, or `gnaw--update-pending' would block updates forever.
+          (condition-case err
+              (gnaw--update-source url force cb)
+            (error
+             (message "gnaw: failed updating %s: %s"
+                      url (error-message-string err))
+             (funcall cb 'failed))))))))
 
 (defun gnaw--tree-size (path)
   "Return the total byte size of PATH, a file or a directory."
@@ -1379,11 +1390,18 @@ A report's :topic may hold several space-separated topics."
         (set-buffer-multibyte nil)
         (insert body)))))
 
-(defun gnaw-source-meta (source)
-  "Return the parsed meta.json sibling of reports SOURCE, or nil."
-  (condition-case nil
-      (gnaw--read-json (gnaw--meta-url source))
-    (error nil)))
+(defun gnaw-source-meta (source &optional refresh)
+  "Return the parsed meta.json sibling of reports SOURCE, or nil.
+Non-nil REFRESH revalidates the cached copy of a remote meta.json
+first, keeping it when that fails."
+  (let* ((url (gnaw--meta-url source))
+         (cache (gnaw--source-to-cache-file url)))
+    ;; Without a cached copy, the read below fetches it anyway.
+    (when (and refresh (gnaw--http-url-p url) (file-exists-p cache))
+      (ignore-errors (gnaw--refresh-cache url cache)))
+    (condition-case nil
+        (gnaw--read-json url)
+      (error nil))))
 
 (defun gnaw--attachments-base (source subdir)
   "Return the SUBDIR base URL or directory for reports SOURCE.
@@ -5403,7 +5421,7 @@ updated source hands down its repos and offers to link more."
    (let* ((input (read-string "Report source URL (base, meta.json or .json): "))
           (_ (when (string-empty-p (string-trim input)) (user-error "No URL given")))
           (dir (gnaw--resolve-reports-dir input))
-          (meta (ignore-errors (gnaw-source-meta dir)))
+          (meta (ignore-errors (gnaw-source-meta dir t)))
           (files (or (alist-get 'reports-files meta) '("all.json")))
           (def (cond ((member "all-open.json" files) "all-open.json")
                      ((member "all.json" files) "all.json")
