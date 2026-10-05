@@ -1111,25 +1111,30 @@ would silently drop every existing mark, including the gnaw CLI's."
   (gnaw--read-edn-map-or-signal
    (expand-file-name "state.edn" gnaw-config-dir)))
 
-(defun gnaw-write-state (state)
-  "Write STATE to the state file as UTF-8, one entry per line.
+(defun gnaw--write-file-atomically (file text)
+  "Write TEXT to FILE as UTF-8, creating its directory as needed.
 Write to a temporary sibling then rename it, so the gnaw CLI, which
-shares the file, never reads a half-written state.edn."
-  (let* ((file (expand-file-name "state.edn" gnaw-config-dir))
-         (coding-system-for-write 'utf-8))
-    (make-directory (file-name-directory file) t)
-    (let ((tmp (make-temp-file (concat file ".tmp"))))
-      (with-temp-file tmp
-        (if (null state)
-            (insert "{}\n")
-          (insert "{"
-                  (mapconcat (lambda (kv)
-                               (concat (gnaw--edn-write (car kv)) " "
-                                       (gnaw--edn-write (cdr kv))))
-                             state "\n ")
-                  "}\n")))
-      (set-file-modes tmp (or (file-modes file) #o644))
-      (rename-file tmp file t))
+shares the config and state files, never reads a half-written one."
+  (make-directory (file-name-directory file) t)
+  (let ((tmp (make-temp-file (concat file ".tmp")))
+        (coding-system-for-write 'utf-8))
+    (with-temp-file tmp (insert text))
+    (set-file-modes tmp (or (file-modes file) #o644))
+    (rename-file tmp file t)))
+
+(defun gnaw-write-state (state)
+  "Write STATE to the state file, one entry per line."
+  (let ((file (expand-file-name "state.edn" gnaw-config-dir)))
+    (gnaw--write-file-atomically
+     file
+     (if (null state)
+         "{}\n"
+       (concat "{"
+               (mapconcat (lambda (kv)
+                            (concat (gnaw--edn-write (car kv)) " "
+                                    (gnaw--edn-write (cdr kv))))
+                          state "\n ")
+               "}\n")))
     ;; Refresh the cache from the state just written, saving the next
     ;; read a re-parse.
     (setq gnaw--state-cache
@@ -5383,12 +5388,38 @@ replaced; a LETTER already identifying a kept entry signals a
     (gnaw--alist-put config :sources (append others (list src)))))
 
 (defun gnaw--write-config (config)
-  "Write CONFIG alist to config.edn as UTF-8."
-  (let ((file (expand-file-name "config.edn" gnaw-config-dir)))
-    (make-directory (file-name-directory file) t)
-    (let ((coding-system-for-write 'utf-8))
-      (with-temp-file file
-        (insert (gnaw--edn-write config) "\n")))
+  "Write CONFIG's `:sources' to config.edn, leaving the rest as is.
+The sources are all gnaw.el ever changes: replacing that value alone
+in the file's text keeps the comments and the other settings, which
+serializing the whole alist would drop or reshape -- the reader does
+not tell a vector of vectors from a map, nor false from nil."
+  (let ((file (expand-file-name "config.edn" gnaw-config-dir))
+        (sources (gnaw--edn-write (alist-get :sources config))))
+    (gnaw--write-file-atomically
+     file
+     (with-temp-buffer
+       (when (file-readable-p file)
+         (let ((coding-system-for-read 'utf-8))
+           (insert-file-contents file)))
+       (goto-char (point-min))
+       (gnaw-edn--skip-ws)
+       (if (eobp)
+           (insert "{:sources " sources "}\n")
+         ;; Callers parsed the file first: it holds a well-formed map.
+         (forward-char 1)
+         (gnaw-edn--skip-ws)
+         (let (found)
+           (while (not (or found (eq (char-after) ?\})))
+             (setq found (eq (gnaw-edn--read) :sources))
+             (gnaw-edn--skip-ws)
+             (let ((beg (point)))
+               (gnaw-edn--read)
+               (when found
+                 (delete-region beg (point))
+                 (insert sources)))
+             (gnaw-edn--skip-ws))
+           (unless found (insert " :sources " sources))))
+       (buffer-string)))
     (setq gnaw--config-cache nil)))
 
 (declare-function completing-read-multiple "crm")
