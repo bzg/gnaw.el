@@ -262,7 +262,13 @@ Filtering and sorting (see [[*Searching]]):
 
 - {{{kbd(=)}}} (~gnaw-list-filter-transient~) ::
   #+findex: gnaw-list-filter-transient
-  Filter by one field (a [[info:transient#Top][transient]] menu).
+  Filter by one field (a [[info:transient#Top][transient]] menu). Each field
+  reads a value and sets the query =field:value=. A free-text value
+  (from, subject, topic, message-id) is quoted, so it is searched as
+  one literal phrase; the value of the other fields (priority, date,
+  flags...) is kept as typed, so =3,2= on the priority field keeps both
+  priorities and =2026-01-01..= on the date field is a range, as in a
+  typed query (see [[*Searching]]).
 
 - {{{kbd(t)}}} (~gnaw-list-limit-type~) ::
   #+findex: gnaw-list-limit-type

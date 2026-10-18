@@ -781,7 +781,7 @@ does for `mapcan')."
                                             :source-name sname)))
          (reports (alist-get 'reports data))
          (result '()))
-    (when (and fv (version< fv gnaw-supported-bone-format))
+    (when (and (stringp fv) (version< fv gnaw-supported-bone-format))
       (message "gnaw: %s has format %s, min supported is %s"
                source fv gnaw-supported-bone-format))
     (dolist (r reports)
@@ -3292,7 +3292,9 @@ filter (AND)."
 (defun gnaw-list-filter-by (key &optional arg)
   "Limit the list to reports whose KEY field matches a read value.
 Read the value (completing types and topics), then set the query to
-`KEY:value'; an empty value clears the filter.  The flag fields
+`KEY:value'; an empty value clears the filter.  A free-text value is
+quoted so it reads as one literal token; the values of the other
+keys are kept as typed, commas (OR) and ranges included.  The flag fields
 \(acked, owned, closed, urgent, important) read no value and toggle:
 calling the command again while its filter is active clears it.
 ARG is the raw prefix argument: non-nil adds the condition to the
@@ -3314,7 +3316,13 @@ negation to the active filter (AND)."
       (gnaw-list-filter
        (if (string-empty-p val) ""
          (gnaw-list--query-add
-          (format "%s:%s" key (gnaw--query-quote-val val)) arg))))))
+          (format "%s:%s" key
+                  ;; Quoting a closed-set value would hide its commas
+                  ;; (OR) from the matcher: priority:"3,2" matches nothing.
+                  (if (member key gnaw--query-text-keys)
+                      (gnaw--query-quote-val val)
+                    val))
+          arg))))))
 
 (eval-and-compile
   (defun gnaw--filter-prefix-doc (excluded)
@@ -3597,15 +3605,16 @@ config.edn entry, see `gnaw-add-source')."
                 gnaw-list-columns)))
     (cl-remove-if (lambda (c) (member (downcase (car c)) skip)) cols)))
 
-(defun gnaw--list-format ()
+(defun gnaw--list-format (&optional window)
   "Return the `tabulated-list-format' vector for the active columns.
-Grow the Subject column to fill the window; other columns keep their
-width, so the trailing Created column stays at the right edge."
+Grow the Subject column to fill WINDOW (the selected window when
+nil); other columns keep their width, so the trailing Created column
+stays at the right edge."
   (let* ((cols (gnaw--active-columns))
          (others (cl-remove-if (lambda (c) (eq (nth 3 c) :subject)) cols))
          (used (apply #'+ tabulated-list-padding 1
                       (mapcar (lambda (c) (1+ (nth 1 c))) others)))
-         (subj (max 20 (- (window-body-width) used))))
+         (subj (max 20 (- (window-body-width window) used))))
     (setq-local gnaw-list--mark-index
                 (cl-position :mark cols :key (lambda (c) (nth 3 c))))
     (vconcat (mapcar (lambda (c)
@@ -3909,6 +3918,8 @@ them (see `gnaw-list--display-reports')."
 (defun gnaw-list-bookmark-jump (bookmark)
   "Restore the gnaw list view saved in BOOKMARK."
   (gnaw)
+  ;; `gnaw' keeps an existing list's view: the bookmark replaces it.
+  (setq-local gnaw-list--related-mids nil)
   (setq-local gnaw-list--query (bookmark-prop-get bookmark 'query))
   (when-let* ((key (bookmark-prop-get bookmark 'sort-key))
               ((assoc (car key) (gnaw--active-columns))))
@@ -3975,7 +3986,10 @@ whole; every command changing rows in place needs the full render."
          ;; point lands on the first row at column 0.  Landing on the
          ;; first row is expected -- losing the column is not.
          (col (current-column)))
-    (setq tabulated-list-format (gnaw--list-format))
+    ;; Size the Subject column on the window showing the list, which
+    ;; is not the selected one when a callback (update, auto-revert)
+    ;; refreshes it.
+    (setq tabulated-list-format (gnaw--list-format win))
     ;; The S column comes and goes with the number of sources: a sort
     ;; key naming a gone column would abort `tabulated-list-print',
     ;; so fall back on the default sort, as `gnaw-list-mode' does.
@@ -4976,18 +4990,20 @@ dismissal."
                  "gnaw: dismissed (type _ to include dismissed reports to the view)"
                "gnaw: dismiss mark removed"))))
 
-(defun gnaw-list--set-mark-cell (mid)
-  "Redraw MID's Mark cell on the current row.
+(defun gnaw-list--set-mark-cell (pair)
+  "Redraw the Mark cell of report PAIR, a (MID . INFO), on the current row.
 Do nothing when the list does not show the Mark column.  Much
 cheaper than `gnaw-list-refresh', which rebuilds and reprints
-every row: a flag toggle only changes this one cell."
+every row: a flag toggle only changes this one cell.  The cell is
+built like a full render does, with its mouse-face and the row's
+face (sticky, dismissed, closed), so it does not stand out."
   (when gnaw-list--mark-index
-    (tabulated-list-set-col
-     gnaw-list--mark-index
-     (if (member mid gnaw-list--flagged)
-         "D"
-       (gnaw-mark-prefix (gethash mid (gnaw--state-table))))
-     t)))
+    (let* ((entry (gethash (car pair) (gnaw--state-table)))
+           (faces (gnaw--row-faces entry (cdr pair)))
+           (cell (gnaw--list-cell :mark (cdr pair) entry (car pair))))
+      (tabulated-list-set-col gnaw-list--mark-index
+                              (if faces (propertize cell 'face faces) cell)
+                              t))))
 
 (defun gnaw-list-flag-dismiss ()
   "Flag the report at point for dismissal (or unflag it), then move down.
@@ -4996,13 +5012,14 @@ once by \\<gnaw-list-mode-map>\\[gnaw-list-execute-flags].  Flags live
 in memory only; nothing is written until then.  Moving down keeps
 point on its column."
   (interactive)
-  (let ((mid (car (gnaw-list--current)))
-        (col (current-column)))
+  (let* ((p (gnaw-list--current))
+         (mid (car p))
+         (col (current-column)))
     (setq-local gnaw-list--flagged
                 (if (member mid gnaw-list--flagged)
                     (delete mid gnaw-list--flagged)
                   (cons mid gnaw-list--flagged)))
-    (gnaw-list--set-mark-cell mid)
+    (gnaw-list--set-mark-cell p)
     (gnaw-list--update-mode-line)
     (gnaw-list--forward-row col)))
 
@@ -5044,7 +5061,7 @@ Moving down keeps point on its column."
     (cond
      ((member (car p) gnaw-list--flagged)
       (setq-local gnaw-list--flagged (delete (car p) gnaw-list--flagged))
-      (gnaw-list--set-mark-cell (car p))
+      (gnaw-list--set-mark-cell p)
       (gnaw-list--update-mode-line)
       (gnaw-list--forward-row col))
      ((gnaw-remove-marks (car p))
@@ -5615,14 +5632,19 @@ Help section, whose \"h\" key the message always mentions."
 ;;;###autoload
 (defun gnaw ()
   "Browse open BONE reports in a tabulated list filling the frame.
-Prompt for full interactive configuration when no source is configured."
+Prompt for full interactive configuration when no source is configured.
+An existing report list is reloaded in place, keeping its view: the
+filter, the unfolded series and the reports flagged for dismissal,
+which live in memory only, survive the call."
   (interactive)
   (unless (gnaw-sources)
     (gnaw-configure))
   (let ((buf (get-buffer-create "*gnaw*")))
     (switch-to-buffer buf)
     (delete-other-windows)
-    (gnaw-list-mode)
+    ;; Re-entering the mode would kill the buffer-local view state.
+    (unless (derived-mode-p 'gnaw-list-mode)
+      (gnaw-list-mode))
     (gnaw-list-reload)
     (unless gnaw-inhibit-startup-tip
       (message "%s" (gnaw--startup-tip)))))
