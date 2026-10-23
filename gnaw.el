@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.37.2
+;; Version: 0.37.3
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -83,7 +83,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.37.2")
+(defconst gnaw-version (or (package-get-version) "0.37.3")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -2153,21 +2153,12 @@ The proposed name is REPO's name plus BRANCH, when one is given."
 
 (defun gnaw--git (dir &rest args)
   "Run git ARGS in DIR and return the exit status.
-The output replaces the contents of the *gnaw-git* buffer, which
-callers display on failure."
+The output is appended to the *gnaw-git* buffer, a log of the
+session's git commands which callers display on failure, after a
+`$ git ...' line naming the command."
   (with-current-buffer (get-buffer-create "*gnaw-git*")
     ;; An existing buffer keeps the default-directory of its first
     ;; use; re-point it at the current repo.
-    (setq default-directory (file-name-as-directory dir))
-    (let ((inhibit-read-only t)) (erase-buffer))
-    (apply #'call-process "git" nil t nil args)))
-
-(defun gnaw--git-append (dir &rest args)
-  "Run git ARGS in DIR like `gnaw--git', appending to *gnaw-git*.
-The buffer's contents stay -- typically a failed command whose
-output must remain visible -- and a `$ git ...' line separates
-them from the new command's."
-  (with-current-buffer (get-buffer-create "*gnaw-git*")
     (setq default-directory (file-name-as-directory dir))
     (let ((inhibit-read-only t))
       (goto-char (point-max))
@@ -2252,16 +2243,16 @@ PATCHES restricts the operation to these `:patches' entries."
 Abort the pending am session in AM-DIR, then remove the worktree
 when USE-WORKTREE, else restore the ORIG checkout in REPO, and
 delete the BRANCH created for the run (BRANCH and ORIG may be
-nil).  Each step appends its output to the *gnaw-git* buffer,
-below the failed am's; a failing step signals a `user-error',
-leaving the rest to the user."
+nil).  A failing step signals a `user-error', leaving the rest
+to the user; the *gnaw-git* buffer shows each step's output below
+the failed am's."
   (cl-flet ((git! (dir &rest args)
-              (unless (zerop (apply #'gnaw--git-append dir args))
+              (unless (zerop (apply #'gnaw--git dir args))
                 (user-error "Undo failed (git %s); see the *gnaw-git* buffer"
                             (car args)))))
     ;; An am failing before its session starts (patch format
     ;; detection, say) leaves nothing to abort; tolerate that one.
-    (gnaw--git-append am-dir "am" "--abort")
+    (gnaw--git am-dir "am" "--abort")
     (if use-worktree
         (git! repo "worktree" "remove" "--force" (directory-file-name am-dir))
       (when orig (git! repo "checkout" orig)))
