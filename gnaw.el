@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.37.3
+;; Version: 0.37.4
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -83,7 +83,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.37.3")
+(defconst gnaw-version (or (package-get-version) "0.37.4")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -1114,7 +1114,10 @@ would silently drop every existing mark, including the gnaw CLI's."
 (defun gnaw--write-file-atomically (file text)
   "Write TEXT to FILE as UTF-8, creating its directory as needed.
 Write to a temporary sibling then rename it, so the gnaw CLI, which
-shares the config and state files, never reads a half-written one."
+shares the config and state files, never reads a half-written one.
+A symbolic link (a file kept in a dotfiles repo) is followed: the
+rename replaces its target, not the link itself."
+  (setq file (file-truename file))
   (make-directory (file-name-directory file) t)
   (let ((tmp (make-temp-file (concat file ".tmp")))
         (coding-system-for-write 'utf-8))
@@ -3022,7 +3025,7 @@ the whole token in the subjects."
       ((or "att" "attributes" "A")
        ;; downcase: x is the only cased glyph, and the neighbor
        ;; flags: alphabet is uppercase.
-       (gnaw--query-glyph-matcher (downcase val) #'gnaw--att-string))
+       (gnaw--query-glyph-matcher (downcase val) #'gnaw--att-glyphs))
       ("similar"
        (let ((m (gnaw--query-similar-matcher val)))
          (lambda (_mid info) (funcall m (plist-get info :subject)))))
@@ -3449,7 +3452,8 @@ are offered.  `gnaw-save-preset-filter' adds the active filter here;
   "Return the three-position Att column string for report INFO.
 Positions: awaiting (.), related (~), then one attachment glyph --
 + one patch, x several, @ calendar events, # plain-text files.
-Also matched, sans spaces, by the att: query key."
+The att: query key matches `gnaw--att-glyphs' instead, which lists
+every attachment type present."
   (let ((patches (plist-get info :patches)))
     (concat (if (plist-get info :awaiting) "." " ")
             (if (plist-get info :related) "~" " ")
@@ -3458,6 +3462,19 @@ Also matched, sans spaces, by the att: query key."
                   ((plist-get info :events) "@")
                   ((plist-get info :texts)  "#")
                   (t " ")))))
+
+(defun gnaw--att-glyphs (info)
+  "Return every Att glyph report INFO carries, for the att: query key.
+Unlike `gnaw--att-string', which shows one attachment glyph only,
+give one per attachment type present, so att:@ also finds a report
+whose patches hide its calendar events in the Att column."
+  (let ((patches (plist-get info :patches)))
+    (concat (and (plist-get info :awaiting) ".")
+            (and (plist-get info :related) "~")
+            (cond ((cdr patches) "x")
+                  (patches "+"))
+            (and (plist-get info :events) "@")
+            (and (plist-get info :texts) "#"))))
 
 (defun gnaw--att-help (info)
   "Spell out INFO's Att column for its help echo, or nil."
