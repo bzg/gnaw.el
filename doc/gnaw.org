@@ -492,7 +492,7 @@ then {{{kbd(RET)}}}) clears it.
 | =topic:agenda=               | =T:=       | topic                                     |
 | =source:O= =source:emacs=      | =S:=       | source letter (one char) or name          |
 | =type:patch=                 | =t:=       | report type                               |
-| =priority:2=                 | =p:=       | exact priority (0-3, shown A/B/C)         |
+| =priority:B..=               | =p:=       | priority, A B C or 3 2 1 (=N..=, =..N=, =A..B=) |
 | =votes:3..=                  | =v:=       | vote score (=N=, =N..=, =..N=, =A..B= ranges)     |
 | =msgs:10..=                  | =M:=       | thread size, initial mail included        |
 | =mid:<...>=                  | =m:=       | message-id                                |

@@ -3062,24 +3062,32 @@ on the BONE web page."
   "Parse range bound S into an integer, or nil when S is not one."
   (and (string-match-p "\\`-?[0-9]+\\'" s) (string-to-number s)))
 
-(defun gnaw--query-number-matcher (spec getter)
+(defun gnaw--query-priority-bound (s)
+  "Parse priority bound S, a number or the letter shown for it, or nil.
+A, B and C (any case) stand for 3, 2 and 1, as in the Pri column."
+  (pcase (downcase s)
+    ("a" 3) ("b" 2) ("c" 1)
+    (_ (gnaw--query-number-bound s))))
+
+(defun gnaw--query-number-matcher (spec getter &optional parse-bound)
   "Compile numeric SPEC into a predicate on the number read by GETTER.
 Each comma (OR) alternative of SPEC is an integer N or an A..B
 range whose ends may be empty (the order is normalized), like the
 date: ranges; an unparseable alternative or bound matches nothing.
 GETTER maps an INFO plist to the number, nil when the report has
-none -- which no alternative matches."
-  (let ((ranges
-         (delq nil
-               (mapcar
-                (lambda (alt)
-                  (let ((range (gnaw--query-range
-                                alt #'gnaw--query-number-bound)))
-                    (cond ((consp range) range)
-                          ((null range)
-                           (when-let* ((n (gnaw--query-number-bound alt)))
-                             (cons n n))))))
-                (gnaw--query-vals spec)))))
+none -- which no alternative matches.  PARSE-BOUND reads N and each
+bound, `gnaw--query-number-bound' by default."
+  (let* ((parse-bound (or parse-bound #'gnaw--query-number-bound))
+         (ranges
+          (delq nil
+                (mapcar
+                 (lambda (alt)
+                   (let ((range (gnaw--query-range alt parse-bound)))
+                     (cond ((consp range) range)
+                           ((null range)
+                            (when-let* ((n (funcall parse-bound alt)))
+                              (cons n n))))))
+                 (gnaw--query-vals spec)))))
     (lambda (_mid info)
       (when-let* ((n (funcall getter info)))
         (seq-some (lambda (r)
@@ -3239,10 +3247,11 @@ the whole token in the subjects."
          (lambda (_mid info)
            (member (downcase (or (plist-get info :type) "")) vals))))
       ((or "priority" "p")
-       (let ((vals (gnaw--query-vals val)))
-         (lambda (_mid info)
-           (member (number-to-string (or (plist-get info :priority) 0))
-                   vals))))
+       ;; 0-3, shown " "/C/B/A, as numbers or letters: priority:2..
+       ;; and priority:B.. both mean B or A.
+       (gnaw--query-number-matcher
+        val (lambda (info) (or (plist-get info :priority) 0))
+        #'gnaw--query-priority-bound))
       ((or "votes" "v")
        (gnaw--query-number-matcher
         val (lambda (info)
@@ -3540,6 +3549,8 @@ negation to the active filter (AND)."
                       (completing-read "Type: " gnaw-report-types))
                      ((equal key "topic")
                       (completing-read "Topic: " (gnaw-topics gnaw-list--reports)))
+                     ((equal key "priority")
+                      (read-string "Priority (A B C or 3 2 1, ranges B.. or 1..2): "))
                      ((equal key "flags")
                       (read-string "Flags letters, all required (A O C R E S): "))
                      ((equal key "att")
