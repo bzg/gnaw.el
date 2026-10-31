@@ -110,6 +110,14 @@ this to re-apply their display."
 
 ;;; EDN reader/writer (the subset emitted by gnaw's config.edn and state.edn)
 
+(defvar gnaw-edn--faithful nil
+  "Non-nil makes the EDN reader keep what an alist would lose.
+Vectors read as Lisp vectors, not lists, so a vector of pairs is not
+mistaken for a map, and false reads as the symbol `false', not nil;
+`gnaw--edn-write' prints both back as they were.  Bound when reading
+state.edn, which gnaw.el rewrites whole with entry keys the gnaw CLI
+may own.  An empty map still reads as nil: entries are alists.")
+
 (defun gnaw-edn--skip-ws ()
   "Skip EDN whitespace, commas and line comments at point."
   (skip-chars-forward " \t\n\r,")
@@ -126,7 +134,9 @@ this to re-apply their display."
      ((eq c ?\") (read (current-buffer)))
      ((eq c ?:)  (gnaw-edn--read-keyword))
      ((eq c ?\{) (gnaw-edn--read-map))
-     ((eq c ?\[) (gnaw-edn--read-vector))
+     ((eq c ?\[) (if gnaw-edn--faithful
+                     (vconcat (gnaw-edn--read-vector))
+                   (gnaw-edn--read-vector)))
      ((or (and (>= c ?0) (<= c ?9))
           (and (eq c ?-) (let ((d (char-after (1+ (point)))))
                            (and d (>= d ?0) (<= d ?9)))))
@@ -151,7 +161,7 @@ as dispatch forms like #inst), which would otherwise loop forever."
     (pcase (buffer-substring-no-properties start (point))
       ("nil"   nil)
       ("true"  t)
-      ("false" nil)
+      ("false" (and gnaw-edn--faithful 'false))
       (s       (intern s)))))
 
 (defun gnaw-edn--read-number ()
@@ -198,6 +208,7 @@ True when every element is a cons whose car is an atom (a key)."
    ((null v)     "nil")
    ((numberp v)  (number-to-string v))
    ((symbolp v)  (symbol-name v))
+   ((vectorp v)  (concat "[" (mapconcat #'gnaw--edn-write v " ") "]"))
    ((gnaw-edn--map-p v)
     (concat "{" (mapconcat (lambda (kv)
                              (concat (gnaw--edn-write (car kv)) " "
@@ -1113,7 +1124,8 @@ filesystems make that window negligible."
          (mtime (gnaw--file-mtime file)))
     (if (and gnaw--state-cache (equal (car gnaw--state-cache) mtime))
         (nth 1 gnaw--state-cache)
-      (let ((state (gnaw--read-edn-file file)))
+      (let ((state (let ((gnaw-edn--faithful t))
+                     (gnaw--read-edn-file file))))
         (setq gnaw--state-cache (list mtime state (gnaw--state-index state)))
         state))))
 
@@ -1127,8 +1139,9 @@ filesystems make that window negligible."
 Unlike `gnaw-read-state', signal a `user-error' when state.edn exists
 but cannot be parsed: writing a state derived from a misread file
 would silently drop every existing mark, including the gnaw CLI's."
-  (gnaw--read-edn-map-or-signal
-   (expand-file-name "state.edn" gnaw-config-dir)))
+  (let ((gnaw-edn--faithful t))
+    (gnaw--read-edn-map-or-signal
+     (expand-file-name "state.edn" gnaw-config-dir))))
 
 (defun gnaw--write-file-atomically (file text)
   "Write TEXT to FILE as UTF-8, creating its directory as needed.
@@ -1153,8 +1166,9 @@ rename replaces its target, not the link itself."
          "{}\n"
        (concat "{"
                (mapconcat (lambda (kv)
+                            ;; An entry is a map, even an empty one.
                             (concat (gnaw--edn-write (car kv)) " "
-                                    (gnaw--edn-write (cdr kv))))
+                                    (if (cdr kv) (gnaw--edn-write (cdr kv)) "{}")))
                           state "\n ")
                "}\n")))
     ;; Refresh the cache from the state just written, saving the next
