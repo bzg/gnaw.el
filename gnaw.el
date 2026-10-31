@@ -514,6 +514,16 @@ without a response."
         (with-current-buffer buf (gnaw--http-parse-reply url))
       (kill-buffer buf))))
 
+(defun gnaw--http-error-text (err url)
+  "Describe ERR, a `url-retrieve' :error value, for a fetch of URL.
+Its HTTP and connection errors would otherwise read \"peculiar
+error\"."
+  (pcase err
+    (`(error http ,code . ,_) (format "HTTP error %s from %s" code url))
+    (`(error connection-failed ,why . ,_)
+     (format "connection to %s failed (%s)" url (string-trim (format "%s" why))))
+    (_ (error-message-string err))))
+
 (defun gnaw--http-fetch-async (url head callback)
   "Fetch URL in the background, then pass CALLBACK one reply plist.
 The plist carries :status :body :etag like `gnaw--http-fetch', or
@@ -534,7 +544,7 @@ sends a HEAD request.  A watchdog enforces `gnaw-http-timeout':
                  (lambda (status)
                    (let ((reply (condition-case err
                                     (if-let* ((e (plist-get status :error)))
-                                        (list :error (error-message-string e))
+                                        (list :error (gnaw--http-error-text e url))
                                       (gnaw--http-parse-reply url))
                                   (error (list :error (error-message-string
                                                        err))))))
@@ -550,13 +560,16 @@ sends a HEAD request.  A watchdog enforces `gnaw-http-timeout':
                    (run-at-time
                     gnaw-http-timeout nil
                     (lambda ()
+                      ;; Finish first: deleting the process makes
+                      ;; `url-retrieve' report a connection failure,
+                      ;; which must not stand for the timeout.
+                      (finish (list :error
+                                    (format "no response from %s after %ss"
+                                            url gnaw-http-timeout)))
                       (when (buffer-live-p buf)
                         (when-let* ((proc (get-buffer-process buf)))
                           (delete-process proc))
-                        (kill-buffer buf))
-                      (finish (list :error
-                                    (format "no response after %ss"
-                                            gnaw-http-timeout)))))))))))
+                        (kill-buffer buf))))))))))
 
 (defun gnaw--http-body (url)
   "Return the raw HTTP body bytes of URL.
