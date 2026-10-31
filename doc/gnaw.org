@@ -623,7 +623,8 @@ attachment they act right away, otherwise they ask which one (with an
 
 {{{kbd(:)}}} opens the generic menu on the attachments of the report at
 point. A single patch opens the patch menu: {{{kbd(v)}}} view in [[info:emacs#Diff Mode][diff-mode]],
-{{{kbd(a)}}} runs =git apply=, {{{kbd(m)}}} =git am=, {{{kbd(s)}}} save to a directory,
+{{{kbd(a)}}} runs =git apply=, {{{kbd(m)}}} =git am=, {{{kbd(e)}}} edit then =git am=,
+{{{kbd(s)}}} save to a directory,
 {{{kbd(c)}}} check whether it is already applied. Gnaw
 displays a single calendar (=.ics=) or text attachment right away, and
 lists several in a buffer where {{{kbd(:)}}} (or {{{kbd(RET)}}}) acts the same way
@@ -662,6 +663,14 @@ the sender and subject, like =ec/fix-tangle__v2=
 (~gnaw-am-branch-function~); empty input keeps a detached HEAD---and for
 its start point, proposing the patches' recorded =base-commit:= when the
 repo has it.
+
+#+findex: gnaw-list-patch-am-edit
+#+cindex: patches, editing before git am
+{{{kbd(e)}}} in the patch menu lets you edit the patches before =git am=:
+each opens in turn in diff-mode, review trailers already folded in (see
+below), as a temporary copy---the cached original stays as it was.
+{{{kbd(C-M-c)}}} goes on with the next patch, then with =git am=;
+{{{kbd(C-])}}} aborts before any branch or worktree is created.
 
 #+vindex: gnaw-am-create-worktree
 #+cindex: worktree

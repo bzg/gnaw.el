@@ -2398,6 +2398,34 @@ answering."
       (message "gnaw: git am failed in %s (run `git am --abort' to undo)"
                am-dir))))
 
+(defun gnaw--edit-am-files (files)
+  "Let the user edit each of patch FILES, temporary copies, in turn.
+Each opens in `diff-mode' within a recursive edit:
+\\[exit-recursive-edit] saves it and goes on with the next one (then
+with git am), \\[abort-recursive-edit] aborts the whole run."
+  (let ((n (length files)) (i 0))
+    (dolist (f files)
+      (cl-incf i)
+      (let ((buf (find-file-noselect f)))
+        (unwind-protect
+            (save-window-excursion
+              (pop-to-buffer-same-window buf)
+              (diff-mode)
+              (message "gnaw: patch %d/%d; %s: next, %s: abort"
+                       i n
+                       (substitute-command-keys "\\[exit-recursive-edit]")
+                       (substitute-command-keys "\\[abort-recursive-edit]"))
+              (recursive-edit)
+              (with-current-buffer buf (save-buffer)))
+          (with-current-buffer buf (set-buffer-modified-p nil))
+          (kill-buffer buf))))))
+
+(defun gnaw--am-temp-copy (file)
+  "Return a temporary copy of patch FILE."
+  (let ((tmp (make-temp-file "gnaw-am-" nil ".patch")))
+    (copy-file file tmp t)
+    tmp))
+
 (defun gnaw--am-read-target (info files repo use-worktree)
   "Ask where to apply INFO's patch FILES in REPO.
 Return a list (BRANCH BASE AM-DIR ORIG).  BRANCH is the branch to
@@ -2435,11 +2463,13 @@ state per `gnaw-am-synthetic-trailers', when `gnaw-am-fold-trailers'."
         (gnaw--merge-trailers (plist-get info :trailers)
                               (gnaw--synthetic-trailers info)))))
 
-(defun gnaw--am-file (file trailers)
+(defun gnaw--am-file (file trailers edit)
   "Return the file to feed `git am' for patch FILE.
-With TRAILERS, a temporary copy with them folded in; FILE itself
-without any."
-  (if trailers (gnaw--fold-trailers-file file trailers) file))
+With TRAILERS, a temporary copy with them folded in; with EDIT, a
+temporary copy anyway, as editing never touches the cached
+originals.  FILE itself when neither applies."
+  (let ((folded (if trailers (gnaw--fold-trailers-file file trailers) file)))
+    (if (and edit (equal folded file)) (gnaw--am-temp-copy file) folded)))
 
 (defun gnaw--am-checkout (repo use-worktree branch base am-dir)
   "Create the checkout `git am' runs in, per `gnaw--am-read-target'.
@@ -2456,19 +2486,21 @@ shows the git output and signals a `user-error'."
     (display-buffer "*gnaw-git*")
     (user-error "Git %s failed" (if use-worktree "worktree add" "checkout"))))
 
-(defun gnaw--am-succeeded (files am-files am-dir branch)
+(defun gnaw--am-succeeded (files am-files am-dir branch edit)
   "Announce AM-FILES, the copies of patch FILES, applied in AM-DIR.
 Then show AM-DIR per `gnaw-am-show-repo'."
   (message "gnaw: git am applied %d patch(es) in %s%s%s"
            (length files) am-dir
            (if branch (format " on branch %s" branch) " (detached HEAD)")
-           (if (equal am-files files) "" ", trailers folded"))
+           (cond (edit ", edited")
+                 ((equal am-files files) "")
+                 (t ", trailers folded")))
   (when gnaw-am-show-repo
     (if (fboundp 'magit-status-setup-buffer)
         (magit-status-setup-buffer am-dir)
       (dired am-dir))))
 
-(defun gnaw-am-patches (info &optional patches toggle-worktree)
+(defun gnaw-am-patches (info &optional patches toggle-worktree edit)
   "Apply INFO's patches as commits with `git am'.
 First prompt for a branch to create (empty input keeps a detached
 HEAD) and for its start point (empty input starts from the current
@@ -2482,7 +2514,10 @@ those synthesized from the report state per
 `gnaw-am-fold-trailers'.  A successful run shows the directory
 applied in, per `gnaw-am-show-repo'; a failed one offers to undo
 its branch and checkout per `gnaw-am-undo-on-failure'.  PATCHES
-restricts the operation to these `:patches' entries."
+restricts the operation to these `:patches' entries.  Non-nil EDIT
+opens each patch, trailers folded, for editing before the branch is
+created (see `gnaw--edit-am-files'); the edits go to temporary
+copies, never to the cached originals."
   (let ((files (gnaw--patch-files info "applying" patches)))
     (gnaw--confirm-incomplete-series info patches)
     (pcase-let* ((repo (gnaw--target-repo info))
@@ -2492,19 +2527,22 @@ restricts the operation to these `:patches' entries."
                   (gnaw--am-read-target info files repo use-worktree))
                  (trailers (gnaw--am-trailers info))
                  (am-files nil))
-      (gnaw--am-checkout repo use-worktree branch base am-dir)
       (unwind-protect
           (progn
             ;; Copy file by file, extending am-files as we go: should a
             ;; copy fail midway, the cleanup below still sees the copies
             ;; made before the error.
             (dolist (f files)
-              (push (gnaw--am-file f trailers) am-files))
+              (push (gnaw--am-file f trailers edit) am-files))
             (setq am-files (nreverse am-files))
+            ;; Edit before creating the branch, so that aborting the
+            ;; edit leaves the repo as it was.
+            (when edit (gnaw--edit-am-files am-files))
+            (gnaw--am-checkout repo use-worktree branch base am-dir)
             (if (zerop (apply #'gnaw--git am-dir
                               (append (list "am") gnaw-git-am-options
                                       (list "--") am-files)))
-                (gnaw--am-succeeded files am-files am-dir branch)
+                (gnaw--am-succeeded files am-files am-dir branch edit)
               (display-buffer "*gnaw-git*")
               (gnaw--am-failed repo am-dir use-worktree branch orig)))
         ;; The copies are temp files; the cached originals stay.
@@ -4791,6 +4829,15 @@ for this call."
   (pcase-let ((`(,info . ,patches) (gnaw--patch-target)))
     (gnaw-am-patches info patches toggle-worktree)))
 
+(defun gnaw-list-patch-am-edit (&optional toggle-worktree)
+  "Edit the target patches, then apply them with `git am'.
+Each patch opens in turn, its review trailers folded in, before the
+branch is created; see `gnaw-am-patches'.  A prefix argument
+TOGGLE-WORKTREE inverts `gnaw-am-create-worktree' for this call."
+  (interactive "P")
+  (pcase-let ((`(,info . ,patches) (gnaw--patch-target)))
+    (gnaw-am-patches info patches toggle-worktree t)))
+
 (defun gnaw-list-patch-save (&optional arg)
   "Save the target patch files to a directory.
 The directory prompt proposes the source's configured `:repo' (or
@@ -4813,6 +4860,7 @@ inverts that setting for this call."
     ("v" "View in diff-mode" gnaw-list-patch-view)
     ("a" "Apply (git apply)" gnaw-list-patch-apply)
     ("m" "Apply as commits (git am; C-u: worktree)" gnaw-list-patch-am)
+    ("e" "Edit, then apply as commits (git am)" gnaw-list-patch-am-edit)
     ("s" "Save to a directory" gnaw-list-patch-save)
     ("c" "Check if applied (in the main branch)" gnaw-list-patch-check)]]
   (interactive (list (cdr (gnaw-list--current))))
