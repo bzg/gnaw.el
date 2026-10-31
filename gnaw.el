@@ -3530,20 +3530,25 @@ filter (AND)."
       (unless arg
         (setq gnaw-list--toggle-point saved)))))
 
+(eval-and-compile
+  (defconst gnaw--filter-flag-fields
+    '("acked" "owned" "closed" "urgent" "important")
+    "Filter fields that read no value: their commands toggle KEY:*."))
+
 (defun gnaw-list-filter-by (key &optional arg)
   "Limit the list to reports whose KEY field matches a read value.
 Read the value (completing types and topics), then set the query to
 `KEY:value'; an empty value clears the filter.  A free-text value is
 quoted so it reads as one literal token; the values of the other
 keys are kept as typed, commas (OR) and ranges included.  The flag fields
-\(acked, owned, closed, urgent, important) read no value and toggle:
+\(`gnaw--filter-flag-fields') read no value and toggle:
 calling the command again while its filter is active clears it.
 ARG is the raw prefix argument: non-nil adds the condition to the
 active filter (AND) instead of replacing it, and on the flag fields
 two \\[universal-argument] toggle the negation (-KEY:*), excluding
 the matching reports instead of keeping them; three add that
 negation to the active filter (AND)."
-  (if (member key '("acked" "owned" "closed" "urgent" "important"))
+  (if (member key gnaw--filter-flag-fields)
       (gnaw-list-filter-toggle (concat key ":*") arg)
     (let ((val (cond ((equal key "type")
                       (completing-read "Type: " gnaw-report-types))
@@ -3583,8 +3588,7 @@ EXCLUDED names the reports two prefix arguments exclude."
      ,@(mapcar (lambda (f)
                  `(defun ,(intern (concat "gnaw-list-filter-" f)) (&optional arg)
                     ,(concat "Filter the report list by the " f " field.\n"
-                             (if (member f '("acked" "owned" "closed"
-                                             "urgent" "important"))
+                             (if (member f gnaw--filter-flag-fields)
                                  (concat
                                   "Calling it again while its filter is active clears it.\n"
                                   (gnaw--filter-prefix-doc
