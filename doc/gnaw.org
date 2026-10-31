@@ -268,7 +268,9 @@ Filtering and sorting (see [[*Searching]]):
   one literal phrase; the value of the other fields (priority, date,
   flags...) is kept as typed, so =3,2= on the priority field keeps both
   priorities and =2026-01-01..= on the date field is a range, as in a
-  typed query (see [[*Searching]]).
+  typed query (see [[*Searching]]). The flag fields (acked, owned,
+  closed, urgent, important, and new for the reports the last
+  {{{kbd(G)}}} brought in) read no value: they toggle =field:*=.
 
 - {{{kbd(t)}}} (~gnaw-list-limit-type~) ::
   #+findex: gnaw-list-limit-type
@@ -372,7 +374,9 @@ Refreshing and help:
 - {{{kbd(G)}}} (~gnaw-list-update~) ::
   #+findex: gnaw-list-update
   Refresh the remote cache in the background, then reload once the
-  download finishes; Emacs stays responsive meanwhile.
+  download finishes; Emacs stays responsive meanwhile.  The reports
+  the update brought in show in the ~gnaw-new~ face, the closing
+  message counts them, and =new:*= lists them, until the next update.
 
 - {{{kbd(h)}}}, {{{kbd(?)}}} (~gnaw-show-help~) ::
   #+findex: gnaw-show-help
@@ -498,6 +502,7 @@ then {{{kbd(RET)}}}) clears it.
 | =mid:<...>=                  | =m:=       | message-id                                |
 | =acked:bzg= =owned:*= =closed:*= | =a: o: c:= | by person (or =*= for any)                  |
 | =urgent:*= =important:false=   | =u: i:=    | priority bits (set or not)                |
+| =new:*=                      | =n:=       | brought in by the last update (=G=)         |
 | =flags:AO=                   | =F:=       | Flags letters, all required (A O C R E S) |
 | =att:~+=                     | =A:=       | Att glyphs, all required (. ~ + x @ #)    |
 | =date:3d= =date:A..B=          | =d:=       | created (durations =Nd/Nw/Nm=, ranges)      |

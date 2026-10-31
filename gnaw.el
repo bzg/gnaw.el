@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.37.4
+;; Version: 0.38.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -83,7 +83,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.37.4")
+(defconst gnaw-version (or (package-get-version) "0.38.0")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -2881,6 +2881,12 @@ Set by `gnaw-list-reload'.  Closed reports are included when a
 source lists them, but stay hidden until a query asks for
 them (see `gnaw-list--display-reports').")
 
+(defvar-local gnaw-list--new-mids nil
+  "Message-ids the last `gnaw-list-update' brought in, or nil.
+A hash table set by `gnaw-list-reload' when it tracks new reports:
+their rows show in `gnaw-new' face and the new: query key matches
+them, until the next update.")
+
 (defvar-local gnaw-list--mark-index nil
   "Index of the Mark column among the active columns, nil when hidden.
 Set by `gnaw--list-format'.")
@@ -2895,6 +2901,10 @@ Set by `gnaw--list-format'.")
 
 (defface gnaw-closed '((t :slant italic))
   "Face for closed reports, in the report list and the related view."
+  :group 'gnaw)
+
+(defface gnaw-new '((t :inherit font-lock-keyword-face))
+  "Face for the reports the last update brought in (see `gnaw-list-update')."
   :group 'gnaw)
 
 (defface gnaw-missing '((t :inherit shadow :slant italic))
@@ -3262,6 +3272,16 @@ the whole token in the subjects."
         val (lambda (info)   ; thread size, initial mail included
               (when-let* ((n (plist-get info :replies))) (1+ n)))))
       ((or "urgent" "u") (gnaw--query-flag-matcher val 2))
+      ((or "new" "n")
+       ;; new:* keeps the reports the last update brought in, new:false
+       ;; the others; read when the query is compiled, at each render.
+       (let* ((val (downcase val))
+              (want (and (member val '("*" "true")) t))
+              (new gnaw-list--new-mids))
+         (if (and (not want) (not (equal val "false")))
+             #'ignore
+           (lambda (mid _info)
+             (eq want (and new (gethash mid new) t))))))
       ((or "important" "i") (gnaw--query-flag-matcher val 1))
       ;; Glyph matches, mirroring the Flags and Att columns:
       ;; flags:AO = acked and owned; flags:S = superseded;
@@ -3362,7 +3382,7 @@ tokens `gnaw-list-limit-closed' and the Flags cell filter produce.
 (defconst gnaw--query-keys
   '("from:" "subject:" "similar:" "topic:" "source:" "type:" "priority:"
     "votes:" "msgs:" "mid:" "acked:" "owned:" "closed:" "urgent:"
-    "important:" "flags:" "att:" "date:" "deadline:" "expired:")
+    "important:" "new:" "flags:" "att:" "date:" "deadline:" "expired:")
   "Long-form query keys completed in `gnaw-list-filter'.")
 
 (defconst gnaw--query-text-keys
@@ -3375,7 +3395,7 @@ holds their value back until it reaches
 
 (defconst gnaw--query-closed-keys
   '("source" "S" "type" "t" "priority" "p" "votes" "v" "msgs" "M"
-    "urgent" "u" "important" "i" "flags" "F" "att" "attributes" "A"
+    "urgent" "u" "important" "i" "new" "n" "flags" "F" "att" "attributes" "A"
     "date" "d" "deadline" "D" "expired" "e")
   "Query keys taking closed-set or short values, aliases included.
 Keep in sync with `gnaw--query-compile-key'.  The live preview only
@@ -3532,7 +3552,7 @@ filter (AND)."
 
 (eval-and-compile
   (defconst gnaw--filter-flag-fields
-    '("acked" "owned" "closed" "urgent" "important")
+    '("acked" "owned" "closed" "urgent" "important" "new")
     "Filter fields that read no value: their commands toggle KEY:*."))
 
 (defun gnaw-list-filter-by (key &optional arg)
@@ -3603,7 +3623,7 @@ EXCLUDED names the reports two prefix arguments exclude."
 (gnaw--define-filter-commands
  "from" "subject" "topic" "priority" "mid"
  "date" "deadline" "expired"
- "acked" "owned" "closed" "urgent" "important"
+ "acked" "owned" "closed" "urgent" "important" "new"
  "flags" "att")
 
 (transient-define-prefix gnaw-list-filter-transient ()
@@ -3624,7 +3644,8 @@ EXCLUDED names the reports two prefix arguments exclude."
     ("o" "Owned"      gnaw-list-filter-owned)
     ("c" "Closed"     gnaw-list-filter-closed)
     ("u" "Urgent"     gnaw-list-filter-urgent)
-    ("i" "Important"  gnaw-list-filter-important)]
+    ("i" "Important"  gnaw-list-filter-important)
+    ("n" "New (last G)" gnaw-list-filter-new)]
    ["Glyphs"
     ("F" "Flags letters" gnaw-list-filter-flags)
     ("A" "Att glyphs"    gnaw-list-filter-att)]])
@@ -3890,15 +3911,18 @@ MID, INFO and ENTRY are the report's message-id, plist and state
 entry; COLS the active columns."
   (mapcar (lambda (c) (gnaw--list-cell (nth 3 c) info entry mid)) cols))
 
-(defun gnaw--row-faces (entry info)
+(defun gnaw--row-faces (mid entry info)
   "Return the whole-row face list for a report, nil when plain.
-ENTRY is the report's state.edn entry, INFO its report plist.  The
-sticky or dismissed mark face combines with `gnaw-closed' when the
-report is closed, so a marked closed row keeps both cues."
+MID is the report's message-id, ENTRY its state.edn entry, INFO its
+report plist.  The sticky or dismissed mark face combines with
+`gnaw-closed' when the report is closed, and with `gnaw-new' when
+the last update brought it in, so a row keeps every cue."
   (delq nil
         (list (cond ((assq :sticky entry) 'gnaw-sticky)
                     ((assq :dismiss entry) 'gnaw-dismissed))
-              (and (gnaw--closed-p info) 'gnaw-closed))))
+              (and (gnaw--closed-p info) 'gnaw-closed)
+              (and gnaw-list--new-mids (gethash mid gnaw-list--new-mids)
+                   'gnaw-new))))
 
 (defun gnaw--list-row (pair entry cols)
   "Return the `tabulated-list-entries' row of report PAIR.
@@ -3906,7 +3930,7 @@ PAIR is a (MID . INFO), ENTRY its state.edn entry, COLS the active
 columns.  The whole-row faces of `gnaw--row-faces', if any, go on
 every cell."
   (let ((cells (gnaw--report-cells (car pair) (cdr pair) entry cols))
-        (faces (gnaw--row-faces entry (cdr pair))))
+        (faces (gnaw--row-faces (car pair) entry (cdr pair))))
     (list pair
           (vconcat (if faces
                        (mapcar (lambda (s) (propertize s 'face faces)) cells)
@@ -4310,18 +4334,32 @@ whole; every command changing rows in place needs the full render."
     (force-mode-line-update)
     (when win (gnaw-list--restore-window win anchor))))
 
-(defun gnaw-list-reload (&optional no-ask)
+(defun gnaw-list-reload (&optional no-ask track-new)
   "Re-read reports from the local cache, then re-render.
 With several sources, first ask for the letters identifying them in
 the S column when config.edn does not define some (see
 `gnaw--ensure-source-letters') -- unless NO-ASK is non-nil, as on
 the `revert-buffer' path, where auto-revert timers must not block
-on a minibuffer prompt.  Reset the subject-words cache, then
+on a minibuffer prompt.  Non-nil TRACK-NEW records the reports
+absent before the reload in `gnaw-list--new-mids' and returns how
+many there are; a list that held no report yet records none, as
+everything would be new.  Reset the subject-words cache, then
 re-warm it once Emacs has been idle for a second, so the first
 similar: filter finds it filled."
   (interactive)
   (unless no-ask (gnaw--ensure-source-letters))
-  (setq-local gnaw-list--reports (gnaw-reports))
+  (let ((old (and track-new gnaw-list--reports
+                  (let ((h (make-hash-table :test 'equal
+                                            :size (length gnaw-list--reports))))
+                    (dolist (p gnaw-list--reports h) (puthash (car p) t h))))))
+    (setq-local gnaw-list--reports (gnaw-reports))
+    (when track-new
+      (setq-local gnaw-list--new-mids
+                  (and old
+                       (let ((h (make-hash-table :test 'equal)))
+                         (dolist (p gnaw-list--reports)
+                           (unless (gethash (car p) old) (puthash (car p) t h)))
+                         (and (> (hash-table-count h) 0) h))))))
   (clrhash gnaw--subject-words-cache)
   (when (timerp gnaw--subject-words-timer)
     (cancel-timer gnaw--subject-words-timer))
@@ -4333,7 +4371,8 @@ similar: filter finds it filled."
            (dolist (p reports)
              (gnaw--subject-words (plist-get (cdr p) :subject))))
          gnaw-list--reports))
-  (gnaw-list-refresh))
+  (gnaw-list-refresh)
+  (and track-new gnaw-list--new-mids (hash-table-count gnaw-list--new-mids)))
 
 (defun gnaw-list-filter-clear ()
   "Clear the active `gnaw-list' filter query."
@@ -4519,9 +4558,11 @@ prefix argument, clear the active filter without prompting."
   "Refresh the remote cache in the background, then reload the list.
 With a prefix argument FORCE, re-download sources unconditionally.
 Emacs stays responsive while the sources download; the list reloads
-itself once the update finished.  Any missing source letters are
-asked for now, while the user is at the keyboard: the reload runs
-in a callback, outside any interaction, so it must not prompt."
+itself once the update finished.  The reports it brings in show in
+`gnaw-new' face, and the new: query key keeps them, until the next
+update.  Any missing source letters are asked for now, while the
+user is at the keyboard: the reload runs in a callback, outside any
+interaction, so it must not prompt."
   (interactive "P")
   (gnaw--ensure-source-letters)
   (let ((buf (current-buffer)))
@@ -4529,7 +4570,10 @@ in a callback, outside any interaction, so it must not prompt."
                  (lambda ()
                    (when (buffer-live-p buf)
                      (with-current-buffer buf
-                       (gnaw-list-reload t)))))))
+                       (when-let* ((n (gnaw-list-reload t t)))
+                         (message "%s %d new report%s (new:* lists them)."
+                                  (or (current-message) "gnaw:")
+                                  n (if (= n 1) "" "s")))))))))
 
 (defun gnaw-list-limit-type (&optional add)
   "Limit the list to a chosen report type.
@@ -5298,7 +5342,7 @@ built like a full render does, with its mouse-face and the row's
 face (sticky, dismissed, closed), so it does not stand out."
   (when gnaw-list--mark-index
     (let* ((entry (gethash (car pair) (gnaw--state-table)))
-           (faces (gnaw--row-faces entry (cdr pair)))
+           (faces (gnaw--row-faces (car pair) entry (cdr pair)))
            (cell (gnaw--list-cell :mark (cdr pair) entry (car pair))))
       (tabulated-list-set-col gnaw-list--mark-index
                               (if faces (propertize cell 'face faces) cell)
