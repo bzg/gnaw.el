@@ -640,73 +640,80 @@ content changed, `refetched' when it was byte-identical."
       (gnaw--save-validators cache-file (plist-get reply :etag))
       (if wrote 'changed 'refetched))))
 
-(defun gnaw--refresh-cache (url cache-file &optional force)
-  "Refresh CACHE-FILE from URL, revalidating with a HEAD request.
+(defun gnaw--refresh-cache-async (url cache-file force callback)
+  "Refresh CACHE-FILE from URL in the background, revalidating first.
 When an ETag was saved by a previous refresh (and FORCE is nil),
 first ask the server for the headers only and compare ETags locally:
 an unchanged source costs a HEAD round-trip instead of a download.
 Otherwise download and commit (see `gnaw--commit-json-reply').
-Return `unchanged' when the saved ETag is still current, else the
-commit's outcome."
+CALLBACK gets the outcome, exactly once: `unchanged' when the saved
+ETag is still current, else the commit's outcome, or (error . TEXT)
+when the refresh failed.  The one implementation of the sequence:
+`gnaw--refresh-cache' waits on it, `gnaw--update-source' does not."
   (let ((etag (unless force
-                (plist-get (gnaw--read-validators cache-file) :etag))))
-    (if (and etag
-             ;; Revalidation is only an optimization: when the HEAD
-             ;; fails (proxy rejecting the method, timeout), fall
-             ;; through to the full GET instead of failing the
-             ;; refresh.
-             (gnaw--etag-equal etag
-                               (plist-get (ignore-errors
-                                            (gnaw--http-fetch url 'head))
-                                          :etag)))
-        'unchanged
-      (gnaw--commit-json-reply (gnaw--http-fetch url) cache-file))))
+                (plist-get (gnaw--read-validators cache-file) :etag)))
+        (called nil))
+    (cl-labels ((finish (outcome)
+                  (unless called
+                    (setq called t)
+                    (funcall callback outcome)))
+                (fail (err)
+                  (finish (cons 'error (error-message-string err))))
+                (download ()
+                  (gnaw--http-fetch-async
+                   url nil
+                   (lambda (reply)
+                     (finish
+                      (condition-case err
+                          (if-let* ((e (plist-get reply :error)))
+                              (error "%s" e)
+                            (gnaw--commit-json-reply reply cache-file))
+                        (error (cons 'error (error-message-string err)))))))))
+      ;; A synchronous error (malformed URL) still reaches CALLBACK,
+      ;; as one raised from the HEAD callback below does.
+      (condition-case err
+          (if etag
+              ;; Revalidation is only an optimization: when the HEAD
+              ;; fails (proxy rejecting the method, timeout), fall
+              ;; through to the full GET instead of failing the refresh.
+              (gnaw--http-fetch-async
+               url 'head
+               (lambda (reply)
+                 (if (and (not (plist-get reply :error))
+                          (gnaw--etag-equal etag (plist-get reply :etag)))
+                     (finish 'unchanged)
+                   (condition-case err (download) (error (fail err))))))
+            (download))
+        (error (fail err))))))
+
+(defun gnaw--refresh-cache (url cache-file &optional force)
+  "Refresh CACHE-FILE from URL and return the outcome, waiting for it.
+See `gnaw--refresh-cache-async' for the sequence and the outcomes;
+a failure signals an error instead, after `gnaw-http-timeout'
+seconds at most when the server does not answer."
+  (let (box)
+    (gnaw--refresh-cache-async url cache-file force
+                               (lambda (outcome) (setq box (list outcome))))
+    (while (not box)
+      (accept-process-output nil 0.05))
+    (let ((outcome (car box)))
+      (if (eq (car-safe outcome) 'error)
+          (error "%s" (cdr outcome))
+        outcome))))
 
 (defun gnaw--update-source (source force callback)
   "Refresh SOURCE's cache in the background; CALLBACK gets the outcome.
 The outcome is `changed', `unchanged', `refetched' as in
-`gnaw--refresh-cache', or `failed' -- the failure is also messaged.
-Follows the same sequence asynchronously: HEAD revalidation by saved
-ETag unless FORCE, then a download parsed before it may overwrite
-the cache."
-  (let* ((cache-file (gnaw--source-to-cache-file source))
-         (etag (unless force
-                 (plist-get (gnaw--read-validators cache-file) :etag))))
-    (cl-flet ((download ()
-                (gnaw--http-fetch-async
-                 source nil
-                 (lambda (reply)
-                   (funcall
-                    callback
-                    (condition-case err
-                        (if-let* ((e (plist-get reply :error)))
-                            (error "%s" e)
-                          (gnaw--commit-json-reply reply cache-file))
-                      (error
-                       (message "gnaw: failed updating %s: %s"
-                                source (error-message-string err))
-                       'failed)))))))
-      (if etag
-          ;; Revalidation is only an optimization: when the HEAD fails
-          ;; (proxy rejecting the method, timeout), fall through to the
-          ;; full GET instead of failing the refresh.
-          (gnaw--http-fetch-async
-           source 'head
-           (lambda (reply)
-             (if (and (not (plist-get reply :error))
-                      (gnaw--etag-equal etag (plist-get reply :etag)))
-                 (funcall callback 'unchanged)
-               ;; This runs from an async callback, outside the
-               ;; dispatch guard of `gnaw-update': a synchronous error
-               ;; here must still reach CALLBACK, or the pending
-               ;; counter never comes down.
-               (condition-case err
-                   (download)
-                 (error
-                  (message "gnaw: failed updating %s: %s"
-                           source (error-message-string err))
-                  (funcall callback 'failed))))))
-        (download)))))
+`gnaw--refresh-cache-async', or `failed' -- the failure is also
+messaged."
+  (gnaw--refresh-cache-async
+   source (gnaw--source-to-cache-file source) force
+   (lambda (outcome)
+     (funcall callback
+              (if (not (eq (car-safe outcome) 'error))
+                  outcome
+                (message "gnaw: failed updating %s: %s" source (cdr outcome))
+                'failed)))))
 
 (defun gnaw--write-json-to-file (json file)
   "Write JSON, a string, to FILE as UTF-8.
