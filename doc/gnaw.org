@@ -718,8 +718,10 @@ reverse-applies is /applied verbatim/; one whose added lines are mostly
 there, with a commit adding them after the patch was sent, is /probably
 applied/, and gnaw names that commit. This is a heuristic gathering
 evidence for you to judge, not a ruling: a reworked patch may go
-unnoticed. The answer shows in the echo area for a single patch, in a
-=*gnaw-check*= buffer for several.
+unnoticed. The check runs in the background, as searching a long
+history takes time, and Emacs stays usable meanwhile; its answer
+shows in the echo area for a single patch, in a =*gnaw-check*= buffer
+for several.
 
 * Configuration
 :PROPERTIES:

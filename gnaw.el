@@ -2748,12 +2748,85 @@ GIT_INDEX_FILE naming an index read from REF."
       ('older (format "not found (%s, older than the patch)" lines))
       (_ (format "not found (%s)" lines)))))
 
+(defun gnaw--applied-report (ref files dates)
+  "Return the report on whether patch FILES are applied in REF.
+DATES gives the sending date of each of FILES.  Runs git in
+`default-directory', with GIT_INDEX_FILE naming an index read from
+REF."
+  (let ((cache (make-hash-table :test 'equal)))
+    (format "gnaw: checked against %s in %s\n%s" ref default-directory
+            (string-join
+             (cl-mapcar (lambda (file date)
+                          (format "  %s: %s" (file-name-nondirectory file)
+                                  (gnaw--applied-describe
+                                   (gnaw--applied-check ref file date cache))))
+                        files dates)
+             "\n"))))
+
+(defun gnaw--applied-show (report several)
+  "Show the patch check REPORT, in a window when SEVERAL patches.
+The echo area would truncate a series' report."
+  (if several
+      (with-help-window "*gnaw-check*" (princ report))
+    (message "%s" report)))
+
+(defun gnaw--applied-start (tmp ref files dates)
+  "Run `gnaw--applied-report' on REF, FILES and DATES in a child Emacs.
+Its `git log -S' searches can take long on a large history, and
+would block Emacs.  TMP is the directory holding the throwaway
+index, deleted once the child is done; `default-directory' and
+`process-environment' are passed on to the child."
+  (let ((script (expand-file-name "check.el" tmp))
+        (out (expand-file-name "report.txt" tmp))
+        (buf (generate-new-buffer " *gnaw-check-process*")))
+    (with-temp-file script
+      (let ((print-length nil) (print-level nil))
+        (dolist (form `((setq load-path ',load-path)
+                        (load ,(symbol-file 'gnaw--applied-report) nil t)
+                        ;; Print the error alone, not batch mode's backtrace.
+                        (condition-case err
+                            (let ((report (gnaw--applied-report
+                                           ,ref ',files ',dates)))
+                              (with-temp-file ,out (insert report)))
+                          (error (princ (error-message-string err))
+                                 (kill-emacs 1)))))
+          (prin1 form (current-buffer))
+          (insert "\n"))))
+    (make-process
+     :name "gnaw-check"
+     :buffer buf
+     :connection-type 'pipe
+     :noquery t
+     :command (list (expand-file-name invocation-name invocation-directory)
+                    "-Q" "--batch" "-l" script)
+     :sentinel
+     (lambda (proc _event)
+       (unless (process-live-p proc)
+         (unwind-protect
+             (if (and (eq (process-status proc) 'exit)
+                      (zerop (process-exit-status proc))
+                      (file-readable-p out))
+                 (gnaw--applied-show
+                  (with-temp-buffer
+                    (insert-file-contents out)
+                    (buffer-string))
+                  (cdr files))
+               (message "gnaw: patch check failed: %s"
+                        (with-current-buffer buf
+                          (car (last (split-string (buffer-string) "\n" t))))))
+           (delete-directory tmp t)
+           (kill-buffer buf)))))))
+
 (defun gnaw-check-patches (info &optional patches)
   "Tell whether INFO's patches are applied in the repo's main branch.
 PATCHES restricts the check to these `:patches' entries.  The
-answer is a heuristic one: see the commit it names."
+answer is a heuristic one: see the commit it names.  It comes
+asynchronously, the check running in a child Emacs."
   (let* ((patches (or patches (plist-get info :patches)))
          (files (gnaw--patch-files info "checking" patches))
+         (dates (mapcar (lambda (patch)
+                          (or (alist-get 'date patch) (plist-get info :date)))
+                        patches))
          (default-directory (gnaw--target-repo info))
          (ref (gnaw--main-branch default-directory))
          (tmp (make-temp-file "gnaw-index" t))
@@ -2761,35 +2834,18 @@ answer is a heuristic one: see the commit it names."
          ;; check against it, leaving the checkout and its index alone.
          (process-environment (cons (concat "GIT_INDEX_FILE="
                                             (expand-file-name "index" tmp))
-                                    process-environment))
-         (cache (make-hash-table :test 'equal)))
-    (unwind-protect
+                                    process-environment)))
+    (condition-case err
         (progn
           (unless (zerop (gnaw--git default-directory "read-tree" ref))
             (display-buffer "*gnaw-git*")
             (user-error "Cannot read %s in %s" ref default-directory))
-          (message "gnaw: checking %d patch(es) against %s..."
-                   (length files) ref)
-          (let ((report
-                 (format
-                  "gnaw: checked against %s in %s\n%s" ref default-directory
-                  (string-join
-                   (cl-mapcar
-                    (lambda (file patch)
-                      (format "  %s: %s" (file-name-nondirectory file)
-                              (gnaw--applied-describe
-                               (gnaw--applied-check
-                                ref file
-                                (or (alist-get 'date patch)
-                                    (plist-get info :date))
-                                cache))))
-                    files patches)
-                   "\n"))))
-            ;; The echo area would truncate a series' report.
-            (if (cdr files)
-                (with-help-window "*gnaw-check*" (princ report))
-              (message "%s" report))))
-      (delete-directory tmp t))))
+          (gnaw--applied-start tmp ref files dates)
+          (message "gnaw: checking %d patch(es) against %s in the background..."
+                   (length files) ref))
+      ((error quit)
+       (delete-directory tmp t)
+       (signal (car err) (cdr err))))))
 
 ;;; Query filter (subset of the BONE web search syntax)
 
