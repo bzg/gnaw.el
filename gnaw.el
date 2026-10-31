@@ -2398,6 +2398,76 @@ answering."
       (message "gnaw: git am failed in %s (run `git am --abort' to undo)"
                am-dir))))
 
+(defun gnaw--am-read-target (info files repo use-worktree)
+  "Ask where to apply INFO's patch FILES in REPO.
+Return a list (BRANCH BASE AM-DIR ORIG).  BRANCH is the branch to
+create, nil to keep a detached HEAD; BASE its start point, nil for
+the current HEAD, the patches' recorded `base-commit:' being
+proposed when REPO has it.  AM-DIR is the directory to apply in: a
+new worktree read by `gnaw-am-read-worktree-function' when
+USE-WORKTREE, REPO otherwise.  ORIG is REPO's checkout to come back
+to should the am be undone; a worktree leaves it untouched, so ORIG
+is then nil."
+  (let* ((default-directory repo)
+         (branch (let ((b (read-string "New branch (empty for detached): "
+                                       (funcall gnaw-am-branch-function info))))
+                   (and (not (string-blank-p b)) b)))
+         (base (completing-read
+                "Base commit (empty for HEAD): "
+                (let ((b (gnaw--patch-base-commit files)))
+                  (and b (gnaw--commit-in-repo-p b) (list b)))))
+         (am-dir (if use-worktree
+                     (file-name-as-directory
+                      (expand-file-name
+                       (funcall gnaw-am-read-worktree-function repo branch)))
+                   repo)))
+    (when (and use-worktree (file-exists-p am-dir))
+      (user-error "Worktree directory %s already exists" am-dir))
+    (list branch (and (not (string-blank-p base)) base) am-dir
+          (and (not use-worktree) (gnaw--current-checkout repo)))))
+
+(defun gnaw--am-trailers (info)
+  "The trailers to fold into INFO's commits, nil when none or disabled.
+Those collected by BONE, plus those synthesized from the report
+state per `gnaw-am-synthetic-trailers', when `gnaw-am-fold-trailers'."
+  (and gnaw-am-fold-trailers
+       (delete-dups
+        (gnaw--merge-trailers (plist-get info :trailers)
+                              (gnaw--synthetic-trailers info)))))
+
+(defun gnaw--am-file (file trailers)
+  "Return the file to feed `git am' for patch FILE.
+With TRAILERS, a temporary copy with them folded in; FILE itself
+without any."
+  (if trailers (gnaw--fold-trailers-file file trailers) file))
+
+(defun gnaw--am-checkout (repo use-worktree branch base am-dir)
+  "Create the checkout `git am' runs in, per `gnaw--am-read-target'.
+A new worktree in AM-DIR when USE-WORKTREE, else REPO's own; on
+BRANCH, or detached when nil; at BASE, or HEAD when nil.  A failure
+shows the git output and signals a `user-error'."
+  (unless (zerop (apply #'gnaw--git repo
+                        (append (if use-worktree
+                                    (list "worktree" "add")
+                                  (list "checkout"))
+                                (if branch (list "-b" branch) (list "--detach"))
+                                (and use-worktree (list am-dir))
+                                (and base (list base)))))
+    (display-buffer "*gnaw-git*")
+    (user-error "Git %s failed" (if use-worktree "worktree add" "checkout"))))
+
+(defun gnaw--am-succeeded (files am-files am-dir branch)
+  "Announce AM-FILES, the copies of patch FILES, applied in AM-DIR.
+Then show AM-DIR per `gnaw-am-show-repo'."
+  (message "gnaw: git am applied %d patch(es) in %s%s%s"
+           (length files) am-dir
+           (if branch (format " on branch %s" branch) " (detached HEAD)")
+           (if (equal am-files files) "" ", trailers folded"))
+  (when gnaw-am-show-repo
+    (if (fboundp 'magit-status-setup-buffer)
+        (magit-status-setup-buffer am-dir)
+      (dired am-dir))))
+
 (defun gnaw-am-patches (info &optional patches toggle-worktree)
   "Apply INFO's patches as commits with `git am'.
 First prompt for a branch to create (empty input keeps a detached
@@ -2415,72 +2485,31 @@ its branch and checkout per `gnaw-am-undo-on-failure'.  PATCHES
 restricts the operation to these `:patches' entries."
   (let ((files (gnaw--patch-files info "applying" patches)))
     (gnaw--confirm-incomplete-series info patches)
-    (let* ((repo (gnaw--target-repo info))
-           (default-directory repo)
-           (use-worktree (xor gnaw-am-create-worktree toggle-worktree))
-           (branch (let ((b (read-string "New branch (empty for detached): "
-                                         (funcall gnaw-am-branch-function info))))
-                     (and (not (string-blank-p b)) b)))
-           (base (completing-read
-                  "Base commit (empty for HEAD): "
-                  (let ((b (gnaw--patch-base-commit files)))
-                    (and b (gnaw--commit-in-repo-p b) (list b)))))
-           (am-dir (if use-worktree
-                       (file-name-as-directory
-                        (expand-file-name
-                         (funcall gnaw-am-read-worktree-function repo branch)))
-                     repo))
-           ;; What to come back to should the am fail and be undone; a
-           ;; worktree leaves the repo's checkout untouched.
-           (orig (and (not use-worktree) (gnaw--current-checkout repo))))
-      (when (and use-worktree (file-exists-p am-dir))
-        (user-error "Worktree directory %s already exists" am-dir))
-      (unless (zerop (apply #'gnaw--git repo
-                            (append (if use-worktree
-                                        (list "worktree" "add")
-                                      (list "checkout"))
-                                    (if branch (list "-b" branch) (list "--detach"))
-                                    (and use-worktree (list am-dir))
-                                    (and (not (string-blank-p base))
-                                         (list base)))))
-        (display-buffer "*gnaw-git*")
-        (user-error "Git %s failed"
-                    (if use-worktree "worktree add" "checkout")))
-      (let ((trailers (and gnaw-am-fold-trailers
-                           (delete-dups
-                            (gnaw--merge-trailers
-                             (plist-get info :trailers)
-                             (gnaw--synthetic-trailers info)))))
-            am-files)
-        (unwind-protect
-            (progn
-              ;; Fold file by file, extending am-files as we go: should
-              ;; a copy fail midway, the cleanup below still sees the
-              ;; copies made before the error.
-              (if (null trailers)
-                  (setq am-files files)
-                (dolist (f files)
-                  (setq am-files
-                        (cons (gnaw--fold-trailers-file f trailers) am-files)))
-                (setq am-files (nreverse am-files)))
-              (if (zerop (apply #'gnaw--git am-dir
-                                (append (list "am") gnaw-git-am-options
-                                        (list "--") am-files)))
-                  (progn
-                    (message "gnaw: git am applied %d patch(es) in %s%s%s"
-                             (length files) am-dir
-                             (if branch (format " on branch %s" branch)
-                               " (detached HEAD)")
-                             (if (equal am-files files) "" ", trailers folded"))
-                    (when gnaw-am-show-repo
-                      (if (fboundp 'magit-status-setup-buffer)
-                          (magit-status-setup-buffer am-dir)
-                        (dired am-dir))))
-                (display-buffer "*gnaw-git*")
-                (gnaw--am-failed repo am-dir use-worktree branch orig)))
-          ;; The folded files are temp copies; the cached originals stay.
-          (dolist (f am-files)
-            (unless (member f files) (delete-file f))))))))
+    (pcase-let* ((repo (gnaw--target-repo info))
+                 (default-directory repo)
+                 (use-worktree (xor gnaw-am-create-worktree toggle-worktree))
+                 (`(,branch ,base ,am-dir ,orig)
+                  (gnaw--am-read-target info files repo use-worktree))
+                 (trailers (gnaw--am-trailers info))
+                 (am-files nil))
+      (gnaw--am-checkout repo use-worktree branch base am-dir)
+      (unwind-protect
+          (progn
+            ;; Copy file by file, extending am-files as we go: should a
+            ;; copy fail midway, the cleanup below still sees the copies
+            ;; made before the error.
+            (dolist (f files)
+              (push (gnaw--am-file f trailers) am-files))
+            (setq am-files (nreverse am-files))
+            (if (zerop (apply #'gnaw--git am-dir
+                              (append (list "am") gnaw-git-am-options
+                                      (list "--") am-files)))
+                (gnaw--am-succeeded files am-files am-dir branch)
+              (display-buffer "*gnaw-git*")
+              (gnaw--am-failed repo am-dir use-worktree branch orig)))
+        ;; The copies are temp files; the cached originals stay.
+        (dolist (f am-files)
+          (unless (member f files) (delete-file f)))))))
 
 (defun gnaw--save-files-in-dir (info files no-confirm what)
   "Copy report INFO's FILES to a directory and return that directory.
