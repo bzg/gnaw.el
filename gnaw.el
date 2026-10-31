@@ -3985,6 +3985,49 @@ whole."
               (aset cells i
                     (truncate-string-to-width s (1- w) nil nil t)))))))))
 
+(defun gnaw-list--shown-sort-key ()
+  "Return `tabulated-list-sort-key', or a fallback when its column is gone.
+The S column comes and goes with the number of sources: a sort key
+naming a gone column would abort `tabulated-list-print', so fall
+back on the default `gnaw-list-sort-key', as `gnaw-list-mode' does,
+or on nil when that column is gone too."
+  (let ((cols (gnaw--active-columns)))
+    (if (or (null tabulated-list-sort-key)
+            (assoc (car tabulated-list-sort-key) cols))
+        tabulated-list-sort-key
+      (and gnaw-list-sort-key
+           (assoc (car gnaw-list-sort-key) cols)
+           gnaw-list-sort-key))))
+
+(defun gnaw-list--window-anchor (win)
+  "Return (START WLINE) locating the list in WIN, nil when WIN is nil.
+START is WIN's `window-start', WLINE the window line point is on,
+counted from bol to bol as `count-lines' counts a partial line as
+one.  `gnaw-list--restore-window' puts WIN back there after a
+reprint, which would otherwise recenter the window."
+  (when win
+    (let ((start (window-start win)))
+      (list start (count-lines start (line-beginning-position))))))
+
+(defun gnaw-list--restore-window (win anchor)
+  "Show the reprinted list in WIN as ANCHOR, from `gnaw-list--window-anchor'.
+First put WIN's own point back on the report `tabulated-list-print'
+remembered, selected window or not.  When the rows shifted so much
+that the old start leaves point off-screen (setting or clearing a
+filter), keep point on the same window line instead of letting
+redisplay center it.  A filter can also shrink the list into fewer
+rows than WIN holds; the saved start, taken in the taller view,
+would then anchor WIN on the last rows with the other matches
+hidden above it (or on blank space past the end): when the whole
+list fits, show it from the top instead."
+  (pcase-let ((`(,start ,wline) anchor))
+    (set-window-point win (point))
+    (when (<= (count-lines (point-min) (point-max)) (window-body-height win))
+      (setq start (point-min)))
+    (set-window-start win start t)
+    (unless (pos-visible-in-window-p (point) win)
+      (with-selected-window win (recenter wline)))))
+
 (defun gnaw-list-refresh (&optional update)
   "Re-render the list from the in-memory reports and current state.
 Does not re-read the report cache; use `gnaw-list-reload' for that.
@@ -3999,55 +4042,25 @@ whole; every command changing rows in place needs the full render."
   ;; would erase whatever buffer is current.
   (unless (derived-mode-p 'gnaw-list-mode)
     (user-error "Not in a gnaw report list"))
-  ;; Restore `window-start': `tabulated-list-print' reprints the buffer,
-  ;; which would otherwise recenter the window on each refresh.  When
-  ;; the rows shift so much that the old start leaves point off-screen
-  ;; (setting or clearing a filter), keep point on the same window line
-  ;; instead of letting redisplay center it.
+  ;; Size the Subject column on the window showing the list, which is
+  ;; not the selected one when a callback (update, auto-revert)
+  ;; refreshes it.
   (let* ((win (get-buffer-window nil t))
-         (start (and win (window-start win)))
-         ;; From bol to bol: `count-lines' counts a partial line as one.
-         (wline (and win (count-lines start (line-beginning-position))))
+         (anchor (gnaw-list--window-anchor win))
          ;; `tabulated-list-print' only restores the column when the
          ;; current row survives the reprint; when a filter removes it,
          ;; point lands on the first row at column 0.  Landing on the
          ;; first row is expected -- losing the column is not.
          (col (current-column)))
-    ;; Size the Subject column on the window showing the list, which
-    ;; is not the selected one when a callback (update, auto-revert)
-    ;; refreshes it.
     (setq tabulated-list-format (gnaw--list-format win))
-    ;; The S column comes and goes with the number of sources: a sort
-    ;; key naming a gone column would abort `tabulated-list-print',
-    ;; so fall back on the default sort, as `gnaw-list-mode' does.
-    (when (and tabulated-list-sort-key
-               (not (assoc (car tabulated-list-sort-key)
-                           (gnaw--active-columns))))
-      (setq tabulated-list-sort-key
-            (and gnaw-list-sort-key
-                 (assoc (car gnaw-list-sort-key) (gnaw--active-columns))
-                 gnaw-list-sort-key)))
+    (setq tabulated-list-sort-key (gnaw-list--shown-sort-key))
     (tabulated-list-init-header)
     (gnaw-list--update-mode-line)
     (setq tabulated-list-entries (gnaw--anchor-cells (gnaw--list-entries)))
     (tabulated-list-print t update)
     (move-to-column col)
     (force-mode-line-update)
-    (when win
-      ;; Reprinting moved the window's own point; put it back on the
-      ;; report `tabulated-list-print' remembered, selected or not.
-      (set-window-point win (point))
-      ;; A filter can shrink the list into fewer rows than the window
-      ;; holds; the saved start, taken in the taller view, would then
-      ;; anchor the window on the last rows with the other matches
-      ;; hidden above it (or on blank space past the end).  When the
-      ;; whole list fits, show it from the top instead.
-      (when (<= (count-lines (point-min) (point-max))
-                (window-body-height win))
-        (setq start (point-min)))
-      (set-window-start win start t)
-      (unless (pos-visible-in-window-p (point) win)
-        (with-selected-window win (recenter wline))))))
+    (when win (gnaw-list--restore-window win anchor))))
 
 (defun gnaw-list-reload (&optional no-ask)
   "Re-read reports from the local cache, then re-render.
