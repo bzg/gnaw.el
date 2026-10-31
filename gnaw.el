@@ -311,10 +311,29 @@ Matched by URL or by `:name'."
            (and name (equal name (alist-get :name s)))))
      (plist-get (gnaw-load-config) :source-configs))))
 
+(defun gnaw--remote-repo-p (repo)
+  "Return non-nil if REPO names a remote git repository, not a directory.
+That is a URL (scheme://...) or an scp-like user@host:path."
+  (string-match-p "\\`\\(?:[[:alpha:]][[:alnum:]+.-]*://\\|[^/:]+@[^/:]+:\\)"
+                  repo))
+
+(defvar gnaw--warned-remote-repos nil
+  "Remote `:repo' values already warned about in this session.")
+
 (defun gnaw--entry-repos (entry)
   "Return config.edn source ENTRY's `:repo' as a list of directories.
-The entry holds a directory string or a vector of them."
-  (mapcar #'expand-file-name (ensure-list (alist-get :repo entry))))
+The entry holds a directory string or a vector of them.  A remote
+repository is skipped with a warning, once: git applies patches in a
+local clone, so `:repo' names its directory, not its URL."
+  (let (dirs)
+    (dolist (repo (ensure-list (alist-get :repo entry)) (nreverse dirs))
+      (cond ((not (gnaw--remote-repo-p repo))
+             (push (expand-file-name repo) dirs))
+            ((not (member repo gnaw--warned-remote-repos))
+             (push repo gnaw--warned-remote-repos)
+             (display-warning
+              'gnaw (format "Ignoring :repo %s in config.edn: \
+give the directory of a local clone" repo)))))))
 
 (defun gnaw--source-repos (info)
   "Return the local git repos for report INFO's source, as a list.
@@ -5466,13 +5485,15 @@ list, the save-target default first."
 ;;;###autoload
 (defun gnaw-add-source (urls &optional name repo letter)
   "Add a source (URLS, NAME, REPO, LETTER) to config.edn.
-URLS is a list of reports.json URLs; REPO a git directory or a list
-of them; LETTER identifies the source in the browser's S column,
-shown when several sources are configured.  Interactively, give
-a base, meta.json or reports.json URL, then pick the report files
-listed in meta.json, the source NAME, its LETTER \(suggesting the
-first free one of NAME) and its local git repo(s) for patches; an
-updated source hands down its repos and offers to link more."
+URLS is a list of reports.json URLs; NAME is required, as config.edn
+keys sources on it (the gnaw CLI rejects a source without one); REPO
+a git directory or a list of them; LETTER identifies the source in
+the browser's S column, shown when several sources are configured.
+Interactively, give a base, meta.json or reports.json URL, then
+pick the report files listed in meta.json, the source NAME, its
+LETTER \(suggesting the first free one of NAME) and its local git
+repo(s) for patches; an updated source hands down its repos and
+offers to link more."
   (interactive
    (let* ((input (read-string "Report source URL (base, meta.json or .json): "))
           (_ (when (string-empty-p (string-trim input)) (user-error "No URL given")))
@@ -5490,6 +5511,8 @@ updated source hands down its repos and offers to link more."
           (name (read-string
                  (format "Source name%s: " (if sname (format " (default %s)" sname) ""))
                  nil nil sname))
+          (_ (when (string-empty-p (string-trim name))
+               (user-error "No source name given")))
           (urls (mapcar (lambda (f) (concat dir f)) chosen))
           (cfgs (alist-get :sources (gnaw--read-config-raw)))
           (old (seq-find (lambda (s) (gnaw--source-match-p s urls name)) cfgs))
@@ -5508,10 +5531,11 @@ updated source hands down its repos and offers to link more."
   (let ((urls (if (listp urls) urls (list urls)))
         (name (and name (not (string-empty-p (string-trim name))) name)))
     (unless urls (user-error "No report file selected"))
+    (unless name (user-error "No source name given"))
     (gnaw--write-config
      (gnaw--config-add-source (gnaw--read-config-raw) urls name repo letter))
-    (message "gnaw: added to config.edn: %s%s"
-             (string-join urls ", ") (if name (format " (%s)" name) ""))
+    (message "gnaw: added to config.edn: %s (%s)"
+             (string-join urls ", ") name)
     urls))
 
 (defun gnaw--source-name-for-urls (urls)
