@@ -3666,6 +3666,18 @@ report is closed, so a marked closed row keeps both cues."
                     ((assq :dismiss entry) 'gnaw-dismissed))
               (and (gnaw--closed-p info) 'gnaw-closed))))
 
+(defun gnaw--list-row (pair entry cols)
+  "Return the `tabulated-list-entries' row of report PAIR.
+PAIR is a (MID . INFO), ENTRY its state.edn entry, COLS the active
+columns.  The whole-row faces of `gnaw--row-faces', if any, go on
+every cell."
+  (let ((cells (gnaw--report-cells (car pair) (cdr pair) entry cols))
+        (faces (gnaw--row-faces entry (cdr pair))))
+    (list pair
+          (vconcat (if faces
+                       (mapcar (lambda (s) (propertize s 'face faces)) cells)
+                     cells)))))
+
 (defun gnaw--list-entries-related ()
   "Return `tabulated-list-entries' for the related-reports view.
 Show the reports of `gnaw-list--related-mids' only, closed ones in
@@ -3679,13 +3691,7 @@ relation metadata, shown in `gnaw-missing' face."
     (dolist (p gnaw-list--reports)
       (when (member (car p) gnaw-list--related-mids)
         (push (car p) found)
-        (let* ((entry (gethash (car p) state))
-               (faces (gnaw--row-faces entry (cdr p)))
-               (cells (gnaw--report-cells (car p) (cdr p) entry cols)))
-          (when faces
-            (setq cells (mapcar (lambda (s) (propertize s 'face faces))
-                                cells)))
-          (push (list p (vconcat cells)) rows))))
+        (push (gnaw--list-row p (gethash (car p) state) cols) rows)))
     ;; Placeholder rows for the related mids the sources do not carry.
     ;; RET still works when the mail client can look the mid up (local
     ;; mailbox) or through the archive URL carried by the relation.
@@ -3749,69 +3755,77 @@ or a flags: filter naming a close flag does."
     (cl-remove-if (lambda (p) (gnaw--closed-p (cdr p)))
                   gnaw-list--reports)))
 
-(defun gnaw--list-entries-full ()
-  "Return `tabulated-list-entries' for the full report list.
-Closed reports enter the list only through a query asking for
-them (see `gnaw-list--display-reports')."
-  (let ((state (gnaw--state-table))
-        (cols (gnaw--active-columns))
-        (qgroups (and gnaw-list--query (gnaw--query-compile gnaw-list--query)))
-        (pairs (gnaw-list--display-reports))
-        (groups (make-hash-table :test 'equal))
+(defun gnaw--series-rows (pairs)
+  "Fold the patch series of PAIRS; a list of (PAIR . MATCH-PAIRS).
+Each PAIR is a (MID . INFO) report to show, in PAIRS' order, and
+MATCH-PAIRS the reports a filter query may match for it to show.  A
+report outside a series matches on itself.  A folded series shows
+its cover letter, else its first patch, with a `:series-summary',
+and matches on any of its members.  An unfolded series, one in
+`gnaw-list--expanded', shows every member in patch order, each
+matching on itself, `:series-head' marking the first and
+`:series-child' the others."
+  (let ((groups (make-hash-table :test 'equal))
         (seen (make-hash-table :test 'equal))
-        (rows nil))
+        rows)
     (dolist (p pairs)
       (let ((sid (gnaw--series-id (cdr p))))
         (when sid (push p (gethash sid groups)))))
-    (cl-flet ((row (pair &optional match-pairs)
-                ;; Dismiss is judged on the displayed PAIR; the query may
-                ;; match any of MATCH-PAIRS, so a folded series stays
-                ;; visible when any member matches.  Unfolding it then
-                ;; filters each member individually.
-                (let* ((entry   (gethash (car pair) state))
-                       (dismiss (and (assq :dismiss entry) t)))
-                  (when (and (or gnaw-list--show-dismissed (not dismiss))
-                             (or (null qgroups)
-                                 (seq-some
-                                  (lambda (mp)
-                                    (gnaw--query-match-p qgroups (car mp) (cdr mp)))
-                                  (or match-pairs (list pair)))))
-                    (let ((cells (gnaw--report-cells (car pair) (cdr pair)
-                                                     entry cols))
-                          (faces (gnaw--row-faces entry (cdr pair))))
-                      (when faces
-                        (setq cells (mapcar (lambda (s) (propertize s 'face faces))
-                                            cells)))
-                      (push (list pair (vconcat cells)) rows))))))
-      (dolist (p pairs)
+    (cl-flet ((flag (pair key value)
+                (cons (car pair)
+                      (plist-put (copy-sequence (cdr pair)) key value))))
+      (dolist (p pairs (nreverse rows))
         (let ((sid (gnaw--series-id (cdr p))))
           (cond
-           ((null sid) (row p))
+           ((null sid) (push (list p p) rows))
            ((gethash sid seen) nil)
            (t
             (puthash sid t seen)
-            (let* ((members (sort (nreverse (gethash sid groups))
-                                  (lambda (a b)
-                                    (< (gnaw--patch-seq-n (cdr a))
-                                       (gnaw--patch-seq-n (cdr b))))))
-                   (multi (cdr members)))
-              (if (and multi (member sid gnaw-list--expanded))
-                  (let ((head t))
-                    (dolist (m members)
-                      (row (cons (car m)
-                                 (plist-put (copy-sequence (cdr m))
-                                            (if head :series-head :series-child)
-                                            t)))
-                      (setq head nil)))
-                (let* ((cover (seq-find (lambda (m) (gnaw--cover-p (cdr m))) members))
-                       (rep (or cover (car members))))
-                  (row (cons (car rep)
-                             (if multi
-                                 (plist-put (copy-sequence (cdr rep)) :series-summary
-                                            (gnaw--series-summary (mapcar #'cdr members)))
-                               (cdr rep)))
-                       members))))))))
-      (nreverse rows))))
+            (let ((members (sort (nreverse (gethash sid groups))
+                                 (lambda (a b)
+                                   (< (gnaw--patch-seq-n (cdr a))
+                                      (gnaw--patch-seq-n (cdr b)))))))
+              (cond
+               ((null (cdr members)) (push (list p p) rows))
+               ((member sid gnaw-list--expanded)
+                (let ((head (flag (car members) :series-head t)))
+                  (push (list head head) rows))
+                (dolist (m (cdr members))
+                  (let ((child (flag m :series-child t)))
+                    (push (list child child) rows))))
+               (t
+                (let ((rep (or (seq-find (lambda (m) (gnaw--cover-p (cdr m)))
+                                         members)
+                               (car members))))
+                  (push (cons (flag rep :series-summary
+                                    (gnaw--series-summary
+                                     (mapcar #'cdr members)))
+                              members)
+                        rows))))))))))))
+
+(defun gnaw--list-entries-full ()
+  "Return `tabulated-list-entries' for the full report list.
+Patch series fold per `gnaw--series-rows'.  Dismissed reports show
+only with `gnaw-list--show-dismissed', judged on the displayed
+report; the query in `gnaw-list--query' keeps a row when it matches
+any of the reports the row stands for, so a folded series stays
+visible when any member matches.  Closed reports enter the list
+only through a query asking for them (see
+`gnaw-list--display-reports')."
+  (let ((state (gnaw--state-table))
+        (cols (gnaw--active-columns))
+        (qgroups (and gnaw-list--query (gnaw--query-compile gnaw-list--query))))
+    (cl-loop for (pair . matches)
+             in (gnaw--series-rows (gnaw-list--display-reports))
+             for entry = (gethash (car pair) state)
+             when (and (or gnaw-list--show-dismissed
+                           (not (assq :dismiss entry)))
+                       (or (null qgroups)
+                           (seq-some (lambda (mp)
+                                       (gnaw--query-match-p
+                                        qgroups (car mp) (cdr mp)))
+                                     matches)))
+             collect (gnaw--list-row pair entry cols))))
 
 (defvar gnaw-list-mode-map
   (let ((map (make-sparse-keymap)))
