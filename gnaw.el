@@ -5496,6 +5496,46 @@ list, the save-target default first."
   (delete-dups repos))
 
 ;;;###autoload
+(defun gnaw--read-source ()
+  "Ask for a source to add: a list (URLS NAME REPO LETTER).
+These are the arguments of `gnaw-add-source'.  Read a base,
+meta.json or reports.json URL, then the report files listed in
+meta.json (all-open.json by default, else all.json, else the
+first), the source name (meta.json's by default), its letter and
+its local git repos.  A source already in config.edn with one of
+these URLS or this NAME is being replaced: it hands down its letter
+and repos as defaults, and its letter does not count as taken."
+  (let* ((input (read-string "Report source URL (base, meta.json or .json): "))
+         (dir (if (string-empty-p (string-trim input))
+                  (user-error "No URL given")
+                (gnaw--resolve-reports-dir input)))
+         (meta (ignore-errors (gnaw-source-meta dir t)))
+         (files (or (alist-get 'reports-files meta) '("all.json")))
+         (def (cond ((member "all-open.json" files) "all-open.json")
+                    ((member "all.json" files) "all.json")
+                    (t (car files))))
+         (chosen (or (completing-read-multiple
+                      (format "Report file(s) (default %s): " def)
+                      files nil t nil nil def)
+                     (list def)))
+         (sname (alist-get 'source meta))
+         (name (let ((n (read-string
+                         (format "Source name%s: "
+                                 (if sname (format " (default %s)" sname) ""))
+                         nil nil sname)))
+                 (if (string-empty-p (string-trim n))
+                     (user-error "No source name given")
+                   n)))
+         (urls (mapcar (lambda (f) (concat dir f)) chosen))
+         (cfgs (alist-get :sources (gnaw--read-config-raw)))
+         (old (seq-find (lambda (s) (gnaw--source-match-p s urls name)) cfgs))
+         (taken (gnaw--taken-source-letters
+                 (cl-remove-if (lambda (s) (gnaw--source-match-p s urls name))
+                               cfgs)))
+         (letter (gnaw--read-source-letter name taken (alist-get :letter old)))
+         (repo (gnaw--read-repos (gnaw--entry-repos old))))
+    (list urls name repo letter)))
+
 (defun gnaw-add-source (urls &optional name repo letter)
   "Add a source (URLS, NAME, REPO, LETTER) to config.edn.
 URLS is a list of reports.json URLs; NAME is required, as config.edn
@@ -5506,41 +5546,8 @@ Interactively, give a base, meta.json or reports.json URL, then
 pick the report files listed in meta.json, the source NAME, its
 LETTER \(suggesting the first free one of NAME) and its local git
 repo(s) for patches; an updated source hands down its repos and
-offers to link more."
-  (interactive
-   (let* ((input (read-string "Report source URL (base, meta.json or .json): "))
-          (_ (when (string-empty-p (string-trim input)) (user-error "No URL given")))
-          (dir (gnaw--resolve-reports-dir input))
-          (meta (ignore-errors (gnaw-source-meta dir t)))
-          (files (or (alist-get 'reports-files meta) '("all.json")))
-          (def (cond ((member "all-open.json" files) "all-open.json")
-                     ((member "all.json" files) "all.json")
-                     (t (car files))))
-          (chosen (or (completing-read-multiple
-                       (format "Report file(s) (default %s): " def)
-                       files nil t nil nil def)
-                      (list def)))
-          (sname (alist-get 'source meta))
-          (name (read-string
-                 (format "Source name%s: " (if sname (format " (default %s)" sname) ""))
-                 nil nil sname))
-          (_ (when (string-empty-p (string-trim name))
-               (user-error "No source name given")))
-          (urls (mapcar (lambda (f) (concat dir f)) chosen))
-          (cfgs (alist-get :sources (gnaw--read-config-raw)))
-          (old (seq-find (lambda (s) (gnaw--source-match-p s urls name)) cfgs))
-          (letter
-           ;; Letters taken by the sources this add does not replace;
-           ;; a replaced entry hands down its letter as the default.
-           (let ((taken (gnaw--taken-source-letters
-                         (cl-remove-if (lambda (s)
-                                         (gnaw--source-match-p s urls name))
-                                       cfgs))))
-             (gnaw--read-source-letter (or name (car urls)) taken
-                                       (alist-get :letter old))))
-          ;; A replaced entry hands down its repos; more can be linked.
-          (repo (gnaw--read-repos (gnaw--entry-repos old))))
-     (list urls name repo letter)))
+offers to link more (see `gnaw--read-source')."
+  (interactive (gnaw--read-source))
   (let ((urls (if (listp urls) urls (list urls)))
         (name (and name (not (string-empty-p (string-trim name))) name)))
     (unless urls (user-error "No report file selected"))
