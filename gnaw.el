@@ -4493,10 +4493,11 @@ them; with three, add that exclusion to the active filter (AND)."
 (declare-function org-link-store-props "ol" (&rest plist))
 (declare-function org-store-link "ol" (arg &optional interactive?))
 
-(defun gnaw-org-follow-link (mid _prefix)
+(defun gnaw-org-follow-link (mid &optional _prefix)
   "Open the email of the report with message-id MID, from a gnaw: link.
 Look MID up in the reports a live list buffer already holds in
-memory; without one, re-read the cached sources."
+memory; without one, re-read the cached sources.  Org passes the
+prefix argument as _PREFIX, unused, and may call with MID alone."
   (let* ((mid (gnaw-normalize-mid mid))
          (pair (or (seq-some
                     (lambda (buf)
