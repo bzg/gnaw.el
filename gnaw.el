@@ -1622,37 +1622,99 @@ the report at point, like \\<gnaw-list-mode-map>\\[gnaw-list-browse]."
         ((derived-mode-p 'gnaw-list-mode) (gnaw-list-browse))
         (t (user-error "No archive URL for this message"))))
 
-(declare-function quoted-printable-decode-string "qp")
+;; The mm-handle-* accessors are macros.
+(eval-when-compile (require 'mm-decode))
+(declare-function mm-dissect-buffer "mm-decode" (&optional no-strict-mime loose-mime))
+(declare-function mm-destroy-parts "mm-decode" (handles))
+(declare-function mm-get-part "mm-decode" (handle &optional no-cache))
+(declare-function mm-charset-to-coding-system "mm-util")
+(declare-function mail-content-type-get "mail-parse")
+(declare-function mail-narrow-to-head "mail-parse")
 (declare-function rfc2047-decode-string "rfc2047")
+(declare-function shr-insert-document "shr")
+
+(defun gnaw--mime-coding (handle)
+  "Return the coding system for the charset of MIME part HANDLE.
+UTF-8 when the part names no charset or one Emacs does not know."
+  (let ((charset (mail-content-type-get (mm-handle-type handle) 'charset)))
+    (or (and charset
+             (ignore-errors (mm-charset-to-coding-system charset nil t)))
+        'utf-8)))
+
+(defvar shr-width)
+(defvar shr-use-fonts)
+
+(defun gnaw--mime-html (html)
+  "Render HTML text with shr, or return it as is without libxml.
+Lines fill to `fill-column' in a fixed-pitch layout, as in a plain
+text message: the rendering is kept as text, without its fonts."
+  (if (not (and (fboundp 'libxml-parse-html-region) (libxml-available-p)))
+      html
+    (require 'shr)
+    (let ((dom (with-temp-buffer
+                 (insert html)
+                 (libxml-parse-html-region (point-min) (point-max)))))
+      (with-temp-buffer
+        (let ((shr-width fill-column)
+              (shr-use-fonts nil))
+          (shr-insert-document dom))
+        (buffer-substring-no-properties (point-min) (point-max))))))
+
+(defun gnaw--mime-part-text (handle)
+  "Return MIME HANDLE, a part or a multipart tree, as text to read.
+A multipart/alternative shows its text/plain part when it has one;
+other multiparts show each of their parts in turn.  A text part is
+decoded per its charset, HTML rendered; an attached message is
+decoded in turn; any other part becomes a [name (type)] line."
+  (if (stringp (car handle))
+      (let ((parts (cdr handle)))
+        (if (string-prefix-p "multipart/alternative" (car handle))
+            (gnaw--mime-part-text
+             (or (seq-find (lambda (h)
+                             (and (not (stringp (car h)))
+                                  (equal (mm-handle-media-type h) "text/plain")))
+                           parts)
+                 (car (last parts))))
+          (mapconcat (lambda (h) (string-trim-right (gnaw--mime-part-text h)))
+                     parts "\n\n")))
+    (let* ((type (mm-handle-media-type handle))
+           (name (or (mail-content-type-get (mm-handle-disposition handle)
+                                            'filename)
+                     (mail-content-type-get (mm-handle-type handle) 'name)))
+           (label (if name (format "[%s (%s)]" name type) (format "[%s]" type))))
+      (cond ((equal type "message/rfc822")
+             (concat label "\n" (gnaw--decode-message (mm-get-part handle))))
+            ((string-prefix-p "text/" type)
+             (let ((text (decode-coding-string (mm-get-part handle)
+                                               (gnaw--mime-coding handle))))
+               (concat (and name (concat label "\n"))
+                       (if (equal type "text/html") (gnaw--mime-html text) text))))
+            (t label)))))
 
 (defun gnaw--decode-message (raw)
   "Decode raw RFC822 message string RAW for display (best effort).
-Decode encoded-word headers, and the single part's transfer-encoding
-and charset; multipart bodies are decoded as UTF-8."
-  (require 'qp)
+Decode the headers, raw UTF-8 and encoded words alike, then the body
+with the MIME parser of Emacs: transfer encodings, charsets and
+multipart structure (see `gnaw--mime-part-text')."
+  (require 'mm-decode)
+  (require 'mail-parse)
   (require 'rfc2047)
-  (let* ((case-fold-search t)
-         (sep (string-match "\r?\n\r?\n" raw))
-         (headers (if sep (substring raw 0 sep) raw))
-         (body (if sep (substring raw (match-end 0)) ""))
-         (cte (and (string-match
-                    "^content-transfer-encoding:[ \t]*\\([^ \t\r\n]+\\)" headers)
-                   (downcase (match-string 1 headers))))
-         (charset (and (string-match "charset=\"?\\([^\";[:space:]]+\\)" headers)
-                       (downcase (match-string 1 headers))))
-         (coding (let ((c (and charset (intern charset))))
-                   (if (and c (coding-system-p c)) c 'utf-8)))
-         (bytes (cond ((string-match-p "^content-type:[ \t]*multipart/" headers) body)
-                      ((equal cte "quoted-printable")
-                       (quoted-printable-decode-string body))
-                      ((equal cte "base64")
-                       (or (ignore-errors
-                             (base64-decode-string
-                              (replace-regexp-in-string "[ \t\r\n]" "" body)))
-                           body))
-                      (t body))))
-    (concat (rfc2047-decode-string headers) "\n\n"
-            (decode-coding-string bytes coding))))
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert (if (multibyte-string-p raw) (encode-coding-string raw 'utf-8) raw))
+    (goto-char (point-min))
+    (while (search-forward "\r\n" nil t) (replace-match "\n" t t))
+    (let ((headers (save-excursion
+                     (save-restriction
+                       (goto-char (point-min))
+                       (mail-narrow-to-head)
+                       (string-trim-right (buffer-string)))))
+          (handle (progn (goto-char (point-min)) (mm-dissect-buffer t t))))
+      (unwind-protect
+          (concat (rfc2047-decode-string (decode-coding-string headers 'utf-8))
+                  "\n\n"
+                  (if handle (gnaw--mime-part-text handle) ""))
+        (when handle (mm-destroy-parts handle))))))
 
 (defun gnaw--show-message-web (mid info)
   "Fetch and display the message for MID using INFO, decoded for reading."

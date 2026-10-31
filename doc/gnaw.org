@@ -585,7 +585,10 @@ public-inbox archive.
 #+findex: gnaw-message-browse
 The =web= method displays the fetched message in a ~gnaw-message-mode~
 buffer, where {{{kbd(w)}}} (~gnaw-message-browse~) opens the archived page in
-a browser and {{{kbd(q)}}} quits.
+a browser and {{{kbd(q)}}} quits. The message is decoded with the MIME
+parser of Emacs: a multipart message shows its text parts in turn---the
+plain text one of an alternative, an HTML-only body rendered as
+text---and a one-line =[name (type)]= placeholder for each other part.
 
 #+cindex: follow mode
 {{{kbd(SPC)}}} toggles the mail in a window below the list, keeping point in
