@@ -668,7 +668,9 @@ with completion.
 the sender and subject, like =ec/fix-tangle__v2=
 (~gnaw-am-branch-function~); empty input keeps a detached HEAD---and for
 its start point, proposing the patches' recorded =base-commit:= when the
-repo has it.
+repo has it. Naming a branch the repo already has (left by a previous
+run, say) checks it out as is: no start point is asked, and the branch
+survives an undo.
 
 #+findex: gnaw-list-patch-am-edit
 #+cindex: patches, editing before git am

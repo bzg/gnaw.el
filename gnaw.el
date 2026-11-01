@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.38.1
+;; Version: 0.39.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -83,7 +83,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.38.1")
+(defconst gnaw-version (or (package-get-version) "0.39.0")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -2288,6 +2288,11 @@ session's git commands which callers display on failure, after a
   (zerop (call-process "git" nil nil nil
                        "cat-file" "-e" (concat commit "^{commit}"))))
 
+(defun gnaw--branch-in-repo-p (branch)
+  "Non-nil when local BRANCH exists in the git repo of `default-directory'."
+  (zerop (call-process "git" nil nil nil "rev-parse" "--verify" "--quiet"
+                       (concat "refs/heads/" branch))))
+
 (defun gnaw--current-checkout (repo)
   "Return REPO's checked-out branch name, or its commit when detached.
 Nil when neither resolves (a corrupt HEAD; an unborn HEAD still
@@ -2428,22 +2433,27 @@ with git am), \\[abort-recursive-edit] aborts the whole run."
 
 (defun gnaw--am-read-target (info files repo use-worktree)
   "Ask where to apply INFO's patch FILES in REPO.
-Return a list (BRANCH BASE AM-DIR ORIG).  BRANCH is the branch to
-create, nil to keep a detached HEAD; BASE its start point, nil for
-the current HEAD, the patches' recorded `base-commit:' being
-proposed when REPO has it.  AM-DIR is the directory to apply in: a
-new worktree read by `gnaw-am-read-worktree-function' when
-USE-WORKTREE, REPO otherwise.  ORIG is REPO's checkout to come back
-to should the am be undone; a worktree leaves it untouched, so ORIG
-is then nil."
+Return a list (BRANCH BASE AM-DIR ORIG EXISTING).  BRANCH is the
+branch to apply on, nil to keep a detached HEAD; EXISTING non-nil
+when REPO already has it (a previous run's, say), in which case it
+is checked out as is.  Otherwise BASE is the start point of the
+branch to create, nil for the current HEAD, the patches' recorded
+`base-commit:' being proposed when REPO has it.  AM-DIR is the
+directory to apply in: a new worktree read by
+`gnaw-am-read-worktree-function' when USE-WORKTREE, REPO otherwise.
+ORIG is REPO's checkout to come back to should the am be undone; a
+worktree leaves it untouched, so ORIG is then nil."
   (let* ((default-directory repo)
          (branch (let ((b (read-string "New branch (empty for detached): "
                                        (funcall gnaw-am-branch-function info))))
                    (and (not (string-blank-p b)) b)))
-         (base (completing-read
-                "Base commit (empty for HEAD): "
-                (let ((b (gnaw--patch-base-commit files)))
-                  (and b (gnaw--commit-in-repo-p b) (list b)))))
+         (existing (and branch (gnaw--branch-in-repo-p branch)))
+         (base (if existing
+                   ""
+                 (completing-read
+                  "Base commit (empty for HEAD): "
+                  (let ((b (gnaw--patch-base-commit files)))
+                    (and b (gnaw--commit-in-repo-p b) (list b))))))
          (am-dir (if use-worktree
                      (file-name-as-directory
                       (expand-file-name
@@ -2452,7 +2462,8 @@ is then nil."
     (when (and use-worktree (file-exists-p am-dir))
       (user-error "Worktree directory %s already exists" am-dir))
     (list branch (and (not (string-blank-p base)) base) am-dir
-          (and (not use-worktree) (gnaw--current-checkout repo)))))
+          (and (not use-worktree) (gnaw--current-checkout repo))
+          existing)))
 
 (defun gnaw--am-trailers (info)
   "The trailers to fold into INFO's commits, nil when none or disabled.
@@ -2471,18 +2482,22 @@ originals.  FILE itself when neither applies."
   (let ((folded (if trailers (gnaw--fold-trailers-file file trailers) file)))
     (if (and edit (equal folded file)) (gnaw--am-temp-copy file) folded)))
 
-(defun gnaw--am-checkout (repo use-worktree branch base am-dir)
+(defun gnaw--am-checkout (repo use-worktree branch base am-dir existing)
   "Create the checkout `git am' runs in, per `gnaw--am-read-target'.
 A new worktree in AM-DIR when USE-WORKTREE, else REPO's own; on
-BRANCH, or detached when nil; at BASE, or HEAD when nil.  A failure
-shows the git output and signals a `user-error'."
+BRANCH, or detached when nil; at BASE, or HEAD when nil.  With
+EXISTING, BRANCH is checked out as is instead of created.  A
+failure shows the git output and signals a `user-error'."
   (unless (zerop (apply #'gnaw--git repo
                         (append (if use-worktree
                                     (list "worktree" "add")
                                   (list "checkout"))
-                                (if branch (list "-b" branch) (list "--detach"))
+                                (cond (existing nil)
+                                      (branch (list "-b" branch))
+                                      (t (list "--detach")))
                                 (and use-worktree (list am-dir))
-                                (and base (list base)))))
+                                (cond (existing (list branch))
+                                      (base (list base))))))
     (display-buffer "*gnaw-git*")
     (user-error "Git %s failed" (if use-worktree "worktree add" "checkout"))))
 
@@ -2505,10 +2520,12 @@ Then show AM-DIR per `gnaw-am-show-repo'."
 First prompt for a branch to create (empty input keeps a detached
 HEAD) and for its start point (empty input starts from the current
 HEAD; the patches' recorded `base-commit:' is proposed when the
-repo has it).  When `gnaw-am-create-worktree', inverted by
-TOGGLE-WORKTREE, is non-nil, branch and apply in a new worktree
-read by `gnaw-am-read-worktree-function', leaving the repo's
-checkout untouched.  The review trailers collected by BONE, plus
+repo has it).  A branch the repo already has is checked out as is,
+its start point not asked, and survives an undo.  When
+`gnaw-am-create-worktree', inverted by TOGGLE-WORKTREE, is non-nil,
+branch and apply in a new worktree read by
+`gnaw-am-read-worktree-function', leaving the repo's checkout
+untouched.  The review trailers collected by BONE, plus
 those synthesized from the report state per
 `gnaw-am-synthetic-trailers', are folded into the commits per
 `gnaw-am-fold-trailers'.  A successful run shows the directory
@@ -2523,7 +2540,7 @@ copies, never to the cached originals."
     (pcase-let* ((repo (gnaw--target-repo info))
                  (default-directory repo)
                  (use-worktree (xor gnaw-am-create-worktree toggle-worktree))
-                 (`(,branch ,base ,am-dir ,orig)
+                 (`(,branch ,base ,am-dir ,orig ,existing)
                   (gnaw--am-read-target info files repo use-worktree))
                  (trailers (gnaw--am-trailers info))
                  (am-files nil))
@@ -2538,13 +2555,15 @@ copies, never to the cached originals."
             ;; Edit before creating the branch, so that aborting the
             ;; edit leaves the repo as it was.
             (when edit (gnaw--edit-am-files am-files))
-            (gnaw--am-checkout repo use-worktree branch base am-dir)
+            (gnaw--am-checkout repo use-worktree branch base am-dir existing)
             (if (zerop (apply #'gnaw--git am-dir
                               (append (list "am") gnaw-git-am-options
                                       (list "--") am-files)))
                 (gnaw--am-succeeded files am-files am-dir branch edit)
               (display-buffer "*gnaw-git*")
-              (gnaw--am-failed repo am-dir use-worktree branch orig)))
+              ;; Undoing deletes the branch only when this run made it.
+              (gnaw--am-failed repo am-dir use-worktree
+                               (and (not existing) branch) orig)))
         ;; The copies are temp files; the cached originals stay.
         (dolist (f am-files)
           (unless (member f files) (delete-file f)))))))
