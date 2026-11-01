@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.38.0
+;; Version: 0.38.1
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -83,7 +83,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.38.0")
+(defconst gnaw-version (or (package-get-version) "0.38.1")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -4979,6 +4979,10 @@ inverts that setting for this call."
     ("s" "Save to a directory" gnaw-list-patch-save)
     ("c" "Check if applied (in the main branch)" gnaw-list-patch-check)]]
   (interactive (list (cdr (gnaw-list--current))))
+  (gnaw--patch-menu info patches))
+
+(defun gnaw--patch-menu (info &optional patches)
+  "Open the patch menu on PATCHES of report INFO -- all of them when nil."
   (transient-setup 'gnaw-list-patch-transient nil nil
                    :scope (cons info patches)))
 
@@ -4987,8 +4991,8 @@ inverts that setting for this call."
 A patch opens the patch menu, TYPE `all-patches' opens it on every
 patch of the report; other files show right away."
   (pcase (car att)
-    ('patch (gnaw-list-patch-transient info (list (cdr att))))
-    ('all-patches (gnaw-list-patch-transient info nil))
+    ('patch (gnaw--patch-menu info (list (cdr att))))
+    ('all-patches (gnaw--patch-menu info))
     (_ (gnaw--show-attachment info att))))
 
 (defun gnaw--show-attachment (info att)
