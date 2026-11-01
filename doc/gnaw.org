@@ -342,7 +342,7 @@ Marks (see [[*Marks: sticky and dismiss]]):
 
 - {{{kbd(d)}}} (~gnaw-list-flag-dismiss~) ::
   #+findex: gnaw-list-flag-dismiss
-  Flag the report for dismissal, shown =D=.
+  Flag the report for dismissal, shown =D= and struck through.
 
 - {{{kbd(x)}}} (~gnaw-list-execute-flags~) ::
   #+findex: gnaw-list-execute-flags
@@ -396,7 +396,8 @@ report (=!= in bold in the Mark column, exported to =todo.org= by the gnaw
 CLI), *dismiss* hides it until {{{kbd(_)}}} reveals them (=d=, in a dimmed
 color).
 
-Like in [[info:emacs#Dired Deletion][Dired]], {{{kbd(d)}}} only /flags/ a report (shown =D=) and {{{kbd(x)}}}
+Like in [[info:emacs#Dired Deletion][Dired]], {{{kbd(d)}}} only /flags/ a report (shown =D=, the row struck
+through) and {{{kbd(x)}}}
 dismisses all the flagged ones at once; {{{kbd(D)}}} dismisses right away;
 {{{kbd(u)}}} clears the mark or flag. Each of {{{kbd(!)}}}, {{{kbd(d)}}}, {{{kbd(D)}}} and
 {{{kbd(u)}}} then moves point to the next row, keeping the column. {{{kbd(D)}}}

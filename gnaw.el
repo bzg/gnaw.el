@@ -2899,6 +2899,10 @@ Set by `gnaw--list-format'.")
   "Face for dismissed reports when the report list shows them."
   :group 'gnaw)
 
+(defface gnaw-flagged '((t :strike-through t))
+  "Face for reports flagged for dismissal (see `gnaw-list-flag-dismiss')."
+  :group 'gnaw)
+
 (defface gnaw-closed '((t :slant italic))
   "Face for closed reports, in the report list and the related view."
   :group 'gnaw)
@@ -3915,11 +3919,13 @@ entry; COLS the active columns."
   "Return the whole-row face list for a report, nil when plain.
 MID is the report's message-id, ENTRY its state.edn entry, INFO its
 report plist.  The sticky or dismissed mark face combines with
-`gnaw-closed' when the report is closed, and with `gnaw-new' when
-the last update brought it in, so a row keeps every cue."
+`gnaw-flagged' when the report is flagged for dismissal, with
+`gnaw-closed' when it is closed, and with `gnaw-new' when the last
+update brought it in, so a row keeps every cue."
   (delq nil
         (list (cond ((assq :sticky entry) 'gnaw-sticky)
                     ((assq :dismiss entry) 'gnaw-dismissed))
+              (and (member mid gnaw-list--flagged) 'gnaw-flagged)
               (and (gnaw--closed-p info) 'gnaw-closed)
               (and gnaw-list--new-mids (gethash mid gnaw-list--new-mids)
                    'gnaw-new))))
@@ -5337,20 +5343,16 @@ dismissal."
                  "gnaw: dismissed (type _ to include dismissed reports to the view)"
                "gnaw: dismiss mark removed"))))
 
-(defun gnaw-list--set-mark-cell (pair)
-  "Redraw the Mark cell of report PAIR, a (MID . INFO), on the current row.
-Do nothing when the list does not show the Mark column.  Much
-cheaper than `gnaw-list-refresh', which rebuilds and reprints
-every row: a flag toggle only changes this one cell.  The cell is
-built like a full render does, with its mouse-face and the row's
-face (sticky, dismissed, closed), so it does not stand out."
-  (when gnaw-list--mark-index
-    (let* ((entry (gethash (car pair) (gnaw--state-table)))
-           (faces (gnaw--row-faces (car pair) entry (cdr pair)))
-           (cell (gnaw--list-cell :mark (cdr pair) entry (car pair))))
-      (tabulated-list-set-col gnaw-list--mark-index
-                              (if faces (propertize cell 'face faces) cell)
-                              t))))
+(defun gnaw-list--redraw-row (pair)
+  "Redraw the current row of report PAIR, a (MID . INFO), cell by cell.
+Much cheaper than `gnaw-list-refresh', which rebuilds and reprints
+every row: a flag toggle only changes this row's Mark cell and its
+face (`gnaw-flagged' strikes the row through).  The cells are built
+like a full render does, so the row does not stand out."
+  (let* ((entry (gethash (car pair) (gnaw--state-table)))
+         (cells (cadr (gnaw--list-row pair entry (gnaw--active-columns)))))
+    (dotimes (i (length cells))
+      (tabulated-list-set-col i (aref cells i) t))))
 
 (defun gnaw-list-flag-dismiss ()
   "Flag the report at point for dismissal (or unflag it), then move down.
@@ -5366,7 +5368,7 @@ point on its column."
                 (if (member mid gnaw-list--flagged)
                     (delete mid gnaw-list--flagged)
                   (cons mid gnaw-list--flagged)))
-    (gnaw-list--set-mark-cell p)
+    (gnaw-list--redraw-row p)
     (gnaw-list--update-mode-line)
     (gnaw-list--forward-row col)))
 
@@ -5408,7 +5410,7 @@ Moving down keeps point on its column."
     (cond
      ((member (car p) gnaw-list--flagged)
       (setq-local gnaw-list--flagged (delete (car p) gnaw-list--flagged))
-      (gnaw-list--set-mark-cell p)
+      (gnaw-list--redraw-row p)
       (gnaw-list--update-mode-line)
       (gnaw-list--forward-row col))
      ((gnaw-remove-marks (car p))
