@@ -4033,10 +4033,8 @@ only through a query asking for them (see
   ;; Padding first: `gnaw--list-format' adds it to the used width.
   (setq tabulated-list-padding 1)
   (setq tabulated-list-format (gnaw--list-format))
-  (setq tabulated-list-sort-key
-        (and gnaw-list-sort-key
-             (assoc (car gnaw-list-sort-key) (gnaw--active-columns))
-             gnaw-list-sort-key))
+  ;; `gnaw-list-refresh' drops it when its column is not shown.
+  (setq tabulated-list-sort-key gnaw-list-sort-key)
   ;; The native refresh entry points: C-x x g, auto-revert...  Pass
   ;; NO-ASK: an auto-revert timer must not prompt for source letters.
   (setq-local revert-buffer-function
@@ -4174,7 +4172,6 @@ whole; every command changing rows in place needs the full render."
     (setq tabulated-list-entries (gnaw--anchor-cells (gnaw--list-entries)))
     (tabulated-list-print t update)
     (move-to-column col)
-    (force-mode-line-update)
     (when win (gnaw-list--restore-window win anchor))))
 
 (defun gnaw-list-reload (&optional no-ask track-new)
@@ -4843,11 +4840,8 @@ patch of the report; other files show right away."
       (goto-char (point-min)))))
 
 (defun gnaw--attachment-type-label (type)
-  "Return the display label of attachment TYPE."
-  (pcase type
-    ('patch "patch")
-    ('event "ics")
-    ('text  "text")))
+  "Return the display label of attachment TYPE: patch, event or text."
+  (if (eq type 'event) "ics" (symbol-name type)))
 
 (defun gnaw--choose-attachment (info prompt)
   "Choose one attachment of report INFO, prompting with PROMPT.
@@ -5234,11 +5228,7 @@ Moving down keeps point on its column."
   (let ((p (gnaw-list--current))
         (col (current-column)))
     (cond
-     ((member (car p) gnaw-list--flagged)
-      (setq-local gnaw-list--flagged (delete (car p) gnaw-list--flagged))
-      (gnaw-list--redraw-row p)
-      (gnaw-list--update-mode-line)
-      (gnaw-list--forward-row col))
+     ((member (car p) gnaw-list--flagged) (gnaw-list-flag-dismiss))
      ((gnaw-remove-marks (car p))
       (gnaw-list--refresh-keeping-point)
       (gnaw-list--forward-row col))
@@ -5688,25 +5678,17 @@ client used to open report messages; with existing sources, optionally
 only the mail client.  The existing configuration stays displayed in
 a window while the prompts run, refreshed after each change."
   (interactive)
-  (let ((added-source nil)
-        (summary nil))
+  (let ((add t) summary)
     (unwind-protect
         (progn
-          (if (gnaw-sources)
-              (progn
-                (setq summary (gnaw--show-config-summary))
-                (if (y-or-n-p "Add or update Gnaw sources? ")
-                    (progn
-                      (gnaw--configure-one-source)
-                      (setq added-source t))
-                  (call-interactively #'gnaw-configure-email-client)))
+          (when (gnaw-sources)
+            (setq summary (gnaw--show-config-summary)
+                  add (y-or-n-p "Add or update Gnaw sources? "))
+            (unless add (call-interactively #'gnaw-configure-email-client)))
+          (while add
             (gnaw--configure-one-source)
-            (setq added-source t))
-          (when added-source
-            (setq summary (gnaw--show-config-summary))
-            (while (y-or-n-p "Add another source? ")
-              (gnaw--configure-one-source)
-              (setq summary (gnaw--show-config-summary)))))
+            (setq summary (gnaw--show-config-summary)
+                  add (y-or-n-p "Add another source? "))))
       (when (buffer-live-p summary)
         (if-let* ((win (get-buffer-window summary t)))
             (quit-window t win)
