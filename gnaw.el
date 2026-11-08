@@ -1864,10 +1864,8 @@ ones (and only when `gnaw-am-fold-trailers' is non-nil):
  - `link':  \"Link: <url>\" to the report's archived web page.
 `owned' is not in the default: an owner has not necessarily
 reviewed -- enable it only if that shortcut holds on your source.
-A synthetic trailer is dropped when BONE already collected one
-with the same address and an equivalent key -- Acked-by and
-Reviewed-by count as one approval family, so a literal
-\"Acked-by:\" posted in the thread is never upgraded."
+A synthetic trailer already collected by BONE is dropped (see
+`gnaw--merge-trailers')."
   :type '(set (const :tag "Acked. as Reviewed-by:" acked)
               (const :tag "Owned. as Reviewed-by:" owned)
               (const :tag "Archived page as Link:" link))
@@ -2025,28 +2023,23 @@ value.  Return nil when TRAILER has no colon."
                     (match-string 1 val)
                   val)))))
 
+(defun gnaw--trailer-id (trailer)
+  "Return TRAILER's (FAMILY . ADDRESS) identity, or nil without a colon.
+See `gnaw--trailer-key-family' and `gnaw--trailer-addr'."
+  (when-let* ((colon (string-search ":" trailer)))
+    (cons (gnaw--trailer-key-family (substring trailer 0 colon))
+          (gnaw--trailer-addr trailer))))
+
 (defun gnaw--merge-trailers (collected synthetic)
   "Append the SYNTHETIC trailers not already covered by COLLECTED.
-A synthetic trailer is covered when a collected one carries the
-same address or URL (compared whole, case-insensitively) under a
-key of the same family (see `gnaw--trailer-key-family'), so an
-\"Acked-by: Admin <a@x>\" collected from a reply suppresses the
-state-derived \"Reviewed-by: a@x\" instead of being upgraded by
-it."
-  (append collected
-          (seq-remove
-           (lambda (tr)
-             (let ((fam (gnaw--trailer-key-family
-                         (substring tr 0 (string-search ":" tr))))
-                   (addr (gnaw--trailer-addr tr)))
-               (seq-some
-                (lambda (c)
-                  (when-let* ((ccolon (string-search ":" c)))
-                    (and (equal fam (gnaw--trailer-key-family
-                                     (substring c 0 ccolon)))
-                         (equal addr (gnaw--trailer-addr c)))))
-                collected)))
-           synthetic)))
+A synthetic trailer is covered when a collected one has the same
+`gnaw--trailer-id', so an \"Acked-by: Admin <a@x>\" collected from a
+reply suppresses the state-derived \"Reviewed-by: a@x\" instead of
+being upgraded by it."
+  (let ((seen (delq nil (mapcar #'gnaw--trailer-id collected))))
+    (append collected
+            (seq-remove (lambda (tr) (member (gnaw--trailer-id tr) seen))
+                        synthetic))))
 
 (defun gnaw--fold-trailers-file (file trailers)
   "Return a temp copy of patch FILE with TRAILERS folded in.
@@ -2308,14 +2301,12 @@ with git am), \\[abort-recursive-edit] aborts the whole run."
   "Ask where to apply INFO's patch FILES in REPO.
 Return a list (BRANCH BASE AM-DIR ORIG EXISTING).  BRANCH is the
 branch to apply on, nil to keep a detached HEAD; EXISTING non-nil
-when REPO already has it (a previous run's, say), in which case it
-is checked out as is.  Otherwise BASE is the start point of the
-branch to create, nil for the current HEAD, the patches' recorded
-`base-commit:' being proposed when REPO has it.  AM-DIR is the
-directory to apply in: a new worktree read by
+when REPO already has it, then checked out as is and kept by an
+undo.  Otherwise BASE is the start point of the branch to create,
+nil for HEAD, the patches' `base-commit:' being proposed when REPO
+has it.  AM-DIR is the directory to apply in: a new worktree read by
 `gnaw-am-read-worktree-function' when USE-WORKTREE, REPO otherwise.
-ORIG is REPO's checkout to come back to should the am be undone; a
-worktree leaves it untouched, so ORIG is then nil."
+ORIG is REPO's checkout to restore on undo, nil with a worktree."
   (let* ((default-directory repo)
          (branch (let ((b (read-string "New branch (empty for detached): "
                                        (funcall gnaw-am-branch-function info))))
@@ -2390,24 +2381,15 @@ Then show AM-DIR per `gnaw-am-show-repo'."
 
 (defun gnaw-am-patches (info &optional patches toggle-worktree edit)
   "Apply INFO's patches as commits with `git am'.
-First prompt for a branch to create (empty input keeps a detached
-HEAD) and for its start point (empty input starts from the current
-HEAD; the patches' recorded `base-commit:' is proposed when the
-repo has it).  A branch the repo already has is checked out as is,
-its start point not asked, and survives an undo.  When
-`gnaw-am-create-worktree', inverted by TOGGLE-WORKTREE, is non-nil,
-branch and apply in a new worktree read by
-`gnaw-am-read-worktree-function', leaving the repo's checkout
-untouched.  The review trailers collected by BONE, plus
-those synthesized from the report state per
-`gnaw-am-synthetic-trailers', are folded into the commits per
-`gnaw-am-fold-trailers'.  A successful run shows the directory
-applied in, per `gnaw-am-show-repo'; a failed one offers to undo
-its branch and checkout per `gnaw-am-undo-on-failure'.  PATCHES
-restricts the operation to these `:patches' entries.  Non-nil EDIT
-opens each patch, trailers folded, for editing before the branch is
-created (see `gnaw--edit-am-files'); the edits go to temporary
-copies, never to the cached originals."
+Prompt for the branch and its start point (see
+`gnaw--am-read-target').  TOGGLE-WORKTREE inverts
+`gnaw-am-create-worktree'.  The trailers are folded per
+`gnaw-am-fold-trailers' and `gnaw-am-synthetic-trailers'; the
+outcome is handled per `gnaw-am-show-repo' and
+`gnaw-am-undo-on-failure'.  PATCHES restricts the operation to these
+`:patches' entries.  Non-nil EDIT opens each patch, trailers folded,
+for editing first (see `gnaw--edit-am-files'); the edits go to
+temporary copies, never to the cached originals."
   (let ((files (gnaw--patch-files info "applying" patches)))
     (gnaw--confirm-incomplete-series info patches)
     (pcase-let* ((repo (gnaw--target-repo info))
