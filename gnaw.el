@@ -3536,7 +3536,7 @@ are left out by default to reduce noise.  If you want to re-add them:
   (\"Pri\"       4 gnaw--priority-sort :priority)
   (\"Activity\" 11 t :last-activity)
   (\"Topic\"   16 t :topic)
-which also re-enables their `gnaw-sort-by-*' commands."
+which also offers them to `gnaw-sort'."
   :type '(repeat (list (string   :tag "Header")
                        (integer  :tag "Width")
                        (choice   :tag "Sort"
@@ -5288,104 +5288,39 @@ message when point sits in the margin, outside any column."
     (gnaw-list--goto-mid-or-line mid line)
     (move-to-column col)))
 
-(defun gnaw-list--sort (column default-descending flip)
-  "Sort the report list by COLUMN, a header string in `gnaw-list-columns'.
-DEFAULT-DESCENDING is the natural direction for that column; a non-nil
-FLIP (typically the raw prefix argument) reverses it.  Refresh after."
+(defconst gnaw-sort-criteria
+  '(("date"     "Created"  t)
+    ("activity" "Activity" t)
+    ("author"   "From"     nil)
+    ("subject"  "Subject"  nil)
+    ("type"     "Type"     nil)
+    ("topic"    "Topic"    nil)
+    ("priority" "Pri"      t)
+    ("votes"    "Votes"    t)
+    ("msgs"     "Msgs"     t)
+    ("mark"     "Mark"     nil))
+  "Criteria offered by `gnaw-sort', as (NAME COLUMN DESCENDING).
+COLUMN is a header of `gnaw-list-columns'; DESCENDING non-nil when
+the natural order is descending: most recent, highest, largest
+first.")
+
+(defun gnaw-sort (&optional flip)
+  "Sort the report list by a criterion of `gnaw-sort-criteria'.
+Only the criteria whose column is shown are offered.  With a prefix
+argument FLIP, reverse the criterion's natural order."
+  (interactive "P")
   (unless (derived-mode-p 'gnaw-list-mode)
     (user-error "Not in a gnaw report list"))
-  (unless (assoc column (gnaw--active-columns))
-    (user-error "The %s column is not currently shown" column))
-  (setq-local tabulated-list-sort-key
-              (cons column (if flip (not default-descending) default-descending)))
-  (gnaw-list-refresh)
-  (message "gnaw: sorted by %s (%s)" column
-           (if (cdr tabulated-list-sort-key) "descending" "ascending")))
-
-(defun gnaw-sort-by-date (&optional flip)
-  "Sort the report list by creation date, most recent first.
-With a prefix argument FLIP, sort oldest first."
-  (interactive "P")
-  (gnaw-list--sort "Created" t flip))
-
-(defun gnaw-sort-by-activity (&optional flip)
-  "Sort the report list by last activity, most recent first.
-With a prefix argument FLIP, reverse the order."
-  (interactive "P")
-  (gnaw-list--sort "Activity" t flip))
-
-(defun gnaw-sort-by-author (&optional flip)
-  "Sort the report list by author name, A to Z.
-With a prefix argument FLIP, reverse the order."
-  (interactive "P")
-  (gnaw-list--sort "From" nil flip))
-
-(defun gnaw-sort-by-subject (&optional flip)
-  "Sort the report list by subject, A to Z.
-With a prefix argument FLIP, reverse the order."
-  (interactive "P")
-  (gnaw-list--sort "Subject" nil flip))
-
-(defun gnaw-sort-by-type (&optional flip)
-  "Sort the report list by report type.
-With a prefix argument FLIP, reverse the order."
-  (interactive "P")
-  (gnaw-list--sort "Type" nil flip))
-
-(defun gnaw-sort-by-topic (&optional flip)
-  "Sort the report list by topic, A to Z.
-With a prefix argument FLIP, reverse the order."
-  (interactive "P")
-  (gnaw-list--sort "Topic" nil flip))
-
-(defun gnaw-sort-by-priority (&optional flip)
-  "Sort the report list by priority, highest first.
-With a prefix argument FLIP, reverse the order."
-  (interactive "P")
-  (gnaw-list--sort "Pri" t flip))
-
-(defun gnaw-sort-by-votes (&optional flip)
-  "Sort the report list by vote count, highest first.
-With a prefix argument FLIP, reverse the order."
-  (interactive "P")
-  (gnaw-list--sort "Votes" t flip))
-
-(defun gnaw-sort-by-msgs (&optional flip)
-  "Sort the report list by thread size, largest first.
-With a prefix argument FLIP, reverse the order."
-  (interactive "P")
-  (gnaw-list--sort "Msgs" t flip))
-
-(defun gnaw-sort-by-mark (&optional flip)
-  "Sort the report list by local mark (sticky, then normal, then dismissed).
-With a prefix argument FLIP, reverse the order."
-  (interactive "P")
-  (gnaw-list--sort "Mark" nil flip))
-
-(defconst gnaw-sort-commands
-  '(("date"     "Created"  gnaw-sort-by-date)
-    ("activity" "Activity" gnaw-sort-by-activity)
-    ("author"   "From"     gnaw-sort-by-author)
-    ("subject"  "Subject"  gnaw-sort-by-subject)
-    ("type"     "Type"     gnaw-sort-by-type)
-    ("topic"    "Topic"    gnaw-sort-by-topic)
-    ("priority" "Pri"      gnaw-sort-by-priority)
-    ("votes"    "Votes"    gnaw-sort-by-votes)
-    ("msgs"     "Msgs"     gnaw-sort-by-msgs)
-    ("mark"     "Mark"     gnaw-sort-by-mark))
-  "(NAME COLUMN COMMAND) entries for `gnaw-sort', COLUMN a header name.")
-
-(defun gnaw-sort ()
-  "Sort the report list by a criterion chosen interactively.
-Only criteria whose column is currently shown are offered; a prefix
-argument is forwarded to the sort command to reverse its natural
-order."
-  (interactive)
   (let* ((cols (mapcar #'car (gnaw--active-columns)))
-         (cands (cl-remove-if-not (lambda (e) (member (nth 1 e) cols))
-                                  gnaw-sort-commands))
-         (name (completing-read "Sort by: " cands nil t)))
-    (call-interactively (nth 2 (assoc name cands)))))
+         (cands (seq-filter (lambda (c) (member (nth 1 c) cols))
+                            gnaw-sort-criteria))
+         (crit (assoc (completing-read "Sort by: " cands nil t) cands))
+         (descending (nth 2 crit)))
+    (setq-local tabulated-list-sort-key
+                (cons (nth 1 crit) (if flip (not descending) descending)))
+    (gnaw-list-refresh)
+    (message "gnaw: sorted by %s (%s)" (nth 1 crit)
+             (if (cdr tabulated-list-sort-key) "descending" "ascending"))))
 
 (defconst gnaw-list--help-sections
   '(("Read\n----"
