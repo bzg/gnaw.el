@@ -135,8 +135,8 @@ may own.  An empty map still reads as nil: entries are alists.")
      ((eq c ?:)  (gnaw-edn--read-keyword))
      ((eq c ?\{) (gnaw-edn--read-map))
      ((eq c ?\[) (if gnaw-edn--faithful
-                     (vconcat (gnaw-edn--read-vector))
-                   (gnaw-edn--read-vector)))
+                     (vconcat (gnaw-edn--read-seq ?\]))
+                   (gnaw-edn--read-seq ?\])))
      ((or (and (>= c ?0) (<= c ?9))
           (and (eq c ?-) (let ((d (char-after (1+ (point)))))
                            (and d (>= d ?0) (<= d ?9)))))
@@ -170,29 +170,21 @@ as dispatch forms like #inst), which would otherwise loop forever."
     (skip-chars-forward "0-9.eE+-")
     (string-to-number (buffer-substring-no-properties start (point)))))
 
-(defun gnaw-edn--read-map ()
-  "Read an EDN map at point."
+(defun gnaw-edn--read-seq (close)
+  "Read the EDN values at point up to the CLOSE character, as a list."
   (forward-char 1)
-  (let ((acc nil))
-    (gnaw-edn--skip-ws)
-    (while (not (eq (char-after) ?\}))
-      (let ((k (gnaw-edn--read)))
-        (gnaw-edn--skip-ws)
-        (push (cons k (gnaw-edn--read)) acc))
-      (gnaw-edn--skip-ws))
+  (let (acc)
+    (while (progn (gnaw-edn--skip-ws) (not (eq (char-after) close)))
+      (push (gnaw-edn--read) acc))
     (forward-char 1)
     (nreverse acc)))
 
-(defun gnaw-edn--read-vector ()
-  "Read an EDN vector at point."
-  (forward-char 1)
-  (let ((acc nil))
-    (gnaw-edn--skip-ws)
-    (while (not (eq (char-after) ?\]))
-      (push (gnaw-edn--read) acc)
-      (gnaw-edn--skip-ws))
-    (forward-char 1)
-    (nreverse acc)))
+(defun gnaw-edn--read-map ()
+  "Read an EDN map at point."
+  (let ((kvs (gnaw-edn--read-seq ?\})))
+    (when (cl-oddp (length kvs))
+      (error "EDN: map with a key and no value"))
+    (cl-loop for (k v) on kvs by #'cddr collect (cons k v))))
 
 (defun gnaw-edn--map-p (x)
   "Non-nil if list X is an alist to write as an EDN map (not a vector).
@@ -218,43 +210,24 @@ True when every element is a cons whose car is an atom (a key)."
    ((listp v) (concat "[" (mapconcat #'gnaw--edn-write v " ") "]"))
    (t (error "EDN: cannot serialize %S" v))))
 
-(defun gnaw-edn-read-buffer ()
-  "Read one EDN map from the current buffer if it starts with `{'.
-Return nil on parse failure or when no map is present."
-  (goto-char (point-min))
-  (gnaw-edn--skip-ws)
-  (when (eq (char-after) ?\{)
-    (gnaw-edn--read-map)))
-
-(defun gnaw--read-edn-file (file)
-  "Read FILE and return its top-level EDN map, or nil.
-Return nil when FILE is unreadable or does not parse, reporting parse
-errors as a message."
+(defun gnaw--read-edn-file (file &optional strict)
+  "Return FILE's top-level EDN map, or nil when FILE is missing or holds none.
+A parse error is reported as a message, or with STRICT as a
+`user-error': callers rewriting FILE must not drop the contents of a
+misread one."
   (when (file-readable-p file)
     (condition-case err
         (with-temp-buffer
           (insert-file-contents file)
-          (gnaw-edn-read-buffer))
-      (error
-       (message "gnaw: cannot parse %s: %s" file (error-message-string err))
-       nil))))
-
-(defun gnaw--read-edn-map-or-signal (file)
-  "Return FILE's top-level EDN map, or nil when FILE is missing or empty.
-Unlike `gnaw--read-edn-file', signal a `user-error' when FILE exists
-but cannot be parsed: callers rewrite FILE, and a state derived from a
-misread file would silently drop its existing contents."
-  (when (file-readable-p file)
-    (condition-case err
-        (with-temp-buffer
-          (insert-file-contents file)
-          (goto-char (point-min))
           (gnaw-edn--skip-ws)
-          (cond ((eobp) nil)
-                ((eq (char-after) ?\{) (gnaw-edn--read-map))
-                (t (error "Not an EDN map"))))
-      (error (user-error "Not updating unreadable %s (%s)"
-                         file (error-message-string err))))))
+          (cond ((eq (char-after) ?\{) (gnaw-edn--read-map))
+                ((and strict (not (eobp))) (error "Not an EDN map"))))
+      (error
+       (if strict
+           (user-error "Not updating unreadable %s (%s)"
+                       file (error-message-string err))
+         (message "gnaw: cannot parse %s: %s" file (error-message-string err))
+         nil)))))
 
 ;;; Configuration and report sources
 
@@ -1160,8 +1133,7 @@ Unlike `gnaw-read-state', signal a `user-error' when state.edn exists
 but cannot be parsed: writing a state derived from a misread file
 would silently drop every existing mark, including the gnaw CLI's."
   (let ((gnaw-edn--faithful t))
-    (gnaw--read-edn-map-or-signal
-     (expand-file-name "state.edn" gnaw-config-dir))))
+    (gnaw--read-edn-file (expand-file-name "state.edn" gnaw-config-dir) t)))
 
 (defun gnaw--write-file-atomically (file text)
   "Write TEXT to FILE as UTF-8, creating its directory as needed.
@@ -5742,8 +5714,7 @@ appended."
   "Return config.edn's raw alist for a read-modify-write cycle, or nil.
 Signal a `user-error' when the file exists but cannot be parsed, since
 rewriting a misread config would drop its other settings."
-  (gnaw--read-edn-map-or-signal
-   (expand-file-name "config.edn" gnaw-config-dir)))
+  (gnaw--read-edn-file (expand-file-name "config.edn" gnaw-config-dir) t))
 
 (defun gnaw--config-add-source (config urls name repo &optional letter)
   "Return CONFIG alist with a source (URLS, NAME, REPO, LETTER) added.
