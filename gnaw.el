@@ -1918,10 +1918,15 @@ ARG, the command's prefix argument, inverts `gnaw-save-no-confirm'."
   "Non-nil if report INFO is a series cover letter (patch-seq \"0/...\")."
   (string-prefix-p "0/" (or (plist-get info :patch-seq) "")))
 
+(defun gnaw--flag (info i)
+  "Return the Flags character at position I of report INFO, ?- if none.
+Positions: 0 acked (A), 1 owned (O), 2 close reason (C, R, E or S)."
+  (let ((f (or (plist-get info :flags) "")))
+    (if (> (length f) i) (aref f i) ?-)))
+
 (defun gnaw--closed-p (info)
   "Non-nil if report INFO carries a close flag (R, C, E or S)."
-  (let ((f (or (plist-get info :flags) "---")))
-    (and (>= (length f) 3) (not (eq (aref f 2) ?-)))))
+  (not (eq (gnaw--flag info 2) ?-)))
 
 (defun gnaw--series-summary (members)
   "Summarize series MEMBERS (INFO plists) like \"2 acked, 1 open\".
@@ -1929,10 +1934,9 @@ Cover letters are excluded from the tally."
   (let ((acked 0) (closed 0) (open 0))
     (dolist (m members)
       (unless (gnaw--cover-p m)
-        (let ((f (or (plist-get m :flags) "---")))
-          (cond ((gnaw--closed-p m) (cl-incf closed))
-                ((and (>= (length f) 1) (not (eq (aref f 0) ?-))) (cl-incf acked))
-                (t (cl-incf open))))))
+        (cond ((gnaw--closed-p m) (cl-incf closed))
+              ((not (eq (gnaw--flag m 0) ?-)) (cl-incf acked))
+              (t (cl-incf open)))))
     (string-join (delq nil (list (and (> acked 0) (format "%d acked" acked))
                                  (and (> closed 0) (format "%d closed" closed))
                                  (and (> open 0) (format "%d open" open))))
@@ -3581,20 +3585,16 @@ are offered.  `gnaw-save-preset-filter' adds the active filter here;
 
 (defun gnaw--flags-help (info)
   "Spell out INFO's flags for the Flags column help echo, or nil."
-  (let ((f (or (plist-get info :flags) "")))
-    (when-let* ((parts (delq nil
-                             (list (and (> (length f) 0) (eq (aref f 0) ?A)
-                                        "acked")
-                                   (and (> (length f) 1) (eq (aref f 1) ?O)
-                                        "owned")
-                                   (and (> (length f) 2)
-                                        ;; Keep in sync with `gnaw--closed-p':
-                                        ;; any non-dash means closed.
-                                        (pcase (aref f 2)
-                                          (?C "canceled") (?R "resolved")
-                                          (?E "expired") (?S "superseded")
-                                          (?- nil) (_ "closed")))))))
-      (string-join parts ", "))))
+  (when-let* ((parts (delq nil
+                           (list (and (eq (gnaw--flag info 0) ?A) "acked")
+                                 (and (eq (gnaw--flag info 1) ?O) "owned")
+                                 ;; Any non-dash means closed, as in
+                                 ;; `gnaw--closed-p'.
+                                 (pcase (gnaw--flag info 2)
+                                   (?C "canceled") (?R "resolved")
+                                   (?E "expired") (?S "superseded")
+                                   (?- nil) (_ "closed"))))))
+    (string-join parts ", ")))
 
 (defun gnaw--att-string (info)
   "Return the three-position Att column string for report INFO.
