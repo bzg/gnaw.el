@@ -3951,6 +3951,7 @@ only through a query asking for them (see
      ["Only awaiting reply (toggle)" gnaw-list-limit-awaiting]
      ["Only related (toggle)" gnaw-list-limit-related]
      ["Only with attachments (toggle)" gnaw-list-limit-attachments]
+     ["Filter on cell at point (toggle)" gnaw-list-filter-cell]
      ["Sort by column at point" gnaw-list-sort]
      ["Sort by criterion" gnaw-sort])
     ("Patches and attachments"
@@ -3967,6 +3968,7 @@ only through a query asking for them (see
     ["Add a source" gnaw-add-source]
     "--"
     ["Help" gnaw-show-help]
+    ["Describe mode" describe-mode]
     ["Quit" gnaw-list-quit]))
 
 (define-derived-mode gnaw-list-mode tabulated-list-mode "Gnaw"
@@ -5231,6 +5233,9 @@ argument FLIP, reverse the criterion's natural order."
     ("Refresh\n-------"
      (gnaw-list-reload "re-read local cache")
      (gnaw-list-update "refresh remote cache, then reload"))
+    ("Configure\n---------"
+     (gnaw-configure "configure sources and how their mail opens")
+     (gnaw-add-source "add a report source"))
     ("Help\n----"
      (gnaw-show-help "this help")
      (describe-mode "full mode description")))
