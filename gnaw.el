@@ -6,7 +6,7 @@
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: mail, news
 ;; URL: https://codeberg.org/bzg/gnaw.el
-;; Version: 0.39.1
+;; Version: 0.40.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.3.7"))
 
 ;; This file is not part of GNU Emacs.
@@ -83,7 +83,7 @@
   "Read and manage BONE reports shared with the gnaw CLI."
   :group 'mail)
 
-(defconst gnaw-version (or (package-get-version) "0.39.1")
+(defconst gnaw-version (or (package-get-version) "0.40.0")
   "Version of gnaw.el, read from its package header.")
 
 ;;;###autoload
@@ -1813,13 +1813,13 @@ A synthetic trailer already collected by BONE is dropped (see
               (const :tag "Archived page as Link:" link))
   :group 'gnaw)
 
-(defcustom gnaw-checkout-base 'ask
+(defcustom gnaw-checkout-base t
   "Whether `gnaw-apply-patches' checks out the base commit first.
 When a patch carries a `base-commit:' trailer (`git format-patch
 --base') that exists in the target repo, gnaw can check it out first.
-Values: `ask' prompts, nil never, t always.  (`gnaw-am-patches'
-instead proposes the base commit as the start of the branch it
-creates.)"
+Values: t always (the default), `ask' prompts, nil never.
+\(`gnaw-am-patches' instead proposes the base commit as the start of
+the branch it creates.)"
   :type '(choice (const :tag "Ask" ask)
                  (const :tag "Never" nil)
                  (const :tag "Always" t))

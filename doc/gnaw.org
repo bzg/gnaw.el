@@ -853,8 +853,8 @@ gnaw)}}}).
 
 - ~gnaw-checkout-base~ ::
   #+vindex: gnaw-checkout-base
-  Default: =ask=. Whether =git apply= checks out a patch's recorded
-  =base-commit:= first (=ask=, =nil= or =t=).
+  Default: =t=. Whether =git apply= checks out a patch's recorded
+  =base-commit:= first (=t=, =ask= or =nil=).
 
 - ~gnaw-save-no-confirm~ ::
   #+vindex: gnaw-save-no-confirm
