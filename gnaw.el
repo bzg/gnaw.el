@@ -432,13 +432,6 @@ answered so far, so they are not asked again."
   :type '(choice (const :tag "No timeout" nil) (integer :tag "Seconds"))
   :group 'gnaw)
 
-(defcustom gnaw-cache-attachments-max-age nil
-  "Days before `gnaw-cache-cleanup' discards a cached attachment.
-An attachment directory is discarded once every file in it is older.
-Nil, the default, keeps attachments forever."
-  :type '(choice (const :tag "Keep forever" nil) (integer :tag "Days"))
-  :group 'gnaw)
-
 (defun gnaw--http-parse-reply (url)
   "Parse the `url-retrieve' reply in the current buffer.
 Return a plist (:status :body :etag); signal an error on HTTP
@@ -898,14 +891,6 @@ their sources.  Once every source finished, run
                       url (error-message-string err))
              (funcall cb 'failed))))))))
 
-(defun gnaw--tree-size (path)
-  "Return the total byte size of PATH, a file or a directory."
-  (if (file-directory-p path)
-      (apply #'+ (mapcar (lambda (f)
-                           (or (file-attribute-size (file-attributes f)) 0))
-                         (directory-files-recursively path "")))
-    (or (file-attribute-size (file-attributes path)) 0)))
-
 (defun gnaw--meta-url (source)
   "Return the URL of reports SOURCE's sibling meta.json."
   (concat (file-name-directory source) "meta.json"))
@@ -942,51 +927,14 @@ stray directory is left alone rather than aborting the deletions."
 (defconst gnaw--attachment-subdirs
   '((patch . "patches/") (event . "events/") (text . "text/"))
   "Attachment TYPE to BONE export subdir, siblings of reports/.
-Read by `gnaw-attachment-file'; `gnaw-cache-cleanup' sweeps
-every subdir listed here, so a new attachment type joins the
-cleanup by joining this table.")
-
-(defun gnaw--cache-stale-attachments ()
-  "Return the cached attachments the max age discards.
-Under the `gnaw--attachment-subdirs' of cache/, a report directory
-is stale when it holds files all older than
-`gnaw-cache-attachments-max-age' days -- an empty one may belong to
-a fetch in flight and stays -- and a flat single-component
-attachment file ages out on its own mtime (see `gnaw-cache-cleanup')."
-  (when gnaw-cache-attachments-max-age
-    (let ((cutoff (time-subtract (current-time)
-                                 (days-to-time
-                                  gnaw-cache-attachments-max-age)))
-          stale)
-      (dolist (subdir (mapcar #'cdr gnaw--attachment-subdirs)
-                      (nreverse stale))
-        (let ((base (expand-file-name (concat "cache/" subdir)
-                                      gnaw-config-dir)))
-          (when (file-directory-p base)
-            (dolist (srcdir (directory-files
-                             base t directory-files-no-dot-files-regexp))
-              (when (file-directory-p srcdir)
-                (dolist (d (directory-files
-                            srcdir t directory-files-no-dot-files-regexp))
-                  (if (file-directory-p d)
-                      (let ((fs (directory-files-recursively d "")))
-                        (when (and fs
-                                   (cl-every (lambda (f)
-                                               (time-less-p
-                                                (gnaw--file-mtime f) cutoff))
-                                             fs))
-                          (push d stale)))
-                    (when (time-less-p (gnaw--file-mtime d) cutoff)
-                      (push d stale))))))))))))
+Read by `gnaw-attachment-file'.")
 
 (defun gnaw-cache-cleanup (&optional all)
   "Delete the cache files gnaw no longer needs, after confirming.
 Candidates are the report caches of sources config.edn no longer
-lists -- their file names hash the source URL, so a changed or
-removed source strands its old cache forever -- and, once
-`gnaw-cache-attachments-max-age' is set, the attachments untouched
-for that long.  Attachments hold most of the disk weight: under
-the default nil they are all kept.  With a prefix argument ALL,
+lists: their file names hash the source URL, so a changed or
+removed source strands its old cache forever.  Cached attachments
+are kept.  With a prefix argument ALL,
 also delete the configured sources' report caches; the next update
 re-downloads them.  State.edn is never touched: it is user data
 shared with the gnaw CLI, not a cache."
@@ -994,26 +942,20 @@ shared with the gnaw CLI, not a cache."
   (when gnaw--update-pending
     (user-error "An update is running, let it finish first"))
   (let* ((files (gnaw--cache-report-files all))
-         (atts (gnaw--cache-stale-attachments))
-         (bytes (apply #'+ (mapcar #'gnaw--tree-size (append files atts)))))
+         (bytes (apply #'+ (mapcar (lambda (f)
+                                     (or (file-attribute-size
+                                          (file-attributes f))
+                                         0))
+                                   files))))
     (cond
-     ((not (or files atts))
+     ((null files)
       (message "gnaw: cache clean, nothing to delete"))
      ((not (y-or-n-p
-            (format "Delete %d source cache file(s) and %d attachment(s), freeing %s? "
-                    (length files) (length atts)
-                    (file-size-human-readable bytes))))
+            (format "Delete %d source cache file(s), freeing %s? "
+                    (length files) (file-size-human-readable bytes))))
       (message "gnaw: cache kept"))
      (t
       (dolist (f files) (delete-file f))
-      (dolist (a atts)
-        (if (file-directory-p a)
-            (delete-directory a t)
-          (delete-file a))
-        ;; Drop the per-source parent when it just emptied.
-        (let ((parent (file-name-directory (directory-file-name a))))
-          (when (directory-empty-p parent)
-            (delete-directory parent))))
       ;; Drop the in-memory extractions the deletions orphaned: gone
       ;; sources always, the remote ones too under ALL.  The local
       ;; sources' files were not deleted; their entries stay.

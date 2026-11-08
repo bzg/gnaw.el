@@ -141,10 +141,7 @@ responsive meanwhile.
 #+cindex: cache, cleaning
 {{{kbd(M-x gnaw-cache-cleanup)}}} deletes, after showing the tally and
 asking, the cache files gnaw no longer needs: the report caches of
-sources no longer configured, and---when
-~gnaw-cache-attachments-max-age~ is set to a number of days, nil by
-default---the attachments untouched for that long. Attachments hold
-most of the disk weight: with the default nil they are all kept. With
+sources no longer configured. It keeps the cached attachments. With
 a prefix argument it also empties the configured sources' report
 caches, re-downloaded on the next update. It never touches =state.edn=.
 
@@ -789,11 +786,6 @@ gnaw)}}}).
 - ~gnaw-http-timeout~ ::
   #+vindex: gnaw-http-timeout
   Default: 30.  Seconds before a fetch gives up.
-
-- ~gnaw-cache-attachments-max-age~ ::
-  #+vindex: gnaw-cache-attachments-max-age
-  Default: nil (keep forever). Days after which {{{kbd(M-x
-  gnaw-cache-cleanup)}}} discards a cached attachment.
 
 - ~gnaw-after-update-hook~ ::
   #+vindex: gnaw-after-update-hook
