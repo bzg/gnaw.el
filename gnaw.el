@@ -3631,62 +3631,55 @@ preserves.  Every cell carries a
 mouse-face, so a mouse click opens the report (see the follow-link
 entry of `gnaw-list-mode-map')."
   (propertize
-   (gnaw--list-cell-1 key info entry mid)
+   (pcase key
+     (:mark (if (and mid (member mid gnaw-list--flagged))
+                "D"
+              (gnaw-mark-prefix entry)))
+     (:att (let ((s (gnaw--att-string info)))
+             (if-let* ((help (gnaw--att-help info)))
+                 (propertize s 'help-echo (concat "Att: " help))
+               s)))
+     (:type (let ((s (or (plist-get info :type) "")))
+              (propertize s 'face (pcase s
+                                    ("bug" 'gnaw-type-bug)
+                                    ("patch" 'gnaw-type-patch)
+                                    (_ 'gnaw-type-other)))))
+     (:votes (let* ((v (plist-get info :votes))
+                    (s (if v (format "%s" v) "")))
+               (if (> (gnaw--votes-number v) 0)
+                   (propertize s 'face 'gnaw-votes)
+                 s)))
+     (:flags (let ((f (copy-sequence (or (plist-get info :flags) ""))))
+               (dotimes (i (length f))
+                 (pcase (aref f i)
+                   (?A (put-text-property i (1+ i) 'face 'gnaw-acked f))
+                   (?O (put-text-property i (1+ i) 'face 'gnaw-owned f))))
+               (if-let* ((help (gnaw--flags-help info)))
+                   (propertize f 'help-echo (concat "Flags: " help))
+                 f)))
+     (:source-letter
+      (let ((l (or (plist-get info :source-letter) "")))
+        (if-let* ((name (plist-get info :source-name)))
+            (propertize l 'help-echo (concat "Source: " name))
+          l)))
+     ;; Msgs is the thread size, initial mail included.
+     (:msgs (let ((n (plist-get info :replies)))
+              (if n (number-to-string (1+ n)) "")))
+     (:priority (gnaw-priority-letter (plist-get info :priority)))
+     ((or :date :last-activity)
+      (let ((d (plist-get info key)))    ; keep the YYYY-MM-DD part only
+        (if d (propertize (substring d 0 (min 10 (length d))) 'face 'gnaw-date)
+          "")))
+     (:from-name (gnaw--author-display info))
+     (:subject (let ((s (or (plist-get info :subject) "")))
+                 (cond ((plist-get info :series-head) (concat "▾ " s))
+                       ((plist-get info :series-child) (concat "  " s))
+                       ((plist-get info :series-summary)
+                        (format "▸ %s  (%s)"
+                                s (plist-get info :series-summary)))
+                       (t s))))
+     (_ (let ((v (plist-get info key))) (if v (format "%s" v) ""))))
    'mouse-face 'highlight))
-
-(defun gnaw--list-cell-1 (key info entry mid)
-  "Return the bare display string for column KEY (see `gnaw--list-cell').
-INFO, ENTRY and MID are as in `gnaw--list-cell'."
-  (pcase key
-    (:mark (if (and mid (member mid gnaw-list--flagged))
-               "D"
-             (gnaw-mark-prefix entry)))
-    (:att (let ((s (gnaw--att-string info)))
-            (if-let* ((help (gnaw--att-help info)))
-                (propertize s 'help-echo (concat "Att: " help))
-              s)))
-    (:type (let ((s (or (plist-get info :type) "")))
-             (propertize s 'face (pcase s
-                                   ("bug" 'gnaw-type-bug)
-                                   ("patch" 'gnaw-type-patch)
-                                   (_ 'gnaw-type-other)))))
-    (:votes (let* ((v (plist-get info :votes))
-                   (s (if v (format "%s" v) "")))
-              (if (> (gnaw--votes-number v) 0)
-                  (propertize s 'face 'gnaw-votes)
-                s)))
-    (:flags (let ((f (copy-sequence (or (plist-get info :flags) ""))))
-              (dotimes (i (length f))
-                (pcase (aref f i)
-                  (?A (put-text-property i (1+ i) 'face 'gnaw-acked f))
-                  (?O (put-text-property i (1+ i) 'face 'gnaw-owned f))))
-              (if-let* ((help (gnaw--flags-help info)))
-                  (propertize f 'help-echo (concat "Flags: " help))
-                f)))
-    (:source-letter
-     (let ((l (or (plist-get info :source-letter) "")))
-       (if-let* ((name (plist-get info :source-name)))
-           (propertize l 'help-echo (concat "Source: " name))
-         l)))
-    (:msgs (let ((n (plist-get info :replies)))   ; thread size, initial mail included
-             (if n (number-to-string (1+ n)) "")))
-    (:priority (gnaw-priority-letter (plist-get info :priority)))
-    (:date (let ((d (plist-get info :date)))   ; keep the YYYY-MM-DD part only
-             (if d (propertize (substring d 0 (min 10 (length d)))
-                               'face 'gnaw-date)
-               "")))
-    (:last-activity (let ((d (plist-get info :last-activity)))
-                      (if d (propertize (substring d 0 (min 10 (length d)))
-                                        'face 'gnaw-date)
-                        "")))
-    (:from-name (gnaw--author-display info))
-    (:subject (let ((s (or (plist-get info :subject) "")))
-                (cond ((plist-get info :series-head) (concat "▾ " s))
-                      ((plist-get info :series-child) (concat "  " s))
-                      ((plist-get info :series-summary)
-                       (format "▸ %s  (%s)" s (plist-get info :series-summary)))
-                      (t s))))
-    (_ (let ((v (plist-get info key))) (if v (format "%s" v) "")))))
 
 (defun gnaw--mark-rank (cell)
   "Sort rank for a Mark-column CELL string, depending on the view.
@@ -3761,12 +3754,6 @@ stays at the right edge."
                              (nth 2 c)))
                      cols))))
 
-(defun gnaw--report-cells (mid info entry cols)
-  "Return the row cell strings for a report.
-MID, INFO and ENTRY are the report's message-id, plist and state
-entry; COLS the active columns."
-  (mapcar (lambda (c) (gnaw--list-cell (nth 3 c) info entry mid)) cols))
-
 (defun gnaw--row-faces (mid entry info)
   "Return the whole-row face list for a report, nil when plain.
 MID is the report's message-id, ENTRY its state.edn entry, INFO its
@@ -3787,7 +3774,10 @@ update brought it in, so a row keeps every cue."
 PAIR is a (MID . INFO), ENTRY its state.edn entry, COLS the active
 columns.  The whole-row faces of `gnaw--row-faces', if any, go on
 every cell."
-  (let ((cells (gnaw--report-cells (car pair) (cdr pair) entry cols))
+  (let ((cells (mapcar (lambda (c)
+                         (gnaw--list-cell (nth 3 c) (cdr pair) entry
+                                          (car pair)))
+                       cols))
         (faces (gnaw--row-faces (car pair) entry (cdr pair))))
     (list pair
           (vconcat (if faces
@@ -3849,13 +3839,8 @@ relation metadata, shown in `gnaw-missing' face."
     (nreverse rows)))
 
 (defun gnaw--list-entries ()
-  "Return `tabulated-list-entries', folding patch series unless expanded.
-A folded series yields one representative row (cover letter or first
-patch) prefixed with ▸ and a status summary; unfolded series (in
-`gnaw-list--expanded') list each patch, ▾ marking the first row.
-The query in `gnaw-list--query' filters the result.  When the list
-is narrowed to related reports, delegate to
-`gnaw--list-entries-related'."
+  "Return `tabulated-list-entries' for the current view.
+See `gnaw--list-entries-full' and `gnaw--list-entries-related'."
   (if gnaw-list--related-mids
       (gnaw--list-entries-related)
     (gnaw--list-entries-full)))
