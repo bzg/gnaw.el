@@ -559,12 +559,10 @@ fields with plain nil checks and cannot tell them apart.")
   "Return the plist (:etag ...) saved for CACHE-FILE, or nil.
 Validators are only meaningful while CACHE-FILE itself exists."
   (when (file-exists-p cache-file)
-    (let ((file (gnaw--validators-file cache-file)))
-      (when (file-exists-p file)
-        (ignore-errors
-          (with-temp-buffer
-            (insert-file-contents file)
-            (read (current-buffer))))))))
+    (ignore-errors
+      (with-temp-buffer
+        (insert-file-contents (gnaw--validators-file cache-file))
+        (read (current-buffer))))))
 
 (defun gnaw--save-validators (cache-file etag)
   "Persist ETAG for CACHE-FILE, or drop the saved one when ETAG is nil."
@@ -574,8 +572,7 @@ Validators are only meaningful while CACHE-FILE itself exists."
           (make-directory (file-name-directory file) t)
           (with-temp-file file
             (prin1 (list :etag etag) (current-buffer))))
-      (when (file-exists-p file)
-        (delete-file file)))))
+      (delete-file file))))
 
 (defun gnaw--etag-equal (a b)
   "Weakly compare ETags A and B, ignoring the W/ prefix.
@@ -606,7 +603,7 @@ Otherwise download and commit (see `gnaw--commit-json-reply').
 CALLBACK gets the outcome, exactly once: `unchanged' when the saved
 ETag is still current, else the commit's outcome, or (error . TEXT)
 when the refresh failed.  The one implementation of the sequence:
-`gnaw--refresh-cache' waits on it, `gnaw--update-source' does not."
+`gnaw--refresh-cache' waits on it, `gnaw-update' does not."
   (let ((etag (unless force
                 (plist-get (gnaw--read-validators cache-file) :etag)))
         (called nil))
@@ -657,20 +654,6 @@ seconds at most when the server does not answer."
       (if (eq (car-safe outcome) 'error)
           (error "%s" (cdr outcome))
         outcome))))
-
-(defun gnaw--update-source (source force callback)
-  "Refresh SOURCE's cache in the background; CALLBACK gets the outcome.
-The outcome is `changed', `unchanged', `refetched' as in
-`gnaw--refresh-cache-async', or `failed' -- the failure is also
-messaged."
-  (gnaw--refresh-cache-async
-   source (gnaw--source-to-cache-file source) force
-   (lambda (outcome)
-     (funcall callback
-              (if (not (eq (car-safe outcome) 'error))
-                  outcome
-                (message "gnaw: failed updating %s: %s" source (cdr outcome))
-                'failed)))))
 
 (defun gnaw--write-json-to-file (json file)
   "Write JSON, a string, to FILE as UTF-8.
@@ -776,6 +759,23 @@ does for `mapcan')."
                  gnaw--reports-cache)
         pairs))))
 
+(defconst gnaw--report-fields
+  '(acked acked-name owned owned-name closed votes deadline expiry
+    last-activity replies topic subject from from-name date archived-at
+    patches events texts awaiting series patch-seq trailers)
+  "Report JSON fields copied as is into the INFO plists, as keywords.")
+
+(defun gnaw--report-flags (r)
+  "Return report R's Flags string: acked, owned, then a close letter."
+  (concat (if (alist-get 'acked r) "A" "-")
+          (if (alist-get 'owned r) "O" "-")
+          (pcase (alist-get 'close-reason r)
+            ("canceled"   "C")
+            ("resolved"   "R")
+            ("expired"    "E")
+            ("superseded" "S")
+            (_ (if (alist-get 'closed r) "R" "-")))))
+
 (defun gnaw--extract-reports-1 (source)
   "Parse SOURCE and extract its report pairs (see `gnaw--extract-reports')."
   (let* ((data (gnaw--read-json source))
@@ -783,84 +783,25 @@ does for `mapcan')."
          (sname (alist-get 'source data))
          (letter (alist-get :letter (gnaw--source-config-entry
                                      (list :source source
-                                           :source-name sname))))
-         (reports (alist-get 'reports data))
-         (result '()))
+                                           :source-name sname)))))
     (when (and (stringp fv) (version< fv gnaw-supported-bone-format))
       (message "gnaw: %s has format %s, min supported is %s"
                source fv gnaw-supported-bone-format))
-    (dolist (r reports)
-      (let ((mid          (alist-get 'message-id r))
-            (status       (alist-get 'status r))
-            (type         (alist-get 'type r))
-            (acked        (alist-get 'acked r))
-            (acked-name   (alist-get 'acked-name r))
-            (owned        (alist-get 'owned r))
-            (closed       (alist-get 'closed r))
-            (owned-name   (alist-get 'owned-name r))
-            (close-reason (alist-get 'close-reason r))
-            (priority     (alist-get 'priority r))
-            (votes        (alist-get 'votes r))
-            (deadline     (alist-get 'deadline r))
-            (expiry       (alist-get 'expiry r))
-            (last-activity (alist-get 'last-activity r))
-            (replies      (alist-get 'replies r))
-            (topic        (alist-get 'topic r))
-            (subject      (alist-get 'subject r))
-            (from         (alist-get 'from r))
-            (from-name    (alist-get 'from-name r))
-            (date         (alist-get 'date r))
-            (archived-at  (alist-get 'archived-at r))
-            (patches      (alist-get 'patches r))
-            (events       (alist-get 'events r))
-            (texts        (alist-get 'texts r))
-            (awaiting     (alist-get 'awaiting r))
-            (related      (gnaw--report-related r))
-            (series       (alist-get 'series r))
-            (patch-seq    (alist-get 'patch-seq r))
-            (trailers     (alist-get 'trailers r)))
-        (when (and mid (numberp status))
-          (let ((flags (concat (if acked "A" "-")
-                               (if owned "O" "-")
-                               (pcase close-reason
-                                 ("canceled"   "C")
-                                 ("resolved"   "R")
-                                 ("expired"    "E")
-                                 ("superseded" "S")
-                                 (_ (if closed "R" "-")))))
-                (norm-mid (gnaw-normalize-mid mid)))
-            (push (cons norm-mid (list :type (or type "bug")
-                                       :flags flags
-                                       :priority (or priority 0)
-                                       :votes votes
-                                       :deadline deadline
-                                       :expiry expiry
-                                       :last-activity last-activity
-                                       :replies replies
-                                       :topic topic
-                                       :subject subject
-                                       :from from
-                                       :from-name from-name
-                                       :date date
-                                       :source source
-                                       :source-name sname
-                                       :source-letter letter
-                                       :archived-at archived-at
-                                       :patches patches
-                                       :events events
-                                       :texts texts
-                                       :awaiting awaiting
-                                       :related related
-                                       :series series
-                                       :patch-seq patch-seq
-                                       :trailers trailers
-                                       :acked acked
-                                       :acked-name acked-name
-                                       :owned owned
-                                       :owned-name owned-name
-                                       :closed closed))
-                  result)))))
-    (nreverse result)))
+    (cl-loop
+     for r in (alist-get 'reports data)
+     for mid = (alist-get 'message-id r)
+     when (and mid (numberp (alist-get 'status r)))
+     collect (cons (gnaw-normalize-mid mid)
+                   (append
+                    (list :type (or (alist-get 'type r) "bug")
+                          :flags (gnaw--report-flags r)
+                          :priority (or (alist-get 'priority r) 0)
+                          :source source :source-name sname
+                          :source-letter letter
+                          :related (gnaw--report-related r))
+                    (mapcan (lambda (k)
+                              (list (intern (format ":%s" k)) (alist-get k r)))
+                            gnaw--report-fields))))))
 
 (defun gnaw-reports ()
   "Collect report pairs from all sources, tolerating failures.
@@ -941,7 +882,13 @@ their sources.  Once every source finished, run
           ;; A synchronous failure (malformed URL) must still count
           ;; down, or `gnaw--update-pending' would block updates forever.
           (condition-case err
-              (gnaw--update-source url force cb)
+              (gnaw--refresh-cache-async
+               url (gnaw--source-to-cache-file url) force
+               (lambda (outcome)
+                 (when (eq (car-safe outcome) 'error)
+                   (message "gnaw: failed updating %s: %s" url (cdr outcome))
+                   (setq outcome 'failed))
+                 (funcall cb outcome)))
             (error
              (message "gnaw: failed updating %s: %s"
                       url (error-message-string err))
