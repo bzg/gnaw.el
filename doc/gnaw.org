@@ -632,10 +632,9 @@ point. A single patch opens the patch menu: {{{kbd(v)}}} view in [[info:emacs#Di
 {{{kbd(a)}}} runs =git apply=, {{{kbd(m)}}} =git am=, {{{kbd(e)}}} edit then =git am=,
 {{{kbd(s)}}} save to a directory,
 {{{kbd(c)}}} check whether it is already applied. Gnaw
-displays a single calendar (=.ics=) or text attachment right away, and
-lists several in a buffer where {{{kbd(:)}}} (or {{{kbd(RET)}}}) acts the same way
-on the attachment at point, with an extra first row acting on all the
-patches at once when several are patches.
+displays a single calendar (=.ics=) or text attachment right away. With
+several attachments, {{{kbd(:)}}} first asks which one, as {{{kbd(v)}}}
+does, the /all patches/ candidate opening the patch menu on all of them.
 
 #+vindex: gnaw-save-no-confirm
 Saving proposes the source's =:repo= (the first one, when it lists

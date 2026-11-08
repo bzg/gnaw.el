@@ -4901,66 +4901,13 @@ argument ARG inverts that setting for this call.  Patches go through
                     (file-name-nondirectory file) dir))))))
 
 (defun gnaw-list-attachments ()
-  "Act on the attachments of the report at point.
-A single patch opens the patch menu; a single calendar or text
-attachment shows right away; with several attachments, a buffer
-lists them and : acts again on the attachment at point."
+  "Act on an attachment of the report at point, asking which when several.
+A patch opens the patch menu, as does the extra candidate acting on
+every patch of a multi-patch report; a calendar or text attachment
+shows right away."
   (interactive)
-  (let* ((info (cdr (gnaw-list--current)))
-         (atts (gnaw--attachments info)))
-    (pcase atts
-      ('() (user-error "This report has no attachments"))
-      (`(,att) (gnaw--attachment-act info att))
-      (_ (gnaw--list-attachments info atts)))))
-
-(defvar-local gnaw-attachments--info nil
-  "Report plist whose attachments the current buffer lists.
-A snapshot from when the buffer was built: it is not refreshed when
-the report list is updated.")
-
-(defvar gnaw-attachments-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map ":" #'gnaw-attachments-act)
-    (define-key map (kbd "RET") #'gnaw-attachments-act)
-    map)
-  "Keymap for `gnaw-attachments-mode'.")
-
-(define-derived-mode gnaw-attachments-mode tabulated-list-mode "Gnaw-Attachments"
-  "Major mode listing the attachments of a report."
-  (setq tabulated-list-format [("Type" 6 t) ("File" 60 t)])
-  (tabulated-list-init-header))
-
-(defun gnaw--list-attachments (info atts)
-  "List ATTS, the (TYPE . ENTRY) attachments of report INFO, in a buffer.
-When the report has several patches, a first row acts on all of them
-at once."
-  (with-current-buffer (get-buffer-create "*gnaw-attachments*")
-    (gnaw-attachments-mode)
-    (setq gnaw-attachments--info info)
-    (setq tabulated-list-entries
-          (append
-           (when-let* ((patches (plist-get info :patches))
-                       ((cdr patches)))
-             (list (list '(all-patches)
-                         (vector "patch" (format "all patches (%d)"
-                                                 (length patches))))))
-           (mapcar (lambda (att)
-                     (list att
-                           (vector (gnaw--attachment-type-label (car att))
-                                   (file-name-nondirectory
-                                    (or (alist-get 'file (cdr att)) "")))))
-                   atts)))
-    (tabulated-list-print)
-    (pop-to-buffer (current-buffer))
-    (goto-char (point-min))
-    (message "gnaw: type : or RET to act on the attachment at point")))
-
-(defun gnaw-attachments-act ()
-  "Act on the attachment at point: patch menu, or display the file."
-  (interactive)
-  (let ((att (tabulated-list-get-id)))
-    (unless att (user-error "No attachment at point"))
-    (gnaw--attachment-act gnaw-attachments--info att)))
+  (let ((info (cdr (gnaw-list--current))))
+    (gnaw--attachment-act info (gnaw--choose-attachment info "Attachment: "))))
 
 (defun gnaw-list-patch-series-fold ()
   "Fold or unfold the patch series of the report at point."
