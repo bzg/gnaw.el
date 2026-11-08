@@ -247,7 +247,7 @@ The mtime caches below compare it with `equal' to decide freshness."
 
 (defun gnaw-load-config ()
   "Load `config.edn' and return a plist.
-Keys: :addresses :skip-columns :source-configs (raw `:sources' maps)
+Keys: :skip-columns :source-configs (raw `:sources' maps)
 and :sources (their URLs).  The result is cached until config.edn
 changes."
   (let* ((file (expand-file-name "config.edn" gnaw-config-dir))
@@ -255,11 +255,10 @@ changes."
     (if (and gnaw--config-cache (equal (car gnaw--config-cache) mtime))
         (cdr gnaw--config-cache)
       (let* ((cfg (gnaw--read-edn-file file))
-             (addresses (alist-get :my-addresses cfg))
              (skip      (alist-get :skip-columns cfg))
              (src-cfgs  (alist-get :sources cfg))
              (sources   (mapcan (lambda (s) (append (alist-get :urls s) nil)) src-cfgs))
-             (plist (list :addresses addresses :skip-columns skip
+             (plist (list :skip-columns skip
                           :source-configs src-cfgs :sources sources)))
         (setq gnaw--config-cache (cons mtime plist))
         plist))))
@@ -324,21 +323,6 @@ give the directory of a local clone" repo)))))))
 Reads `:repo' from the matching config.edn `:sources' entry, which
 holds a directory string or a vector of them."
   (gnaw--entry-repos (gnaw--source-config-entry info)))
-
-(defun gnaw--source-repo (info)
-  "Return the first local git repo for report INFO's source, or nil.
-The directory the save commands propose; `gnaw--target-repo' asks
-which repo to apply in when the source lists several."
-  (car (gnaw--source-repos info)))
-
-(defun gnaw--multi-source-p ()
-  "Return non-nil when config.edn defines more than one source."
-  (> (length (plist-get (gnaw-load-config) :source-configs)) 1))
-
-(defun gnaw--source-letter (info)
-  "Return the letter identifying report INFO's source, or nil.
-Reads `:letter' from the matching config.edn `:sources' entry."
-  (alist-get :letter (gnaw--source-config-entry info)))
 
 (defun gnaw--suggest-source-letter (name taken)
   "Suggest a letter identifying source NAME, avoiding the TAKEN ones.
@@ -765,10 +749,6 @@ Each value is (FILE-MTIME CONFIG-MTIME PAIRS), the modification
 times of the source's file and of config.edn (which carries the
 source letters) when PAIRS was extracted.")
 
-(defun gnaw--config-mtime ()
-  "Return config.edn's modification time, or nil when absent."
-  (gnaw--file-mtime (expand-file-name "config.edn" gnaw-config-dir)))
-
 (defun gnaw--extract-reports (source)
   "Extract published reports from SOURCE as (MID . INFO) pairs.
 Closed reports (status below 4, flags C, R, E or S) are kept when
@@ -782,7 +762,8 @@ does for `mapcan')."
                    (gnaw--source-to-cache-file source)
                  source))
          (mtime (gnaw--file-mtime file))
-         (cmtime (gnaw--config-mtime))
+         (cmtime (gnaw--file-mtime
+                  (expand-file-name "config.edn" gnaw-config-dir)))
          (cached (gethash source gnaw--reports-cache)))
     (if (and mtime
              (equal (nth 0 cached) mtime)
@@ -800,8 +781,9 @@ does for `mapcan')."
   (let* ((data (gnaw--read-json source))
          (fv (alist-get 'bone-format data))
          (sname (alist-get 'source data))
-         (letter (gnaw--source-letter (list :source source
-                                            :source-name sname)))
+         (letter (alist-get :letter (gnaw--source-config-entry
+                                     (list :source source
+                                           :source-name sname))))
          (reports (alist-get 'reports data))
          (result '()))
     (when (and (stringp fv) (version< fv gnaw-supported-bone-format))
@@ -2546,7 +2528,7 @@ The directory prompt proposes the source's first `:repo' (or
 `gnaw-apply-repo') and names the files WHAT.  Non-nil NO-CONFIRM
 saves to that repo without prompting and overwrites silently;
 otherwise existing files ask before being overwritten."
-  (let* ((repo (or (gnaw--source-repo info) gnaw-apply-repo))
+  (let* ((repo (or (car (gnaw--source-repos info)) gnaw-apply-repo))
          (dir (if (and repo no-confirm)
                   (file-name-as-directory repo)
                 (read-directory-name (format "Save %s in: " what) repo))))
@@ -3877,7 +3859,7 @@ With several configured sources, prepend the S column, which shows
 the letter identifying each report's source (the `:letter' of its
 config.edn entry, see `gnaw-add-source')."
   (let ((skip (mapcar #'downcase (plist-get (gnaw-load-config) :skip-columns)))
-        (cols (if (gnaw--multi-source-p)
+        (cols (if (cdr (plist-get (gnaw-load-config) :source-configs))
                   (cons '("S" 2 t :source-letter) gnaw-list-columns)
                 gnaw-list-columns)))
     (cl-remove-if (lambda (c) (member (downcase (car c)) skip)) cols)))
