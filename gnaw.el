@@ -237,6 +237,10 @@ misread one."
       (url-unhex-string (substring uri 7))
     uri))
 
+(defun gnaw--nonblank (s)
+  "Return string S, or nil when S is nil or empty."
+  (and s (not (string-empty-p s)) s))
+
 (defun gnaw--file-mtime (file)
   "Return FILE's modification time, or nil when FILE is absent.
 The mtime caches below compare it with `equal' to decide freshness."
@@ -1083,15 +1087,13 @@ rename replaces its target, not the link itself."
   (let ((file (expand-file-name "state.edn" gnaw-config-dir)))
     (gnaw--write-file-atomically
      file
-     (if (null state)
-         "{}\n"
-       (concat "{"
-               (mapconcat (lambda (kv)
-                            ;; An entry is a map, even an empty one.
-                            (concat (gnaw--edn-write (car kv)) " "
-                                    (if (cdr kv) (gnaw--edn-write (cdr kv)) "{}")))
-                          state "\n ")
-               "}\n")))
+     (concat "{"
+             (mapconcat (lambda (kv)
+                          ;; An entry is a map, even an empty one.
+                          (concat (gnaw--edn-write (car kv)) " "
+                                  (if (cdr kv) (gnaw--edn-write (cdr kv)) "{}")))
+                        state "\n ")
+             "}\n"))
     ;; Refresh the cache from the state just written, saving the next
     ;; read a re-parse.
     (setq gnaw--state-cache
@@ -1105,22 +1107,17 @@ rename replaces its target, not the link itself."
 
 (defun gnaw--author-string (info)
   "Build author string from INFO, or nil when it has no usable field."
-  (let ((n (plist-get info :from-name))
-        (e (plist-get info :from)))
-    (when (equal n "") (setq n nil))
-    (when (equal e "") (setq e nil))
-    (cond ((and n e) (concat n " <" e ">"))
-          (e e)
-          (n n))))
+  (let ((n (gnaw--nonblank (plist-get info :from-name)))
+        (e (gnaw--nonblank (plist-get info :from))))
+    (if (and n e) (concat n " <" e ">") (or e n))))
 
 (defun gnaw--author-display (info)
   "Author display name for INFO: `:from-name', or the address local part.
 Mails sent with a bare address (no display name) have no :from-name in
 the export, so fall back to the part of :from before the @, as the HTML
 export does."
-  (let ((n (plist-get info :from-name)))
-    (if (and n (not (string-empty-p n))) n
-      (car (split-string (or (plist-get info :from) "") "@")))))
+  (or (gnaw--nonblank (plist-get info :from-name))
+      (car (split-string (or (plist-get info :from) "") "@"))))
 
 (defun gnaw--enrich-entry (existing info)
   "Refresh metadata from INFO in EXISTING state entry."
@@ -1137,15 +1134,14 @@ export does."
     entry))
 
 (defun gnaw--state-put (state mid entry)
-  "Set MID to ENTRY in STATE, keeping order."
-  (if (assoc mid state)
-      (mapcar (lambda (kv) (if (equal (car kv) mid) (cons mid entry) kv))
-              state)
-    (append state (list (cons mid entry)))))
-
-(defun gnaw--state-delete (state mid)
-  "Remove MID from STATE."
-  (cl-remove mid state :key #'car :test #'equal))
+  "Set MID to ENTRY in STATE, keeping order.
+Drop MID instead when ENTRY is removable (see `gnaw--entry-removable-p')."
+  (cond ((gnaw--entry-removable-p entry)
+         (cl-remove mid state :key #'car :test #'equal))
+        ((assoc mid state)
+         (mapcar (lambda (kv) (if (equal (car kv) mid) (cons mid entry) kv))
+                 state))
+        (t (append state (list (cons mid entry))))))
 
 (defun gnaw--alist-dissoc (alist key)
   "Remove KEY from ALIST copy."
@@ -1179,16 +1175,11 @@ ISO timestamp at which it was set."
                   (gnaw--alist-dissoc base action)
                 (gnaw--alist-assoc (gnaw--alist-dissoc base other)
                                    action (gnaw--iso-now)))))
-    (if (gnaw--entry-removable-p new)
-        (gnaw--state-delete state mid)
-      (gnaw--state-put state mid new))))
+    (gnaw--state-put state mid new)))
 
 (defun gnaw-action-on-p (state mid action)
   "Return non-nil if ACTION (:sticky or :dismiss) is set for MID in STATE."
-  (let ((entry (cdr (assoc mid state))))
-    (pcase action
-      (:sticky (and (cdr (assq :sticky entry)) t))
-      (:dismiss (and (cdr (assq :dismiss entry)) t)))))
+  (and (alist-get action (cdr (assoc mid state))) t))
 
 (defun gnaw-toggle-mark (mid info action)
   "Toggle ACTION (:sticky or :dismiss) for MID using metadata INFO.
@@ -1212,10 +1203,7 @@ Return non-nil if a mark was actually cleared."
                    (alist-get :dismiss entry)))
       (let ((new (gnaw--alist-dissoc (gnaw--alist-dissoc entry :sticky)
                                      :dismiss)))
-        (gnaw-write-state
-         (if (gnaw--entry-removable-p new)
-             (gnaw--state-delete state mid)
-           (gnaw--state-put state mid new))))
+        (gnaw-write-state (gnaw--state-put state mid new)))
       (gnaw--undo-push "mark removal" (list (cons mid entry)))
       t)))
 
@@ -1244,9 +1232,7 @@ program wrote to the current entry since (such as the CLI's
                  (cl-remove-if (lambda (kv)
                                  (memq (car kv) gnaw--own-entry-keys))
                                current))))
-    (if (or (null entry) (gnaw--entry-removable-p entry))
-        (gnaw--state-delete state mid)
-      (gnaw--state-put state mid entry))))
+    (gnaw--state-put state mid entry)))
 
 (defun gnaw-undo ()
   "Undo the last mark change made from this Emacs session.
