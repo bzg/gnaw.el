@@ -4461,57 +4461,45 @@ The per-column semantics are those of `gnaw-list-filter-cell'.
 Signal a `user-error' when the cell has no value to filter on.
 The Subject column inspects the displayed reports, so it must be
 called from the report list buffer."
-  (pcase col
-    ("S"
-     (let ((l (plist-get info :source-letter)))
-       (when (member l '(nil ""))
-         (user-error "No source letter on this row"))
-       (format "S:%s" l)))
-    ("From"
-     (let ((from (or (plist-get info :from)
-                     (plist-get info :from-name))))
-       (when (member from '(nil ""))
-         (user-error "No author on this row"))
-       (format "from:%s" (gnaw--query-quote-val from))))
-    ("Type" (format "type:%s" (or (plist-get info :type) "bug")))
-    ("Votes"
-     (let ((v (plist-get info :votes)))
-       (unless v (user-error "No votes on this row"))
-       (format "votes:%d.." (gnaw--votes-number v))))
-    ("Flags"
-     (let ((f (replace-regexp-in-string
-               "-" "" (or (plist-get info :flags) ""))))
-       (when (string-empty-p f)
-         (user-error "No flags on this row"))
-       (format "flags:%s" f)))
-    ("Att"
-     (let ((glyphs (string-replace " " "" (gnaw--att-string info))))
-       (when (string-empty-p glyphs)
-         (user-error "No attributes on this row"))
-       (format "att:%s" glyphs)))
-    ("Msgs"
-     (let ((n (plist-get info :replies)))
-       (unless n (user-error "No messages on this row"))
-       (format "msgs:%d.." (1+ n))))
-    ("Created"
-     (let ((d (plist-get info :date)))
-       (unless d (user-error "No creation date on this row"))
-       (format "date:%s.." (substring d 0 (min 10 (length d))))))
-    ("Subject"
-     (let ((words (gnaw--subject-words (plist-get info :subject))))
-       (unless words (user-error "No significant word in this subject"))
-       (let* ((val (string-join words "+"))
-              (m (gnaw--query-similar-matcher val)))
-         ;; The report always matches its own words: fewer than
-         ;; two matches means filtering would leave it alone.
-         (when (< (seq-count
-                   (lambda (p)
-                     (funcall m (plist-get (cdr p) :subject)))
-                   (gnaw-list--display-reports))
-                  2)
-           (user-error "No other report with a similar subject"))
-         (format "similar:%s" val))))
-    (_ (user-error "No cell filter for the %s column" col))))
+  (cl-flet ((value (key what &optional v)
+              (let ((v (or v (plist-get info key))))
+                (if (member v '(nil ""))
+                    (user-error "No %s on this row" what)
+                  v))))
+    (pcase col
+      ("S" (format "S:%s" (value :source-letter "source letter")))
+      ("From" (format "from:%s"
+                      (gnaw--query-quote-val
+                       (value nil "author" (or (plist-get info :from)
+                                               (plist-get info :from-name))))))
+      ("Type" (format "type:%s" (or (plist-get info :type) "bug")))
+      ("Votes" (format "votes:%d.."
+                       (gnaw--votes-number (value :votes "votes"))))
+      ("Flags" (format "flags:%s"
+                       (value nil "flags"
+                              (string-replace
+                               "-" "" (or (plist-get info :flags) "")))))
+      ("Att" (format "att:%s"
+                     (value nil "attributes"
+                            (string-replace " " "" (gnaw--att-string info)))))
+      ("Msgs" (format "msgs:%d.." (1+ (value :replies "messages"))))
+      ("Created" (let ((d (value :date "creation date")))
+                   (format "date:%s.." (substring d 0 (min 10 (length d))))))
+      ("Subject"
+       (let ((words (gnaw--subject-words (plist-get info :subject))))
+         (unless words (user-error "No significant word in this subject"))
+         (let* ((val (string-join words "+"))
+                (m (gnaw--query-similar-matcher val)))
+           ;; The report always matches its own words: fewer than
+           ;; two matches means filtering would leave it alone.
+           (when (< (seq-count
+                     (lambda (p)
+                       (funcall m (plist-get (cdr p) :subject)))
+                     (gnaw-list--display-reports))
+                    2)
+             (user-error "No other report with a similar subject"))
+           (format "similar:%s" val))))
+      (_ (user-error "No cell filter for the %s column" col)))))
 
 (defun gnaw-list-filter-cell (&optional arg)
   "Toggle a filter built from the value of the cell at point.
