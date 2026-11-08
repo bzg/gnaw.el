@@ -2154,6 +2154,13 @@ session's git commands which callers display on failure, after a
       (insert (format "\n$ git %s\n" (string-join args " "))))
     (apply #'call-process "git" nil t nil args)))
 
+(defun gnaw--git-output (&rest args)
+  "Return the trimmed output of git ARGS in `default-directory'.
+Nil when git fails."
+  (with-temp-buffer
+    (and (zerop (apply #'call-process "git" nil t nil args))
+         (string-trim (buffer-string)))))
+
 (defun gnaw--commit-in-repo-p (commit)
   "Non-nil when COMMIT exists in the git repo of `default-directory'."
   (zerop (call-process "git" nil nil nil
@@ -2169,13 +2176,8 @@ session's git commands which callers display on failure, after a
 Nil when neither resolves (a corrupt HEAD; an unborn HEAD still
 yields its branch name)."
   (let ((default-directory repo))
-    (with-temp-buffer
-      (if (zerop (call-process "git" nil t nil
-                               "symbolic-ref" "--short" "-q" "HEAD"))
-          (string-trim (buffer-string))
-        (erase-buffer)
-        (when (zerop (call-process "git" nil t nil "rev-parse" "HEAD"))
-          (string-trim (buffer-string)))))))
+    (or (gnaw--git-output "symbolic-ref" "--short" "-q" "HEAD")
+        (gnaw--git-output "rev-parse" "HEAD"))))
 
 (defun gnaw--maybe-checkout-base (files)
   "Offer to check out the base commit recorded in patch FILES.
@@ -2486,11 +2488,8 @@ The local branch named after origin's HEAD, or that remote branch
 when the local one lacks some of its commits, as after a fetch;
 else a local main or master."
   (let* ((default-directory repo)
-         (remote (with-temp-buffer
-                   (and (zerop (call-process "git" nil t nil "symbolic-ref"
-                                             "--short" "-q"
-                                             "refs/remotes/origin/HEAD"))
-                        (string-trim (buffer-string)))))
+         (remote (gnaw--git-output "symbolic-ref" "--short" "-q"
+                                   "refs/remotes/origin/HEAD"))
          (local (and remote (string-remove-prefix "origin/" remote))))
     (cond ((and remote
                 (zerop (call-process "git" nil nil nil "merge-base"
@@ -2544,28 +2543,27 @@ everywhere."
   "Return a hash set of the trimmed lines of PATH at REF, nil without PATH.
 Runs in `default-directory'.  CACHE memoizes the sets by PATH."
   (or (gethash path cache)
-      (with-temp-buffer
-        (when (zerop (call-process "git" nil t nil "show"
-                                   (concat ref ":" path)))
-          (let ((set (make-hash-table :test 'equal)))
-            (dolist (l (split-string (buffer-string) "\n"))
-              (puthash (string-trim l) t set))
-            (puthash path set cache))))))
+      (when-let* ((out (gnaw--git-output "show" (concat ref ":" path))))
+        (let ((set (make-hash-table :test 'equal)))
+          (dolist (l (split-string out "\n"))
+            (puthash (string-trim l) t set))
+          (puthash path set cache)))))
 
 (defun gnaw--applied-log-S (ref line path since)
   "Return (HASH EPOCH SUBJECT) of REF's last commit touching LINE in PATH.
 Nil when that commit is older than SINCE, epoch seconds bounding
 the walk through history, if non-nil.  Runs in `default-directory';
 EPOCH is the committer date."
-  (with-temp-buffer
-    (when (zerop (apply #'call-process "git" nil t nil "log" "-1"
-                        "--format=%h%x00%ct%x00%s" (concat "-S" line)
-                        (append (and since (list (format "--since=@%d" since)))
-                                (list ref "--" path))))
-      (let ((parts (split-string (string-trim (buffer-string)) "\0")))
-        (when (= (length parts) 3)
-          (list (nth 0 parts) (string-to-number (nth 1 parts))
-                (nth 2 parts)))))))
+  (let ((parts (split-string
+                (or (apply #'gnaw--git-output "log" "-1"
+                           "--format=%h%x00%ct%x00%s" (concat "-S" line)
+                           (append (and since
+                                        (list (format "--since=@%d" since)))
+                                   (list ref "--" path)))
+                    "")
+                "\0")))
+    (when (= (length parts) 3)
+      (list (nth 0 parts) (string-to-number (nth 1 parts)) (nth 2 parts)))))
 
 (defun gnaw--applied-commit (ref found since)
   "Return the (HASH EPOCH SUBJECT) commit of REF dating FOUND, or nil.
