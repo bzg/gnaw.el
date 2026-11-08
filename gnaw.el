@@ -2915,6 +2915,11 @@ decide what an invalid range matches."
         (cons (if (and va vb) (min va vb) va)
               (if (and va vb) (max va vb) vb))))))
 
+(defun gnaw--query-in-range-p (n range)
+  "Non-nil when number N lies in RANGE, a (LO . HI) cons, nil ends open."
+  (and (or (null (car range)) (>= n (car range)))
+       (or (null (cdr range)) (<= n (cdr range)))))
+
 (defun gnaw--query-date-matcher (spec key forward)
   "Compile date SPEC into a predicate on INFO's KEY date field.
 SPEC is a duration (3d/2w/2m), a YYYY-MM-DD date, or an A..B range
@@ -2924,27 +2929,20 @@ are resolved once, here; an unparseable SPEC or range bound matches
 nothing -- an empty bound is open, an invalid one is an error, like
 on the BONE web page."
   (let* ((today (time-to-days (current-time)))
-         (range (gnaw--query-range
-                 spec (lambda (s) (gnaw--query-bound s forward today))))
-         (lo nil) (hi nil) (none nil))
-    (cond
-     ((consp range) (setq lo (car range) hi (cdr range)))
-     ((eq range 'invalid) (setq none t))
-     (t
-      (let ((d (gnaw--query-duration->days spec))
-            (single (gnaw--query-ymd->days spec)))
-        (cond (d (if forward
-                     (setq lo today hi (+ today d))
-                   (setq lo (- today d) hi today)))
-              (single (setq lo single hi single))
-              (t (setq none t))))))
-    (if none
+         (d (gnaw--query-duration->days spec))
+         (single (gnaw--query-ymd->days spec))
+         ;; An `invalid' range stops the `or', and matches nothing.
+         (range (or (gnaw--query-range
+                     spec (lambda (s) (gnaw--query-bound s forward today)))
+                    (and d (if forward
+                               (cons today (+ today d))
+                             (cons (- today d) today)))
+                    (and single (cons single single)))))
+    (if (not (consp range))
         #'ignore
       (lambda (_mid info)
         (let ((fd (gnaw--query-ymd->days (plist-get info key))))
-          (and fd
-               (or (null lo) (>= fd lo))
-               (or (null hi) (<= fd hi))))))))
+          (and fd (gnaw--query-in-range-p fd range)))))))
 
 (defun gnaw--query-number-bound (s)
   "Parse range bound S into an integer, or nil when S is not one."
@@ -2978,10 +2976,7 @@ bound, `gnaw--query-number-bound' by default."
                  (gnaw--query-vals spec)))))
     (lambda (_mid info)
       (when-let* ((n (funcall getter info)))
-        (seq-some (lambda (r)
-                    (and (or (null (car r)) (>= n (car r)))
-                         (or (null (cdr r)) (<= n (cdr r)))))
-                  ranges)))))
+        (seq-some (lambda (r) (gnaw--query-in-range-p n r)) ranges)))))
 
 (defun gnaw--query-actor-matcher (needle)
   "Compile query NEEDLE into a predicate on an actor (identity) string.
@@ -2994,16 +2989,15 @@ values work here too -- but never against an unset actor."
       (lambda (a)
         (and a (not (string-empty-p a)) (funcall m a))))))
 
-(defun gnaw--query-flag-matcher (val bit)
-  "Compile VAL into a predicate testing priority BIT on INFO.
-`*' and `true' require the flag, `false' its absence (any case);
-any other VAL matches nothing."
-  (let* ((val (downcase val))
-         (want (and (member val '("*" "true")) t)))
-    (if (and (not want) (not (equal val "false")))
+(defun gnaw--query-bool-matcher (val pred)
+  "Compile VAL into a predicate on whether (PRED MID INFO) holds.
+`*' and `true' require it, `false' its absence (any case); any other
+VAL matches nothing."
+  (let ((want (pcase (downcase val)
+                ((or "*" "true") t) ("false" nil) (_ 'none))))
+    (if (eq want 'none)
         #'ignore
-      (lambda (_mid info)
-        (eq want (= (logand (or (plist-get info :priority) 0) bit) bit))))))
+      (lambda (mid info) (eq want (and (funcall pred mid info) t))))))
 
 (defvar gnaw--subject-words-cache (make-hash-table :test 'equal)
   "Memoized `gnaw--subject-words' results, keyed by subject.
@@ -3054,19 +3048,19 @@ is always the whole value, and may thus contain commas."
       (list val)
     (split-string val "," t)))
 
-(defun gnaw--query-getter (key)
-  "Return a (MID INFO) accessor for the INFO plist KEY."
-  (lambda (_mid info) (plist-get info key)))
-
 (defun gnaw--query-field-matcher (val make-matcher &rest getters)
   "Compile VAL into a predicate on the fields read by GETTERS.
 MAKE-MATCHER turns each comma (OR) alternative of VAL into a
-predicate on one string; each of GETTERS takes (MID INFO) and
-returns a field the alternatives are tried against."
+predicate on one string; each of GETTERS is an INFO plist key, or a
+function of (MID INFO), returning a field the alternatives are tried
+against."
   (let ((ms (mapcar make-matcher (gnaw--query-vals val))))
     (lambda (mid info)
       (seq-some (lambda (m)
-                  (seq-some (lambda (g) (funcall m (funcall g mid info)))
+                  (seq-some (lambda (g)
+                              (funcall m (if (keywordp g)
+                                             (plist-get info g)
+                                           (funcall g mid info))))
                             getters))
                 ms))))
 
@@ -3104,70 +3098,61 @@ the whole token in the subjects."
   (let* ((i (string-search ":" token))
          (key (and i (substring token 0 i)))
          (val (and i (substring token (1+ i)))))
-    (pcase key
-      ((or "from" "f")
-       (gnaw--query-field-matcher val #'gnaw--query-text-matcher
-                                  (gnaw--query-getter :from)
-                                  (gnaw--query-getter :from-name)))
-      ((or "subject" "s")
-       (gnaw--query-field-matcher val #'gnaw--query-text-matcher
-                                  (gnaw--query-getter :subject)))
-      ((or "topic" "T")
-       (gnaw--query-field-matcher val #'gnaw--query-text-matcher
-                                  (gnaw--query-getter :topic)))
-      ((or "mid" "m")
-       (gnaw--query-field-matcher val #'gnaw--query-text-matcher
-                                  (lambda (mid _info) mid)))
-      ((or "acked" "a")
-       (gnaw--query-field-matcher val #'gnaw--query-actor-matcher
-                                  (gnaw--query-getter :acked)))
-      ((or "owned" "o")
-       (gnaw--query-field-matcher val #'gnaw--query-actor-matcher
-                                  (gnaw--query-getter :owned)
-                                  (gnaw--query-getter :owned-name)))
-      ((or "closed" "c")
-       (gnaw--query-field-matcher val #'gnaw--query-actor-matcher
-                                  (gnaw--query-getter :closed)))
-      ((or "type" "t")
+    (pcase (gnaw--query-key-name key)
+      ("from" (gnaw--query-field-matcher
+               val #'gnaw--query-text-matcher :from :from-name))
+      ("subject" (gnaw--query-field-matcher
+                  val #'gnaw--query-text-matcher :subject))
+      ("topic" (gnaw--query-field-matcher
+                val #'gnaw--query-text-matcher :topic))
+      ("mid" (gnaw--query-field-matcher
+              val #'gnaw--query-text-matcher (lambda (mid _info) mid)))
+      ("acked" (gnaw--query-field-matcher
+                val #'gnaw--query-actor-matcher :acked))
+      ("owned" (gnaw--query-field-matcher
+                val #'gnaw--query-actor-matcher :owned :owned-name))
+      ("closed" (gnaw--query-field-matcher
+                 val #'gnaw--query-actor-matcher :closed))
+      ("type"
        ;; A closed set compared whole: no *, regexp or quotes here,
        ;; and type:* matches nothing.
        (let ((vals (mapcar #'downcase (gnaw--query-vals val))))
          (lambda (_mid info)
            (member (downcase (or (plist-get info :type) "")) vals))))
-      ((or "priority" "p")
+      ("priority"
        ;; 0-3, shown " "/C/B/A, as numbers or letters: priority:2..
        ;; and priority:B.. both mean B or A.
        (gnaw--query-number-matcher
         val (lambda (info) (or (plist-get info :priority) 0))
         #'gnaw--query-priority-bound))
-      ((or "votes" "v")
+      ("votes"
        (gnaw--query-number-matcher
         val (lambda (info)
               (when-let* ((v (plist-get info :votes)))
                 (gnaw--votes-number v)))))
-      ((or "msgs" "M")
+      ("msgs"
        (gnaw--query-number-matcher
         val (lambda (info)   ; thread size, initial mail included
               (when-let* ((n (plist-get info :replies))) (1+ n)))))
-      ((or "urgent" "u") (gnaw--query-flag-matcher val 2))
-      ((or "new" "n")
+      ;; urgent and important are priority bits 2 and 1.
+      ((and (or "urgent" "important") name)
+       (let ((bit (if (equal name "urgent") 2 1)))
+         (gnaw--query-bool-matcher
+          val (lambda (_mid info)
+                (/= 0 (logand (or (plist-get info :priority) 0) bit))))))
+      ("new"
        ;; new:* keeps the reports the last update brought in, new:false
        ;; the others; read when the query is compiled, at each render.
-       (let* ((val (downcase val))
-              (want (and (member val '("*" "true")) t))
-              (new gnaw-list--new-mids))
-         (if (and (not want) (not (equal val "false")))
-             #'ignore
-           (lambda (mid _info)
-             (eq want (and new (gethash mid new) t))))))
-      ((or "important" "i") (gnaw--query-flag-matcher val 1))
+       (let ((new gnaw-list--new-mids))
+         (gnaw--query-bool-matcher
+          val (lambda (mid _info) (and new (gethash mid new))))))
       ;; Glyph matches, mirroring the Flags and Att columns:
       ;; flags:AO = acked and owned; flags:S = superseded;
       ;; att:~+ = related and a single patch.
-      ((or "flags" "F")
+      ("flags"
        (gnaw--query-glyph-matcher
         (upcase val) (lambda (info) (or (plist-get info :flags) ""))))
-      ((or "att" "attributes" "A")
+      ("att"
        ;; downcase: x is the only cased glyph, and the neighbor
        ;; flags: alphabet is uppercase.
        (gnaw--query-glyph-matcher (downcase val) #'gnaw--att-glyphs))
@@ -3178,7 +3163,7 @@ the whole token in the subjects."
       ;; the S column, or a one-character source name, exactly; a
       ;; longer value matches the source name as topic: does, and
       ;; source:* keeps its any-source meaning.
-      ((or "source" "S")
+      ("source"
        (gnaw--query-field-matcher
         val
         (lambda (v)
@@ -3186,11 +3171,10 @@ the whole token in the subjects."
               (gnaw--query-text-matcher v)
             (let ((d (downcase v)))
               (lambda (s) (and s (equal d (downcase s)))))))
-        (gnaw--query-getter :source-letter)
-        (gnaw--query-getter :source-name)))
-      ((or "date" "d") (gnaw--query-date-matcher val :date nil))
-      ((or "deadline" "D") (gnaw--query-date-matcher val :deadline t))
-      ((or "expired" "e") (gnaw--query-date-matcher val :expiry t))
+        :source-letter :source-name))
+      ("date" (gnaw--query-date-matcher val :date nil))
+      ("deadline" (gnaw--query-date-matcher val :deadline t))
+      ("expired" (gnaw--query-date-matcher val :expiry t))
       (_ (gnaw--query-subject-matcher token)))))
 
 (defun gnaw--query-parse (query)
@@ -3243,41 +3227,42 @@ flags: value naming C, R, E or S) or on the closed: key -- the
 tokens `gnaw-list-limit-closed' and the Flags cell filter produce.
 `gnaw-list--display-reports' hides closed reports otherwise."
   (seq-some
-   (lambda (tokens)
-     (seq-some
-      (lambda (token)
-        (and (not (string-prefix-p "-" token))
-             (let* ((i (string-search ":" token))
-                    (key (and i (substring token 0 i)))
-                    (val (and i (substring token (1+ i)))))
-               (and val (not (string-empty-p val))
-                    (or (member key '("closed" "c"))
-                        (and (member key '("flags" "F"))
-                             (string-match-p "[CRES]" (upcase val))))))))
-      tokens))
-   (gnaw--query-parse query)))
+   (lambda (token)
+     (and (not (string-prefix-p "-" token))
+          (let* ((i (string-search ":" token))
+                 (key (gnaw--query-key-name (and i (substring token 0 i))))
+                 (val (and i (substring token (1+ i)))))
+            (and val (not (string-empty-p val))
+                 (or (equal key "closed")
+                     (and (equal key "flags")
+                          (string-match-p "[CRES]" (upcase val))))))))
+   (apply #'append (gnaw--query-parse query))))
+
+(defconst gnaw--query-key-table
+  '((text "from" "f") (text "subject" "s") (text "similar") (text "topic" "T")
+    (closed "source" "S") (closed "type" "t") (closed "priority" "p")
+    (closed "votes" "v") (closed "msgs" "M") (text "mid" "m")
+    (text "acked" "a") (text "owned" "o") (text "closed" "c")
+    (closed "urgent" "u") (closed "important" "i") (closed "new" "n")
+    (closed "flags" "F") (closed "att" "attributes" "A")
+    (closed "date" "d") (closed "deadline" "D") (closed "expired" "e"))
+  "Query keys as (KIND NAME ALIAS...), in completion order.
+`gnaw--query-compile-key' dispatches on NAME.  KIND is `text' for
+free-text values, which the live preview holds back until they reach
+`gnaw-list-filter-live-min-chars', or `closed' for closed-set or
+short values, previewed once non-empty.")
+
+(defun gnaw--query-key-entry (key)
+  "Return the `gnaw--query-key-table' entry naming or aliasing KEY, or nil."
+  (and key (seq-find (lambda (e) (member key (cdr e))) gnaw--query-key-table)))
+
+(defun gnaw--query-key-name (key)
+  "Return the name of query KEY, an alias resolved, or nil if unknown."
+  (cadr (gnaw--query-key-entry key)))
 
 (defconst gnaw--query-keys
-  '("from:" "subject:" "similar:" "topic:" "source:" "type:" "priority:"
-    "votes:" "msgs:" "mid:" "acked:" "owned:" "closed:" "urgent:"
-    "important:" "new:" "flags:" "att:" "date:" "deadline:" "expired:")
+  (mapcar (lambda (e) (concat (cadr e) ":")) gnaw--query-key-table)
   "Long-form query keys completed in `gnaw-list-filter'.")
-
-(defconst gnaw--query-text-keys
-  '("from" "f" "subject" "s" "similar" "topic" "T" "mid" "m"
-    "acked" "a" "owned" "o" "closed" "c")
-  "Query keys taking free text, aliases included.
-Keep in sync with `gnaw--query-compile-key'.  The live preview
-holds their value back until it reaches
-`gnaw-list-filter-live-min-chars'.")
-
-(defconst gnaw--query-closed-keys
-  '("source" "S" "type" "t" "priority" "p" "votes" "v" "msgs" "M"
-    "urgent" "u" "important" "i" "new" "n" "flags" "F" "att" "attributes" "A"
-    "date" "d" "deadline" "D" "expired" "e")
-  "Query keys taking closed-set or short values, aliases included.
-Keep in sync with `gnaw--query-compile-key'.  The live preview only
-waits for their value to be non-empty.")
 
 (defconst gnaw-report-types
   '("bug" "patch" "request" "announcement" "change" "release")
@@ -3291,21 +3276,18 @@ name with spaces) are offered quoted, so completing one yields a
 working query."
   (mapcar
    #'gnaw--query-quote-val
-   (pcase key
-     ((or "type" "t") gnaw-report-types)
-     ((or "source" "S")
-      (let (cands)
-        (dolist (p (buffer-local-value
-                    'gnaw-list--reports
-                    (window-buffer (minibuffer-selected-window))))
-          (dolist (k '(:source-letter :source-name))
-            (when-let* ((v (plist-get (cdr p) k)))
-              (cl-pushnew v cands :test #'equal))))
-        (nreverse cands)))
-     ((or "topic" "T")
-      (gnaw-topics (buffer-local-value
-                    'gnaw-list--reports
-                    (window-buffer (minibuffer-selected-window))))))))
+   (let ((reports (buffer-local-value
+                   'gnaw-list--reports
+                   (window-buffer (minibuffer-selected-window)))))
+     (pcase (gnaw--query-key-name key)
+       ("type" gnaw-report-types)
+       ("source"
+        (delete-dups
+         (mapcan (lambda (p)
+                   (delq nil (list (plist-get (cdr p) :source-letter)
+                                   (plist-get (cdr p) :source-name))))
+                 reports)))
+       ("topic" (gnaw-topics reports))))))
 
 (defun gnaw--filter-token-start (string)
   "Return the position where STRING's trailing query token starts.
@@ -3465,7 +3447,7 @@ negation to the active filter (AND)."
           (format "%s:%s" key
                   ;; Quoting a closed-set value would hide its commas
                   ;; (OR) from the matcher: priority:"3,2" matches nothing.
-                  (if (member key gnaw--query-text-keys)
+                  (if (eq (car (gnaw--query-key-entry key)) 'text)
                       (gnaw--query-quote-val val)
                     val))
           arg))))))
@@ -4290,8 +4272,9 @@ precede it; nil means TOK contributes nothing yet."
   (let* ((bare (if (string-prefix-p "-" tok) (substring tok 1) tok))
          (colon (string-search ":" bare))
          (key (and colon (substring bare 0 colon)))
-         (text (and key (member key gnaw--query-text-keys) t))
-         (closed (and key (member key gnaw--query-closed-keys) t))
+         (kind (car (gnaw--query-key-entry key)))
+         (text (eq kind 'text))
+         (closed (eq kind 'closed))
          ;; The needle being typed: a known key's value, or the whole
          ;; token (a bare word keeps its commas, see
          ;; `gnaw--query-subject-matcher').
