@@ -1174,15 +1174,6 @@ by another program since the change are left untouched."
 
 ;;; Presentation helpers shared by the MUA front-ends
 
-(defvar gnaw-annotation-votes-width 7
-  "Fixed width of the votes column in `gnaw-annotation'.")
-
-(defvar gnaw-annotation-deadline-width 5
-  "Fixed width of the deadline column in `gnaw-annotation'.")
-
-(defvar gnaw-annotation-expiry-width 5
-  "Fixed width of the expiry column in `gnaw-annotation'.")
-
 (defun gnaw-type-letter (type)
   "Return the one-letter abbreviation of report TYPE."
   (pcase type
@@ -1217,7 +1208,8 @@ by another program since the change are left untouched."
 (defun gnaw-annotation (info &optional entry)
   "Build the fixed-width annotation string for report INFO and state ENTRY.
 Columns: local mark, type letter, flags, priority letter, deadline
-\(D±n days), expiry (E±n days) and votes ([score/total])."
+\(D±n days, 5 wide), expiry (E±n days, 5 wide) and votes
+\([score/total], 7 wide)."
   (let* ((mark      (gnaw-mark-prefix entry))
          (type      (gnaw-type-letter (plist-get info :type)))
          (flags     (plist-get info :flags))
@@ -1226,12 +1218,9 @@ Columns: local mark, type letter, flags, priority letter, deadline
          (dl-days   (gnaw-days-until (plist-get info :deadline)))
          (ex-days   (gnaw-days-until (plist-get info :expiry)))
          (pri-str   (gnaw-priority-letter priority))
-         (dl-pad    (string-pad (if dl-days (format "D%+d" dl-days) "")
-                                gnaw-annotation-deadline-width))
-         (ex-pad    (string-pad (if ex-days (format "E%+d" ex-days) "")
-                                gnaw-annotation-expiry-width))
-         (votes-pad (string-pad (if votes (format "[%s]" votes) "")
-                                gnaw-annotation-votes-width)))
+         (dl-pad    (string-pad (if dl-days (format "D%+d" dl-days) "") 5))
+         (ex-pad    (string-pad (if ex-days (format "E%+d" ex-days) "") 5))
+         (votes-pad (string-pad (if votes (format "[%s]" votes) "") 7)))
     (concat mark " " type " " flags " " pri-str " " dl-pad ex-pad votes-pad)))
 
 (defun gnaw-topics (reports)
