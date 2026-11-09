@@ -2163,20 +2163,14 @@ REPO, AM-DIR, USE-WORKTREE, BRANCH and ORIG are those of
 `gnaw--am-undo'.  The *gnaw-git* buffer showing the
 failure is already displayed, so the user can read it while
 answering."
-  (let ((undo (cond (use-worktree
-                     (concat "remove the worktree"
-                             (and branch (format " and branch %s" branch))))
-                    (branch (concat (and orig (format "back to %s, " orig))
-                                    (format "delete branch %s" branch)))
-                    (orig (format "back to %s" orig)))))
-    (if (and undo gnaw-am-undo-on-failure
-             (or (not (eq gnaw-am-undo-on-failure 'ask))
-                 (y-or-n-p (format "Git am failed; undo (%s)? " undo))))
-        (progn
-          (gnaw--am-undo repo am-dir use-worktree branch orig)
-          (message "gnaw: git am failed in %s; undone (%s)" am-dir undo))
-      (message "gnaw: git am failed in %s (run `git am --abort' to undo)"
-               am-dir))))
+  (if (and gnaw-am-undo-on-failure
+           (or (not (eq gnaw-am-undo-on-failure 'ask))
+               (y-or-n-p "Git am failed; abort it and undo its setup? ")))
+      (progn
+        (gnaw--am-undo repo am-dir use-worktree branch orig)
+        (message "gnaw: git am failed in %s; undone" am-dir))
+    (message "gnaw: git am failed in %s (run `git am --abort' to undo)"
+             am-dir)))
 
 (defun gnaw--edit-am-files (files)
   "Let the user edit each of patch FILES, temporary copies, in turn.
