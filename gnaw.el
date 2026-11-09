@@ -1525,8 +1525,6 @@ multipart structure (see `gnaw--mime-part-text')."
 (declare-function notmuch-show "notmuch-show")
 (declare-function mu4e "mu4e")
 (declare-function mu4e-view-message-with-message-id "mu4e-view")
-(declare-function mu4e-search "mu4e-search")
-(declare-function mu4e-headers-search "mu4e-headers")
 (defvar gnus-registry-enabled)
 
 (defun gnaw--read-gnus-group (prompt &optional default)
@@ -1578,13 +1576,7 @@ return to the calling buffer on summary exit."
   "Open MID in mu4e by message-id (INFO is unused)."
   (ignore info)
   (require 'mu4e)
-  (let ((id (gnaw--strip-mid mid)))
-    (cond
-     ((fboundp 'mu4e-view-message-with-message-id)
-      (mu4e-view-message-with-message-id id))
-     ((fboundp 'mu4e-search) (mu4e-search (concat "msgid:" id)))
-     ((fboundp 'mu4e-headers-search) (mu4e-headers-search (concat "msgid:" id)))
-     (t (user-error "Cannot open by message-id in this mu4e version")))))
+  (mu4e-view-message-with-message-id (gnaw--strip-mid mid)))
 
 (declare-function customize-save-variable "cus-edit")
 
