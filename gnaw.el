@@ -378,37 +378,27 @@ spaces), which would break the S: filters built from the letter."
     letter))
 
 (defun gnaw--ensure-source-letters ()
-  "Ask for the missing source letters and save them to config.edn.
+  "Give a `:letter' to the config.edn sources lacking one, and save it.
 With several sources, the browser's S column identifies each
-report's source by the `:letter' of its config.edn entry: ask
-interactively for the entries not defining one.  No-op with zero
-or one source.  Quitting mid-prompts still saves the letters
-answered so far, so they are not asked again."
-  (let* ((raw (gnaw--read-config-raw))
-         (cfgs (alist-get :sources raw)))
-    (when (and (> (length cfgs) 1)
+report's source by its letter; a missing one is the letter
+`gnaw--suggest-source-letter' proposes.  No-op with one source."
+  (let ((cfgs (plist-get (gnaw-load-config) :source-configs)))
+    (when (and (cdr cfgs)
                (seq-some (lambda (s) (not (alist-get :letter s))) cfgs))
-      (let ((taken (gnaw--taken-source-letters cfgs))
-            (done nil)
-            (changed nil))
-        (unwind-protect
-            (dolist (s cfgs)
-              (push (if (alist-get :letter s)
-                        s
-                      (let ((letter (gnaw--read-source-letter
-                                     (or (alist-get :name s)
-                                         (car (alist-get :urls s)))
-                                     taken)))
-                        (push (downcase letter) taken)
-                        (setq changed t)
-                        (append s (list (cons :letter letter)))))
-                    done))
-          (when changed
-            ;; A quit leaves the entries not reached in their old form.
-            (let ((rest (nthcdr (length done) cfgs)))
-              (gnaw--write-config
-               (gnaw--alist-put raw :sources
-                                (append (nreverse done) rest))))))))))
+      (let ((taken (gnaw--taken-source-letters cfgs)))
+        (gnaw--write-config
+         (list (cons :sources
+                     (mapcar (lambda (s)
+                               (let ((l (and (not (alist-get :letter s))
+                                             (gnaw--suggest-source-letter
+                                              (or (alist-get :name s)
+                                                  (car (alist-get :urls s)))
+                                              taken))))
+                                 (if (not l)
+                                     s
+                                   (push (downcase l) taken)
+                                   (append s (list (cons :letter l))))))
+                             cfgs))))))))
 
 (defun gnaw--java-hash (str)
   "Calculate Java String hashCode of STR as an unsigned 32-bit integer."
@@ -3979,10 +3969,9 @@ only through a query asking for them (see
   (setq tabulated-list-format (gnaw--list-format))
   ;; `gnaw-list-refresh' drops it when its column is not shown.
   (setq tabulated-list-sort-key gnaw-list-sort-key)
-  ;; The native refresh entry points: C-x x g, auto-revert...  Pass
-  ;; NO-ASK: an auto-revert timer must not prompt for source letters.
+  ;; The native refresh entry points: C-x x g, auto-revert...
   (setq-local revert-buffer-function
-              (lambda (&rest _) (gnaw-list-reload t)))
+              (lambda (&rest _) (gnaw-list-reload)))
   ;; C-x r m bookmarks the current view (filter, sort, position).
   (setq-local bookmark-make-record-function
               #'gnaw-list--bookmark-make-record)
@@ -4118,20 +4107,17 @@ whole; every command changing rows in place needs the full render."
     (move-to-column col)
     (when win (gnaw-list--restore-window win anchor))))
 
-(defun gnaw-list-reload (&optional no-ask track-new)
+(defun gnaw-list-reload (&optional track-new)
   "Re-read reports from the local cache, then re-render.
-With several sources, first ask for the letters identifying them in
-the S column when config.edn does not define some (see
-`gnaw--ensure-source-letters') -- unless NO-ASK is non-nil, as on
-the `revert-buffer' path, where auto-revert timers must not block
-on a minibuffer prompt.  Non-nil TRACK-NEW records the reports
+First give the sources lacking a letter one (see
+`gnaw--ensure-source-letters').  Non-nil TRACK-NEW records the reports
 absent before the reload in `gnaw-list--new-mids' and returns how
 many there are; a list that held no report yet records none, as
 everything would be new.  Reset the subject-words cache, then
 re-warm it once Emacs has been idle for a second, so the first
 similar: filter finds it filled."
   (interactive)
-  (unless no-ask (gnaw--ensure-source-letters))
+  (gnaw--ensure-source-letters)
   (let ((old (and track-new gnaw-list--reports
                   (let ((h (make-hash-table :test 'equal
                                             :size (length gnaw-list--reports))))
@@ -4345,17 +4331,14 @@ With a prefix argument FORCE, re-download sources unconditionally.
 Emacs stays responsive while the sources download; the list reloads
 itself once the update finished.  The reports it brings in show in
 `gnaw-new' face, and the new: query key keeps them, until the next
-update.  Any missing source letters are asked for now, while the
-user is at the keyboard: the reload runs in a callback, outside any
-interaction, so it must not prompt."
+update."
   (interactive "P")
-  (gnaw--ensure-source-letters)
   (let ((buf (current-buffer)))
     (gnaw-update force
                  (lambda ()
                    (when (buffer-live-p buf)
                      (with-current-buffer buf
-                       (when-let* ((n (gnaw-list-reload t t)))
+                       (when-let* ((n (gnaw-list-reload t)))
                          (message "%s %d new report%s (new:* lists them)."
                                   (or (current-message) "gnaw:")
                                   n (if (= n 1) "" "s")))))))))

@@ -182,7 +182,7 @@ that priority order. The help echo of the Flags and Att cells ({{{kbd(C-h
 #+cindex: sources, several
 With several sources configured, a leading =S= column identifies each
 report's source by its letter (the =:letter= of its =config.edn= entry,
-asked on the first reload when missing); its help echo shows the full
+the first free letter of its name when missing); its help echo shows the full
 source name. With a single source, gnaw omits the column.
 
 #+cindex: patch series, folding
@@ -753,7 +753,7 @@ for several.
 - =:sources= ::
   Each has =:urls= (a vector of reports.json URLs), an optional =:name=, a
   =:letter= identifying the source in the =S= column when several sources
-  are configured (asked interactively when missing) and a =:repo= where
+  are configured (the first free letter of the name when missing) and a =:repo= where
   patches apply---a directory, or a vector of them (=:repo
   ["~/src/org-mode" "~/src/org-contrib"]=): applying then asks which
   repo to use, and saving proposes the first.
