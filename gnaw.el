@@ -4157,9 +4157,9 @@ back by this limit."
 TOK is still being typed, and previewing it too early misleads: a
 known key awaiting its value, an open \"quote and an open /regexp/
 match nothing by construction, and a free-text needle shorter than
-`gnaw-list-filter-live-min-chars' matches too much.  An incomplete
-last comma (OR) alternative drops off alone when complete ones
-precede it; nil means TOK contributes nothing yet."
+`gnaw-list-filter-live-min-chars' matches too much: TOK previews
+once its last comma (OR) alternative does.  Nil means TOK
+contributes nothing yet."
   (let* ((bare (if (string-prefix-p "-" tok) (substring tok 1) tok))
          (colon (string-search ":" bare))
          (key (and colon (substring bare 0 colon)))
@@ -4182,20 +4182,13 @@ precede it; nil means TOK contributes nothing yet."
      (t
       ;; Free text: judge the alternative being typed, the last one.
       (let ((alt (if text (car (last (split-string needle ","))) needle)))
-        (cond
-         ((or (string-empty-p alt)      ; a trailing comma changes nothing
-              (member alt '("*" "true"))
-              (gnaw--query-quoted alt)
-              (gnaw--query-regexp alt)
-              (and (not (string-prefix-p "/" alt)) ; no open regexp
-                   (>= (length alt) gnaw-list-filter-live-min-chars)))
-          tok)
-         ;; Complete alternatives before the open one still preview;
-         ;; recheck them, the comma split is blind to an open regexp.
-         ((and text (> (- (length needle) (length alt) 1) 0))
-          (gnaw--filter-preview-token
-           (substring tok 0 (- (length tok) (length alt) 1))))
-         (t nil)))))))
+        (and (or (string-empty-p alt)   ; a trailing comma changes nothing
+                 (member alt '("*" "true"))
+                 (gnaw--query-quoted alt)
+                 (gnaw--query-regexp alt)
+                 (and (not (string-prefix-p "/" alt)) ; no open regexp
+                      (>= (length alt) gnaw-list-filter-live-min-chars)))
+             tok))))))
 
 (defun gnaw--filter-preview-query (query)
   "Return QUERY as the live preview should run it, or nil for none.
