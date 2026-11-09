@@ -1069,11 +1069,10 @@ Drop MID instead when ENTRY is removable (see `gnaw--entry-removable-p')."
   "Remove KEY from ALIST copy."
   (assq-delete-all key (copy-alist alist)))
 
-(defun gnaw--alist-assoc (alist key value)
-  "Set KEY to VALUE in ALIST copy."
-  (let ((e (copy-alist alist)))
-    (setf (alist-get key e) value)
-    e))
+(defun gnaw--alist-put (alist key val)
+  "Return ALIST with KEY set to VAL, KEY compared with `equal'."
+  (cons (cons key val)
+        (assoc-delete-all key (copy-alist (if (listp alist) alist nil)))))
 
 (defconst gnaw--own-entry-keys '(:sticky :dismiss :subject :type :created :author)
   "State entry keys written by gnaw.el; any other key belongs to the CLI.")
@@ -1095,8 +1094,8 @@ ISO timestamp at which it was set."
          (other (if (eq action :sticky) :dismiss :sticky))
          (new (if (alist-get action base)
                   (gnaw--alist-dissoc base action)
-                (gnaw--alist-assoc (gnaw--alist-dissoc base other)
-                                   action (gnaw--iso-now)))))
+                (gnaw--alist-put (gnaw--alist-dissoc base other)
+                                 action (gnaw--iso-now)))))
     (gnaw--state-put state mid new)))
 
 (defun gnaw-action-on-p (state mid action)
@@ -1588,11 +1587,6 @@ return to the calling buffer on summary exit."
      (t (user-error "Cannot open by message-id in this mu4e version")))))
 
 (declare-function customize-save-variable "cus-edit")
-
-(defun gnaw--alist-put (alist key val)
-  "Return ALIST with KEY set to VAL, KEY compared with `equal'."
-  (cons (cons key val)
-        (assoc-delete-all key (copy-alist (if (listp alist) alist nil)))))
 
 (defun gnaw--read-open-message-method (&optional default)
   "Read an open-message method interactively, DEFAULT preselected."
