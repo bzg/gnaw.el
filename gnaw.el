@@ -3973,9 +3973,8 @@ only through a query asking for them (see
   ;; `gnaw' keeps an existing list's view: the bookmark replaces it.
   (setq-local gnaw-list--related-mids nil)
   (setq-local gnaw-list--query (bookmark-prop-get bookmark 'query))
-  (when-let* ((key (bookmark-prop-get bookmark 'sort-key))
-              ((assoc (car key) (gnaw--active-columns))))
-    (setq-local tabulated-list-sort-key key))
+  ;; `gnaw-list-refresh' drops the key if its column is now hidden.
+  (setq-local tabulated-list-sort-key (bookmark-prop-get bookmark 'sort-key))
   (gnaw-list-refresh)
   (when-let* ((mid (bookmark-prop-get bookmark 'mid)))
     (gnaw-list--goto-mid mid)))
