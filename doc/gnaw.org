@@ -811,9 +811,8 @@ gnaw)}}}).
   #+vindex: gnaw-apply-repo
   Fallback git repo when the source has no =:repo=.
 
-- ~gnaw-git-apply-options~, ~gnaw-git-am-options~ ::
-  #+vindex: gnaw-git-apply-options
-  #+vindex: gnaw-git-am-options
+- ~gnaw-git-options~ ::
+  #+vindex: gnaw-git-options
   Default: =--3way=. Extra arguments for =git apply= and =git am=.
 
 - ~gnaw-am-branch-function~ ::

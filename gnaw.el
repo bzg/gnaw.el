@@ -1684,15 +1684,8 @@ Used when the source has no `:repo' in config.edn, before asking."
   :type '(choice (const :tag "Ask each time" nil) directory)
   :group 'gnaw)
 
-(defcustom gnaw-git-apply-options '("--3way")
-  "Extra arguments passed to `git apply' by `gnaw-apply-patches'.
-The default `--3way' 3-way-merges patches that do not apply cleanly
-\(possibly leaving conflict markers) instead of failing outright."
-  :type '(repeat string)
-  :group 'gnaw)
-
-(defcustom gnaw-git-am-options '("--3way")
-  "Extra arguments passed to `git am' by `gnaw-am-patches'.
+(defcustom gnaw-git-options '("--3way")
+  "Extra arguments passed to `git apply' and `git am'.
 The default `--3way' 3-way-merges patches that do not apply cleanly
 \(possibly leaving conflict markers) instead of failing outright."
   :type '(repeat string)
@@ -2126,7 +2119,7 @@ PATCHES restricts the operation to these `:patches' entries."
     (let ((default-directory (gnaw--target-repo info)))
       (gnaw--maybe-checkout-base files)
       (if (zerop (apply #'gnaw--git default-directory
-                        (append (list "apply") gnaw-git-apply-options
+                        (append (list "apply") gnaw-git-options
                                 (list "--") files)))
           (message "gnaw: git apply applied %d patch(es) in %s"
                    (length files) default-directory)
@@ -2315,7 +2308,7 @@ temporary copies, never to the cached originals."
             (when edit (gnaw--edit-am-files am-files))
             (gnaw--am-checkout repo use-worktree branch base am-dir existing)
             (if (zerop (apply #'gnaw--git am-dir
-                              (append (list "am") gnaw-git-am-options
+                              (append (list "am") gnaw-git-options
                                       (list "--") am-files)))
                 (gnaw--am-succeeded files am-files am-dir branch edit)
               (display-buffer "*gnaw-git*")
