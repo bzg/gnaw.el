@@ -574,12 +574,18 @@ Parse before writing -- a malformed download (truncated body, error
 page) must not replace a valid cache -- and save the ETag only
 after, so a failed write leaves the old one and the next refresh
 still sees the stale cache.  Return `changed' when CACHE-FILE's
-content changed, `refetched' when it was byte-identical."
+content changed, `refetched' when it was byte-identical, then left
+untouched.  The write is atomic: the gnaw CLI reads the cache too."
   (let ((body (decode-coding-string (plist-get reply :body) 'utf-8)))
     (gnaw--parse-json-string body)
-    (let ((wrote (gnaw--write-json-to-file body cache-file)))
+    (let ((same (and (file-exists-p cache-file)
+                     (equal body (with-temp-buffer
+                                   (let ((coding-system-for-read 'utf-8))
+                                     (insert-file-contents cache-file))
+                                   (buffer-string))))))
+      (unless same (gnaw--write-file-atomically cache-file body))
       (gnaw--save-validators cache-file (plist-get reply :etag))
-      (if wrote 'changed 'refetched))))
+      (if same 'refetched 'changed))))
 
 (defun gnaw--refresh-cache-async (url cache-file force callback)
   "Refresh CACHE-FILE from URL in the background, revalidating first.
@@ -641,22 +647,6 @@ seconds at most when the server does not answer."
       (if (eq (car-safe outcome) 'error)
           (error "%s" (cdr outcome))
         outcome))))
-
-(defun gnaw--write-json-to-file (json file)
-  "Write JSON, a string, to FILE as UTF-8.
-Leave an already-identical FILE untouched; return non-nil when its
-content actually changed."
-  (make-directory (file-name-directory file) t)
-  (unless (and (file-exists-p file)
-               (equal json
-                      (with-temp-buffer
-                        (let ((coding-system-for-read 'utf-8))
-                          (insert-file-contents file))
-                        (buffer-string))))
-    (let ((coding-system-for-write 'utf-8))
-      (with-temp-file file
-        (insert json)))
-    t))
 
 (defun gnaw--read-json (source)
   "Read JSON from SOURCE, using local cache for remote URLs if available."
