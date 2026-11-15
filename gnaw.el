@@ -4406,9 +4406,12 @@ them; with three, add that exclusion to the active filter (AND)."
         ;; cursor back on the column it was on, as a plain refresh does.
         (gnaw-list--goto-mid-or-line mid line)
         (move-to-column col)
-        (message "gnaw: %s" (cond (mids "back to the related view")
-                                  (query (format "filter %s" query))
-                                  (t "filter cleared"))))
+        (if mids
+            (message "gnaw: back to the related view")
+          (message "gnaw: %s (%s to combine filters)"
+                   (if query (format "filter %s" query) "filter cleared")
+                   (substitute-command-keys
+                    "\\[universal-argument] \\[gnaw-list-filter-cell]"))))
     (let ((negate (and (consp arg) (>= (car arg) 16)))
           (add (if (and (consp arg) (>= (car arg) 16))
                    (>= (car arg) 64)
