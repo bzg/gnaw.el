@@ -189,7 +189,7 @@ as dispatch forms like #inst), which would otherwise loop forever."
 (defun gnaw-edn--map-p (x)
   "Non-nil if list X is an alist to write as an EDN map (not a vector).
 True when every element is a cons whose car is an atom (a key)."
-  (and (consp x) (cl-every (lambda (e) (and (consp e) (atom (car e)))) x)))
+  (and (consp x) (seq-every-p (lambda (e) (and (consp e) (atom (car e)))) x)))
 
 (defun gnaw--edn-write (v)
   "Serialize EDN value V (maps, vectors and scalars) to a string."
@@ -817,7 +817,7 @@ their sources.  Once every source finished, run
   (interactive "P")
   (when gnaw--update-pending
     (user-error "An update is already running"))
-  (let* ((sources (cl-remove-if-not #'gnaw--http-url-p (gnaw-sources)))
+  (let* ((sources (seq-filter #'gnaw--http-url-p (gnaw-sources)))
          ;; Nothing else refreshes a meta.json once it is cached.
          (metas (seq-filter
                  (lambda (url)
@@ -895,14 +895,14 @@ caches and validators included.  Only regular files either way: a
 stray directory is left alone rather than aborting the deletions."
   (let* ((dir (expand-file-name "cache/reports" gnaw-config-dir))
          (files (when (file-directory-p dir)
-                  (cl-remove-if-not
+                  (seq-filter
                    #'file-regular-p
                    (directory-files dir t
                                     directory-files-no-dot-files-regexp)))))
     (if all
         files
       (let ((keep (mapcan #'gnaw--source-cache-files (gnaw-sources))))
-        (cl-remove-if (lambda (f) (member f keep)) files)))))
+        (seq-remove (lambda (f) (member f keep)) files)))))
 
 (defconst gnaw--attachment-subdirs
   '((patch . "patches/") (event . "events/") (text . "text/"))
@@ -1059,7 +1059,7 @@ export does."
   "Set MID to ENTRY in STATE, keeping order.
 Drop MID instead when ENTRY is removable (see `gnaw--entry-removable-p')."
   (cond ((gnaw--entry-removable-p entry)
-         (cl-remove mid state :key #'car :test #'equal))
+         (seq-remove (lambda (kv) (equal (car kv) mid)) state))
         ((assoc mid state)
          (mapcar (lambda (kv) (if (equal (car kv) mid) (cons mid entry) kv))
                  state))
@@ -1083,7 +1083,7 @@ Entries with foreign keys (such as the CLI's `:skip-since') must
 survive mark removal."
   (and (null (alist-get :sticky entry))
        (null (alist-get :dismiss entry))
-       (cl-every (lambda (kv) (memq (car kv) gnaw--own-entry-keys)) entry)))
+       (seq-every-p (lambda (kv) (memq (car kv) gnaw--own-entry-keys)) entry)))
 
 (defun gnaw--apply-transition (state action mid info)
   "Apply ACTION (:sticky or :dismiss) for MID in STATE using metadata INFO.
@@ -1147,12 +1147,12 @@ program wrote to the current entry since (such as the CLI's
 `:skip-since') survive the restoration."
   (let* ((current (cdr (assoc mid state)))
          (entry (append
-                 (cl-remove-if-not (lambda (kv)
-                                     (memq (car kv) gnaw--own-entry-keys))
-                                   before)
-                 (cl-remove-if (lambda (kv)
-                                 (memq (car kv) gnaw--own-entry-keys))
-                               current))))
+                 (seq-filter (lambda (kv)
+                               (memq (car kv) gnaw--own-entry-keys))
+                             before)
+                 (seq-remove (lambda (kv)
+                               (memq (car kv) gnaw--own-entry-keys))
+                             current))))
     (gnaw--state-put state mid entry)))
 
 (defun gnaw-undo ()
@@ -1233,7 +1233,7 @@ A report's :topic may hold several space-separated topics."
 
 (defun gnaw-filter-by-topic (reports topic)
   "Return the REPORTS pairs one of whose :topic tokens equals TOPIC."
-  (cl-remove-if-not
+  (seq-filter
    (lambda (r) (member topic (split-string (or (plist-get (cdr r) :topic) ""))))
    reports))
 
@@ -1285,10 +1285,10 @@ cannot escape the cache."
   (when (and s (not (string-prefix-p "/" s)) (not (string-prefix-p "~" s)))
     (let ((parts (split-string s "/")))
       (and (<= 1 (length parts) 2)
-           (cl-every (lambda (p)
-                       (and (not (member p '("" "." "..")))
-                            (not (string-match-p "\\\\" p))))
-                     parts)
+           (seq-every-p (lambda (p)
+                          (and (not (member p '("" "." "..")))
+                               (not (string-match-p "\\\\" p))))
+                        parts)
            s))))
 
 (defun gnaw-attachment-file (info entry &optional type)
@@ -2514,11 +2514,11 @@ REF."
   (let ((cache (make-hash-table :test 'equal)))
     (format "gnaw: checked against %s in %s\n%s" ref default-directory
             (string-join
-             (cl-mapcar (lambda (file date)
-                          (format "  %s: %s" (file-name-nondirectory file)
-                                  (gnaw--applied-describe
-                                   (gnaw--applied-check ref file date cache))))
-                        files dates)
+             (seq-mapn (lambda (file date)
+                         (format "  %s: %s" (file-name-nondirectory file)
+                                 (gnaw--applied-describe
+                                  (gnaw--applied-check ref file date cache))))
+                       files dates)
              "\n"))))
 
 (defun gnaw--applied-show (report several)
@@ -3618,7 +3618,7 @@ config.edn entry, see `gnaw-add-source')."
         (cols (if (cdr (plist-get (gnaw-load-config) :source-configs))
                   (cons '("S" 2 t :source-letter) gnaw-list-columns)
                 gnaw-list-columns)))
-    (cl-remove-if (lambda (c) (member (downcase (car c)) skip)) cols)))
+    (seq-remove (lambda (c) (member (downcase (car c)) skip)) cols)))
 
 (defun gnaw--list-format (&optional window)
   "Return the `tabulated-list-format' vector for the active columns.
@@ -3626,12 +3626,12 @@ Grow the Subject column to fill WINDOW (the selected window when
 nil); other columns keep their width, so the trailing Created column
 stays at the right edge."
   (let* ((cols (gnaw--active-columns))
-         (others (cl-remove-if (lambda (c) (eq (nth 3 c) :subject)) cols))
+         (others (seq-remove (lambda (c) (eq (nth 3 c) :subject)) cols))
          (used (apply #'+ tabulated-list-padding 1
                       (mapcar (lambda (c) (1+ (nth 1 c))) others)))
          (subj (max 20 (- (window-body-width window) used))))
     (setq-local gnaw-list--mark-index
-                (cl-position :mark cols :key (lambda (c) (nth 3 c))))
+                (seq-position (mapcar (lambda (c) (nth 3 c)) cols) :mark))
     (vconcat (mapcar (lambda (c)
                        (list (nth 0 c)
                              (if (eq (nth 3 c) :subject) subj (nth 1 c))
@@ -3737,8 +3737,8 @@ or a flags: filter naming a close flag does."
   (if (and gnaw-list--query
            (gnaw--query-reveals-closed-p gnaw-list--query))
       gnaw-list--reports
-    (cl-remove-if (lambda (p) (gnaw--closed-p (cdr p)))
-                  gnaw-list--reports)))
+    (seq-remove (lambda (p) (gnaw--closed-p (cdr p)))
+                gnaw-list--reports)))
 
 (defun gnaw--series-rows (pairs)
   "Fold the patch series of PAIRS; a list of (PAIR . MATCH-PAIRS).
@@ -4146,7 +4146,7 @@ contributes nothing yet."
      ;; A known key with an empty value matches nothing.
      ((and (or text closed) (string-empty-p needle)) nil)
      ;; An open quote swallows the rest of the query.
-     ((cl-oddp (cl-count ?\" bare)) nil)
+     ((cl-oddp (seq-count (lambda (c) (eq c ?\")) bare)) nil)
      ((or closed
           (gnaw--query-regexp needle)
           (gnaw--query-quoted needle))
@@ -4790,9 +4790,8 @@ shows right away."
          (sid (gnaw--series-id (cdr pair)))
          (mid (car pair)))
     (unless sid (user-error "Not part of a patch series"))
-    (when (< (cl-count sid (gnaw-list--display-reports)
-                       :key (lambda (p) (gnaw--series-id (cdr p)))
-                       :test #'equal)
+    (when (< (seq-count (lambda (p) (equal (gnaw--series-id (cdr p)) sid))
+                        (gnaw-list--display-reports))
              2)
       (user-error "This series has no other patch to unfold"))
     (setq-local gnaw-list--expanded
@@ -4818,9 +4817,9 @@ Closed related reports appear in italic.  \\<gnaw-list-mode-map>\
                      (mapcar (lambda (e)
                                (gnaw-normalize-mid (alist-get 'message-id e)))
                              related)))
-         (missing (cl-count-if-not (lambda (mid) (assoc mid gnaw-list--reports))
-                                   (cdr mids)))
-         (closed (cl-count-if
+         (missing (seq-count (lambda (mid) (not (assoc mid gnaw-list--reports)))
+                             (cdr mids)))
+         (closed (seq-count
                   (lambda (mid)
                     (when-let* ((p (assoc mid gnaw-list--reports)))
                       (gnaw--closed-p (cdr p))))
@@ -4876,9 +4875,9 @@ member.  When the list is already narrowed, restore it."
            (sid (gnaw--series-id info)))
       (cond ((and related (plist-get info :related))
              (gnaw-list-related-narrow))
-            ((and sid (>= (cl-count sid (gnaw-list--display-reports)
-                                    :key (lambda (p) (gnaw--series-id (cdr p)))
-                                    :test #'equal)
+            ((and sid (>= (seq-count
+                           (lambda (p) (equal (gnaw--series-id (cdr p)) sid))
+                           (gnaw-list--display-reports))
                           2))
              (gnaw-list-patch-series-fold))
             ((plist-get info :related) (gnaw-list-related-narrow))
@@ -5320,8 +5319,8 @@ replaced; a LETTER already identifying a kept entry signals a
 `user-error'."
   (let* ((repo (if (and (consp repo) (null (cdr repo))) (car repo) repo))
          (sources (alist-get :sources config))
-         (others (cl-remove-if (lambda (s) (gnaw--source-match-p s urls name))
-                               sources))
+         (others (seq-remove (lambda (s) (gnaw--source-match-p s urls name))
+                             sources))
          (letter (or letter
                      (alist-get :letter
                                 (seq-find (lambda (s)
@@ -5422,8 +5421,8 @@ and repos as defaults, and its letter does not count as taken."
          (cfgs (alist-get :sources (gnaw--read-config-raw)))
          (old (seq-find (lambda (s) (gnaw--source-match-p s urls name)) cfgs))
          (taken (gnaw--taken-source-letters
-                 (cl-remove-if (lambda (s) (gnaw--source-match-p s urls name))
-                               cfgs)))
+                 (seq-remove (lambda (s) (gnaw--source-match-p s urls name))
+                             cfgs)))
          (letter (gnaw--read-source-letter name taken (alist-get :letter old)))
          (repo (gnaw--read-repos (gnaw--entry-repos old))))
     (list urls name repo letter)))
@@ -5539,7 +5538,7 @@ The command is drawn from `gnaw-list--help-sections', skipping the
 Help section, whose \"h\" key the message always mentions."
   (let* ((cmds (cl-loop for (title . entries) in gnaw-list--help-sections
                         unless (string-prefix-p "Help" title)
-                        append (cl-remove-if-not #'consp entries)))
+                        append (seq-filter #'consp entries)))
          (cmd (nth (random (length cmds)) cmds))
          (key (where-is-internal (car cmd) gnaw-list-mode-map t)))
     (format "gnaw some bone! Tip: \"%s\" - %s (\"h\" for the full help)"
