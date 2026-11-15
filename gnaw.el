@@ -4819,7 +4819,12 @@ Closed related reports appear in italic.  \\<gnaw-list-mode-map>\
                                (gnaw-normalize-mid (alist-get 'message-id e)))
                              related)))
          (missing (cl-count-if-not (lambda (mid) (assoc mid gnaw-list--reports))
-                                   (cdr mids))))
+                                   (cdr mids)))
+         (closed (cl-count-if
+                  (lambda (mid)
+                    (when-let* ((p (assoc mid gnaw-list--reports)))
+                      (gnaw--closed-p (cdr p))))
+                  (cdr mids))))
     (setq-local gnaw-list--related-mids mids)
     (setq-local gnaw-list--related-entries
                 (mapcar (lambda (e)
@@ -4828,11 +4833,15 @@ Closed related reports appear in italic.  \\<gnaw-list-mode-map>\
                         related))
     (gnaw-list-refresh)
     (gnaw-list--goto-mid (car mids))
-    (message "gnaw: %d related report(s)%s; TAB or q to come back"
-             (1- (length mids))
-             (if (> missing 0)
-                 (format " (%d not in the sources, greyed out)" missing)
-               ""))))
+    (message "gnaw: related: %s; TAB or q to come back"
+             (mapconcat
+              (lambda (c) (format "%d %s" (car c) (cdr c)))
+              (seq-filter
+               (lambda (c) (> (car c) 0))
+               `((,(- (length mids) 1 closed missing) . "open")
+                 (,closed . "closed")
+                 (,missing . "not in the sources (greyed out)")))
+              ", "))))
 
 (defun gnaw-list-related-restore ()
   "Restore the full list after `gnaw-list-related-narrow'."
