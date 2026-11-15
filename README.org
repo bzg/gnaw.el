@@ -5,33 +5,25 @@
 [[https://www.repostatus.org/#active][https://img.shields.io/badge/status-active-brightgreen.svg?style=for-the-badge]]
 [[https://intver.org/][https://img.shields.io/badge/versioning-intver.org-blue.svg?style=for-the-badge]]
 
-=gnaw.el= lets you browse and manage BONE reports from Emacs.
+=gnaw.el= lets you browse and manage [[https://codeberg.org/bzg/bone][BONE]] reports from Emacs.
 
-[[https://codeberg.org/bzg/bone][BONE]] (/Backlog Of Notable Emails/) is a bug tracker that never asks
-anyone to file a bug: it watches a project's mailing list, turns the
-mails tagged =[BUG]=, =[PATCH]= or =[FR]= into reports, updates them
-from the replies, and publishes the result as plain =reports.json=
-files anyone can fetch (no web forms, no accounts). The essay [[https://bzg.fr/en/notes/the-issue-with-issue-trackers/][The
-issue with issue trackers]] explains the rationale.
+BONE (/Backlog Of Notable Emails/) is a bug tracker that never asks
+anyone to file a bug: it turns the =[BUG]=, =[PATCH]= or =[FR]= mails of a
+mailing list into reports and publishes them as plain =reports.json=
+files (see [[https://bzg.fr/en/notes/the-issue-with-issue-trackers/][The issue with issue trackers]]).
 
-=M-x gnaw= lists the reports of the sources you follow and makes it
-easy to search them, to read the associated emails, to view or apply
-patches and attachments, and to organize your work with local sticky
-and dismiss marks.
-
-It is also the data layer shared by mail front-ends like [[https://codeberg.org/bzg/gnus-gnaw][gnus-gnaw]],
-[[https://codeberg.org/bzg/notmuch-gnaw][notmuch-gnaw]] and [[https://codeberg.org/bzg/mu4e-gnaw][mu4e-gnaw]].
+=M-x gnaw= lists the reports of the sources you follow: search them,
+read their emails, view or apply their patches, and mark them sticky
+or dismissed. =gnaw.el= is also the data layer of the [[https://codeberg.org/bzg/gnus-gnaw][gnus-gnaw]],
+[[https://codeberg.org/bzg/notmuch-gnaw][notmuch-gnaw]] and [[https://codeberg.org/bzg/mu4e-gnaw][mu4e-gnaw]] mail front-ends.
 
 [[file:gnaw.png]]
 #+caption: Gnaw summary
 
 * Installation
 
-gnaw.el requires Emacs 28.1 or later.
-
-=gnaw.el= is not on MELPA yet. On Emacs 30 or later, install it straight
-from its git repository with the built-in =package-vc=; the =:doc= spec
-also builds and installs the Info manual (=C-h i m gnaw RET=):
+=gnaw.el= requires Emacs 28.1 or later. On Emacs 30 or later, install it
+with =package-vc=, along with its Info manual (=C-h i m gnaw RET=):
 
 #+begin_src emacs-lisp
 (use-package gnaw
@@ -42,38 +34,33 @@ also builds and installs the Info manual (=C-h i m gnaw RET=):
             :doc "doc/gnaw.org"))))
 #+end_src
 
-You need the =:init= form because the =:vc= keyword of =use-package= does
-not support =:doc=. Interactively, without the manual:
-
-: M-x package-vc-install RET https://codeberg.org/bzg/gnaw.el RET
-
 Update later with =M-x package-vc-upgrade RET gnaw RET=.
 
 * Getting started
 
-=M-x gnaw= opens the =*gnaw*= report browser. With no source configured,
-it runs the full interactive setup, asking for a source URL, one or
-more local git repositories where its patches apply, and how to open
-report mail; =M-x gnaw-configure= reruns it later on.
+=M-x gnaw= opens the report browser. On the first run, it asks for a
+source URL, the local git repositories where its patches apply, and
+how to open report mail; =M-x gnaw-configure= reruns this setup.
 
-In the browser, =h= (or =?=) lists all the key bindings; =/= filters the
-list with =key:value= tokens. Each launch displays a tip presenting a
-random command; set =gnaw-inhibit-startup-tip= to a non-nil value to
-disable it.
+For example, to read the [[https://tracker.orgmode.org][Org mode reports]], give it this URL:
+
+: https://tracker.orgmode.org/reports/all-open.json
+
+or write =~/.config/gnaw/config.edn= directly:
+
+#+begin_src clojure
+{:sources [{:urls ["https://tracker.orgmode.org/reports/all-open.json"]
+            :name "Org mode ML"
+            :repo "~/src/org-mode"}]}
+#+end_src
+
+In the browser, =h= lists all the key bindings and =/= filters the list
+with =key:value= tokens.
 
 * Documentation
 
-The [[file:doc/gnaw.org][Gnaw manual]] covers everything else: the report browser and its
-key bindings, the search query language, reading messages, applying
-patches, =config.edn=, all the options and the API for front-ends.
-
-Build it as Info or PDF from the top of the repository:
-
-: make info
-: make pdf
-
-Building the manual needs Emacs 29 or later (the export relies on
-Org 9.6), =makeinfo= for the Info output and =texi2pdf= for the PDF.
+The [[file:doc/gnaw.org][Gnaw manual]] covers everything else. Build it with =make info= or
+=make pdf= (this needs Emacs 29 or later, =makeinfo= and =texi2pdf=).
 
 * Contributing
 
