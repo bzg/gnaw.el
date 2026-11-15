@@ -16,7 +16,7 @@
 
 =gnaw.el= lets you browse and manage BONE reports from Emacs.
 
- [[https://codeberg.org/bzg/bone][BONE]] (/Backlog Of Notable Emails/) is a bug tracker that never asks
+[[https://codeberg.org/bzg/bone][BONE]] (/Backlog Of Notable Emails/) is a bug tracker that never asks
 anyone to file a bug. Most trackers split a project's feedback in two:
 the discussions happen somewhere (on a list, on IRC or other (a)sync
 channels), while the "real" reports live behind a web form or another
@@ -45,7 +45,7 @@ front-ends like [[https://codeberg.org/bzg/gnus-gnaw][gnus-gnaw]], [[https://cod
 - reads the gnaw configuration (=config.edn=) and report sources,
 - manages the local cache of remote =reports.json= files,
 - parses and serializes the EDN config and =state.edn= files shared with
-  the gnaw CLI,
+  the [[https://github.com/bzg/gnaw][gnaw CLI]], the command-line reader of the same reports,
 - exposes the report list, the local-mark API and the MUA-independent
   presentation helpers (annotation string, topic filtering) the
   front-ends use.
@@ -80,6 +80,17 @@ not support =:doc=. Interactively, without the manual:
 
 Update later with {{{kbd(M-x package-vc-upgrade RET gnaw RET)}}}.
 
+#+cindex: installation, by hand
+#+cindex: manual, building
+To install by hand, clone the repository, add its directory to
+~load-path~ and ~(require 'gnaw)~; gnaw.el also needs the [[info:transient#Top][transient]]
+package, 0.3.7 or later. From the top of the repository, =make info= and
+=make pdf= build this manual, which needs Emacs 29 or later, =makeinfo=
+and =texi2pdf=.
+
+#+findex: gnaw-version
+{{{kbd(M-x gnaw-version)}}} displays the installed version.
+
 * Getting Started
 :PROPERTIES:
 :DESCRIPTION: The first run's interactive setup and a typical session.
@@ -107,6 +118,13 @@ configured, it runs the full interactive setup:
 
 The setup writes the source, its letter and the patch repository to
 =config.edn= (see [[*The configuration file]]).
+
+#+cindex: Org mode reports, example
+For example, [[https://tracker.orgmode.org][tracker.orgmode.org]] publishes the reports of the Org mode
+mailing list. Answer =https://tracker.orgmode.org= to the first prompt,
+accept the defaults of the next three, then name your local clone of
+the Org repository: you now follow Org's open bugs, patches and
+requests.
 
 #+cindex: workflow, typical
 A typical session then goes: {{{kbd(G)}}} to refresh the sources, {{{kbd(/)}}} or
@@ -190,6 +208,11 @@ Gnaw folds a patch series into a single row (cover letter or first
 patch) with a status summary like =(2 acked, 1 open)=; {{{kbd(TAB)}}} unfolds
 the series to list each patch, {{{kbd(TAB)}}} again folds it back.
 
+#+cindex: bookmarks
+The list supports [[info:emacs#Bookmarks][bookmarks]]: {{{kbd(C-x r m)}}} records the current
+view---filter query, sort order and report at point---and jumping to
+the bookmark restores it, opening the browser when needed.
+
 ** Key bindings
 :PROPERTIES:
 :DESCRIPTION: All key bindings, grouped by function.
@@ -201,7 +224,8 @@ Reading and following:
 
 - {{{kbd(RET)}}} (~gnaw-list-open~) ::
   #+findex: gnaw-list-open
-  Open the report's email (see [[*Reading Messages]]).
+  Open the report's email (see [[*Reading Messages]]); so does
+  {{{kbd(mouse-2)}}} on a row.
 
 - {{{kbd(SPC)}}} (~gnaw-list-open-other-window~) ::
   #+findex: gnaw-list-open-other-window
@@ -227,7 +251,8 @@ Reading and following:
 
 - {{{kbd(TAB)}}} (~gnaw-list-tab~) ::
   #+findex: gnaw-list-tab
-  Fold or unfold the series, or narrow to related reports.
+  Fold or unfold the series, or narrow to related reports (see
+  [[*Related reports]]).
 
 - {{{kbd(q)}}} (~gnaw-list-quit~) ::
   #+findex: gnaw-list-quit
@@ -259,15 +284,7 @@ Filtering and sorting (see [[*Searching]]):
 
 - {{{kbd(=)}}} (~gnaw-list-filter-transient~) ::
   #+findex: gnaw-list-filter-transient
-  Filter by one field (a [[info:transient#Top][transient]] menu). Each field
-  reads a value and sets the query =field:value=. A free-text value
-  (from, subject, topic, message-id) is quoted, so it is searched as
-  one literal phrase; the value of the other fields (priority, date,
-  flags...) is kept as typed, so =3,2= on the priority field keeps both
-  priorities and =2026-01-01..= on the date field is a range, as in a
-  typed query (see [[*Searching]]). The flag fields (acked, owned,
-  closed, urgent, important, and new for the reports the last
-  {{{kbd(G)}}} brought in) read no value: they toggle =field:*=.
+  Filter by one field, chosen from a menu (see [[*The filter menu]]).
 
 - {{{kbd(t)}}} (~gnaw-list-limit-type~) ::
   #+findex: gnaw-list-limit-type
@@ -317,10 +334,8 @@ Filtering and sorting (see [[*Searching]]):
 - {{{kbd(|)}}} (~gnaw-save-preset-filter~) ::
   #+findex: gnaw-save-preset-filter
   #+findex: gnaw-edit-preset-filters
-  Save the active filter as a preset (see [[*Preset filters]]). With
-  {{{kbd(C-u)}}}, edit all the presets in a buffer instead
-  (~gnaw-edit-preset-filters~), one query per line; {{{kbd(C-c C-c)}}} saves
-  the list and {{{kbd(C-c C-k)}}} cancels.
+  Save the active filter as a preset; with {{{kbd(C-u)}}}, edit all the
+  presets in a buffer instead (~gnaw-edit-preset-filters~).
 
 - {{{kbd(s)}}}, {{{kbd(S)}}} (~gnaw-list-sort~) ::
   #+findex: gnaw-list-sort
@@ -371,9 +386,10 @@ Refreshing and help:
 - {{{kbd(G)}}} (~gnaw-list-update~) ::
   #+findex: gnaw-list-update
   Refresh the remote cache in the background, then reload once the
-  download finishes; Emacs stays responsive meanwhile.  The reports
+  download finishes; Emacs stays responsive meanwhile. The reports
   the update brought in show in the ~gnaw-new~ face, the closing
   message counts them, and =new:*= lists them, until the next update.
+  With {{{kbd(C-u)}}}, re-download every source, even unchanged ones.
 
 - {{{kbd(h)}}}, {{{kbd(?)}}} (~gnaw-show-help~) ::
   #+findex: gnaw-show-help
@@ -390,13 +406,12 @@ Refreshing and help:
 
 Two mutually exclusive local marks drive the view: *sticky* promotes a
 report (=!= in bold in the Mark column, exported to =todo.org= by the gnaw
-CLI), *dismiss* hides it until {{{kbd(_)}}} reveals them (=d=, in a dimmed
-color).
+CLI), *dismiss* hides it until {{{kbd(_)}}} reveals the dismissed reports
+(=d=, in a dimmed color).
 
 Like in [[info:emacs#Dired Deletion][Dired]], {{{kbd(d)}}} only /flags/ a report (shown =D=, the row struck
-through) and {{{kbd(x)}}}
-dismisses all the flagged ones at once; {{{kbd(D)}}} dismisses right away;
-{{{kbd(u)}}} clears the mark or flag. Each of {{{kbd(!)}}}, {{{kbd(d)}}}, {{{kbd(D)}}} and
+through) and {{{kbd(x)}}} dismisses all the flagged ones at once; {{{kbd(D)}}}
+dismisses right away; {{{kbd(u)}}} clears the mark or flag. Each of {{{kbd(!)}}}, {{{kbd(d)}}}, {{{kbd(D)}}} and
 {{{kbd(u)}}} then moves point to the next row, keeping the column. {{{kbd(D)}}}
 and {{{kbd(x)}}} turn off the follow mode first.
 
@@ -418,9 +433,15 @@ owns, so the marks the CLI wrote in the meantime survive it.
 
 #+cindex: related reports
 
-On a report with related reports, {{{kbd(TAB)}}} narrows the list to the
-report and its relations, closed ones in italic; {{{kbd(TAB)}}} or {{{kbd(q)}}}
-restores the full list, and so does setting or clearing a filter.
+On a report with related reports (=~= in the =Att= column), {{{kbd(TAB)}}}
+narrows the list to the report and its relations, closed ones in
+italic; {{{kbd(TAB)}}} or {{{kbd(q)}}} restores the full list, and so does setting
+or clearing a filter. On a member of a patch series, where {{{kbd(TAB)}}}
+folds the series, use {{{kbd(C-u TAB)}}}.
+
+A related report missing from the configured sources---a closed one,
+say, when the source only tracks =all-open.json=---gets a placeholder
+row built from what the relation tells, in the ~gnaw-missing~ face.
 
 * Searching
 :PROPERTIES:
@@ -506,6 +527,28 @@ then {{{kbd(RET)}}}) clears it.
 | =date:3d= =date:A..B=          | =d:=       | created (durations =Nd/Nw/Nm=, ranges)      |
 | =deadline:2m=                | =D:=       | due within / on (forward)                 |
 | =expired:10d=                | =e:=       | expiring within (forward)                 |
+
+** The filter menu
+:PROPERTIES:
+:DESCRIPTION: Filtering by one field from a transient menu.
+:END:
+
+#+cindex: filter menu
+#+cindex: transient menu
+
+{{{kbd(=)}}} opens a [[info:transient#Top][transient]] menu listing the search keys: each field
+reads a value and sets the query =field:value=, sparing you the key
+names.
+
+A free-text value (from, subject, topic, message-id) is quoted, so it
+is searched as one literal phrase. The value of the other fields
+(priority, date, flags...) is kept as typed, as in a query: =3,2= on
+the priority field keeps both priorities and =2026-01-01..= on the date
+field is a range.
+
+The flag fields---acked, owned, closed, urgent, important, and new for
+the reports the last {{{kbd(G)}}} brought in---read no value: they toggle
+=field:*=.
 
 ** Filter toggles and the prefix ladder
 :PROPERTIES:
@@ -626,12 +669,15 @@ attachment they act right away, otherwise they ask which one (with an
 
 {{{kbd(:)}}} opens the generic menu on the attachments of the report at
 point. A single patch opens the patch menu: {{{kbd(v)}}} view in [[info:emacs#Diff Mode][diff-mode]],
-{{{kbd(a)}}} runs =git apply=, {{{kbd(m)}}} =git am=, {{{kbd(e)}}} edit then =git am=,
-{{{kbd(s)}}} save to a directory,
-{{{kbd(c)}}} check whether it is already applied. Gnaw
-displays a single calendar (=.ics=) or text attachment right away. With
-several attachments, {{{kbd(:)}}} first asks which one, as {{{kbd(v)}}}
-does, the /all patches/ candidate opening the patch menu on all of them.
+{{{kbd(a)}}} =git apply=, {{{kbd(m)}}} =git am=, {{{kbd(e)}}} edit then =git am=, {{{kbd(s)}}}
+save to a directory, {{{kbd(c)}}} check whether it is already applied (see
+[[*Applying patches]]). Gnaw displays a single calendar (=.ics=) or text
+attachment right away. With several attachments, {{{kbd(:)}}} first asks
+which one, as {{{kbd(v)}}} does, the /all patches/ candidate opening the patch
+menu on all of them.
+
+Gnaw downloads an attachment the first time it needs it and keeps it
+under =cache/= in ~gnaw-config-dir~.
 
 #+vindex: gnaw-save-no-confirm
 Saving proposes the source's =:repo= (the first one, when it lists
@@ -741,26 +787,35 @@ for several.
 
 #+cindex: config.edn
 
+Gnaw reads its sources from =config.edn= in ~gnaw-config-dir~
+(=~/.config/gnaw= by default), a file it shares with the gnaw CLI. The
+interactive setup writes it for you (see [[*Getting Started]]); you can
+also edit it by hand, {{{kbd(g)}}} picking up the changes:
+
 #+begin_src clojure
 {:sources [{:urls ["https://tracker.orgmode.org/reports/all-open.json"]
             :name "Org mode ML"
             :letter "O"
             :repo "~/src/org-mode"}]
- :my-addresses ["me@example.org"]
- :skip-columns ["owner"]}
+ :skip-columns ["votes"]}
 #+end_src
 
 - =:sources= ::
-  Each has =:urls= (a vector of reports.json URLs), an optional =:name=, a
-  =:letter= identifying the source in the =S= column when several sources
-  are configured (the first free letter of the name when missing) and a =:repo= where
-  patches apply---a directory, or a vector of them (=:repo
-  ["~/src/org-mode" "~/src/org-contrib"]=): applying then asks which
-  repo to use, and saving proposes the first.
-- =:my-addresses= ::
-  Your email addresses.
+  A vector of sources, each a map with these keys:
+  - =:urls= :: a vector of =reports.json= URLs, or of local files (a
+    relative name is resolved against ~gnaw-config-dir~);
+  - =:name= :: optional, the source name;
+  - =:letter= :: optional, the letter identifying the source in the =S=
+    column when several sources are configured (the first free letter
+    of the name when missing);
+  - =:repo= :: where patches apply---a directory, or a vector of them
+    (=:repo ["~/src/org-mode" "~/src/org-contrib"]=): applying then asks
+    which repo to use, and saving proposes the first.
 - =:skip-columns= ::
-  Browser columns to hide (by name, case-insensitive).
+  Browser columns to hide, by header name, whatever the case.
+
+Gnaw.el ignores the other keys the gnaw CLI reads from this file, like
+=:my-addresses=.
 
 ** Options
 :PROPERTIES:
@@ -780,12 +835,13 @@ gnaw)}}}).
 
 - ~gnaw-config-dir~ ::
   #+vindex: gnaw-config-dir
-  Default: =~/.config/gnaw=. Holds =config.edn=, =state.edn= and =cache/=.
-  Sources always come from =config.edn=.
+  Default: =~/.config/gnaw=. Holds =config.edn= (the sources), =state.edn=
+  (the local marks) and =cache/= (the downloaded reports and
+  attachments).
 
 - ~gnaw-http-timeout~ ::
   #+vindex: gnaw-http-timeout
-  Default: 30.  Seconds before a fetch gives up.
+  Default: 30. Seconds before a fetch gives up.
 
 - ~gnaw-after-update-hook~ ::
   #+vindex: gnaw-after-update-hook
@@ -868,10 +924,8 @@ gnaw)}}}).
 
 - ~gnaw-list-columns~ ::
   #+vindex: gnaw-list-columns
-  Columns of the report list (see [[*The report list]])---by default Mark,
-  Type, Votes, Flags, Att, Msgs, From, Subject and Created. The
-  docstring shows how to re-add the left-out Pri (priority), Activity
-  (last activity) and Topic columns.
+  Columns of the report list, as =(HEADER WIDTH SORT KEY)= tuples (see
+  [[*The report list]]).
 
 - ~gnaw-list-sort-key~ ::
   #+vindex: gnaw-list-sort-key
@@ -897,10 +951,7 @@ gnaw)}}}).
 - ~gnaw-preset-filters~ ::
   #+vindex: gnaw-preset-filters
   Default: nil. List of predefined filter query strings (see [[*Preset
-  filters]]); {{{kbd(\)}}} prompts to apply one (~gnaw-select-preset-filter~),
-  {{{kbd(|)}}} saves the active filter here (~gnaw-save-preset-filter~) and
-  {{{kbd(C-u |)}}} edits the whole list in a buffer
-  (~gnaw-edit-preset-filters~).
+  filters]]).
 
 - ~gnaw-list-filter-live~ ::
   #+vindex: gnaw-list-filter-live
@@ -924,8 +975,12 @@ gnaw)}}}).
 #+cindex: faces
 
 The list cells inherit standard faces (~gnaw-type-bug~, ~gnaw-type-patch~,
-~gnaw-date~, ~gnaw-acked~, ~gnaw-owned~, ~gnaw-votes~...), so colors follow
-your theme; {{{kbd(M-x customize-group RET gnaw)}}} lists them all.
+~gnaw-type-other~, ~gnaw-date~, ~gnaw-acked~, ~gnaw-owned~, ~gnaw-votes~), so
+colors follow your theme. Whole-row faces override them: ~gnaw-sticky~
+(bold), ~gnaw-dismissed~ (dimmed), ~gnaw-flagged~ (struck through),
+~gnaw-closed~ (italic), ~gnaw-new~ for the reports the last update brought
+in and ~gnaw-missing~ for the placeholder rows of related reports.
+{{{kbd(M-x customize-group RET gnaw)}}} lists them all.
 
 * The Front-end API
 :PROPERTIES:
@@ -939,9 +994,17 @@ This API is what the mail front-ends build on: [[https://codeberg.org/bzg/gnus-g
 and [[https://codeberg.org/bzg/mu4e-gnaw][mu4e-gnaw]] all use it to list the reports next to their mail and to
 toggle the local marks from there.
 
+Reports and configuration:
+
 - ~(gnaw-reports)~ ::
   #+findex: gnaw-reports
-  Return the open reports as =(MID . INFO)= pairs.
+  Return the reports of all the sources as =(MID . INFO)= pairs, from
+  the local cache; a source failing to load is skipped with a warning.
+
+- ~(gnaw-update &optional FORCE CALLBACK)~ ::
+  #+findex: gnaw-update
+  Refresh the local cache in the background, then run
+  ~gnaw-after-update-hook~ and CALLBACK.
 
 - ~(gnaw-sources)~ ::
   #+findex: gnaw-sources
@@ -949,7 +1012,17 @@ toggle the local marks from there.
 
 - ~(gnaw-load-config)~ ::
   #+findex: gnaw-load-config
-  Return a plist =(:addresses :skip-columns :source-configs :sources)=.
+  Return =config.edn= as a plist =(:skip-columns :source-configs :sources)=.
+
+- ~(gnaw-source-meta SOURCE)~ ::
+  #+findex: gnaw-source-meta
+  Return the parsed =meta.json= of the reports SOURCE, or nil.
+
+- ~(gnaw-normalize-mid MID)~ ::
+  #+findex: gnaw-normalize-mid
+  Ensure angle brackets around a message-id.
+
+Local marks:
 
 - ~(gnaw-read-state)~ ::
   #+findex: gnaw-read-state
@@ -961,15 +1034,53 @@ toggle the local marks from there.
 
 - ~(gnaw-toggle-mark MID INFO ACTION)~ ::
   #+findex: gnaw-toggle-mark
-  Toggle =:sticky= or =:dismiss=, and persist.
+  Toggle =:sticky= or =:dismiss=, and persist; return non-nil when the
+  mark is now set.
+
+- ~(gnaw-remove-marks MID)~ ::
+  #+findex: gnaw-remove-marks
+  Remove any mark of MID, and persist.
 
 - ~(gnaw-action-on-p STATE MID ACTION)~ ::
   #+findex: gnaw-action-on-p
   Return non-nil when the ACTION mark is set.
 
-- ~(gnaw-normalize-mid MID)~ ::
-  #+findex: gnaw-normalize-mid
-  Ensure angle brackets around a message-id.
+- ~(gnaw-undo)~ ::
+  #+findex: gnaw-undo
+  Undo the last mark change of the session (a command).
+
+Presentation and actions:
+
+- ~(gnaw-annotation INFO &optional ENTRY)~ ::
+  #+findex: gnaw-annotation
+  Return the fixed-width annotation string of a report---mark, type,
+  flags, priority, deadline, expiry and votes---ENTRY being its
+  =state.edn= entry.
+
+- ~(gnaw-topics REPORTS)~, ~(gnaw-filter-by-topic REPORTS TOPIC)~ ::
+  #+findex: gnaw-topics
+  #+findex: gnaw-filter-by-topic
+  Return the sorted topics of REPORTS, and the REPORTS of a TOPIC.
+
+- ~(gnaw-read-message MID INFO)~ ::
+  #+findex: gnaw-read-message
+  Open the report's email per ~gnaw-open-message-method~; a front-end
+  sets ~gnaw-open-message-function~, called with MID and INFO, to open
+  it in its own mail reader.
+
+- ~(gnaw-message-archive-url MID INFO)~ ::
+  #+findex: gnaw-message-archive-url
+  Return the web archive URL of the message, or nil.
+
+- ~(gnaw-view-patches INFO)~, ~(gnaw-apply-patches INFO)~, ~(gnaw-am-patches INFO)~, ~(gnaw-save-patches INFO)~, ~(gnaw-check-patches INFO)~ ::
+  #+findex: gnaw-view-patches
+  #+findex: gnaw-apply-patches
+  #+findex: gnaw-am-patches
+  #+findex: gnaw-save-patches
+  #+findex: gnaw-check-patches
+  View, =git apply=, =git am=, save or check the patches of a report (see
+  [[*Patches and Attachments]]); an optional PATCHES argument restricts
+  them to some of its =:patches= entries.
 
 #+cindex: INFO plist
 INFO is a plist with =:type :subject :date :from :from-name= (used to
